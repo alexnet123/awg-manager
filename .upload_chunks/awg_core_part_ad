@@ -1,0 +1,148 @@
+    ]
+
+    if awg_version in ('1', '2'):
+        append_config_param(lines, 'Jc', awg_params.get('Jc'))
+        append_config_param(lines, 'Jmin', awg_params.get('Jmin'))
+        append_config_param(lines, 'Jmax', awg_params.get('Jmax'))
+        append_config_param(lines, 'S1', awg_params.get('S1'))
+        append_config_param(lines, 'S2', awg_params.get('S2'))
+        append_config_param(lines, 'H1', awg_params.get('H1'))
+        append_config_param(lines, 'H2', awg_params.get('H2'))
+        append_config_param(lines, 'H3', awg_params.get('H3'))
+        append_config_param(lines, 'H4', awg_params.get('H4'))
+    if awg_version == '2':
+        append_config_param(lines, 'S3', awg_params.get('S3'))
+        append_config_param(lines, 'S4', awg_params.get('S4'))
+        append_config_param(lines, 'I1', awg_params.get('I1'))
+        append_config_param(lines, 'I2', awg_params.get('I2'))
+        append_config_param(lines, 'I3', awg_params.get('I3'))
+        append_config_param(lines, 'I4', awg_params.get('I4'))
+        append_config_param(lines, 'I5', awg_params.get('I5'))
+
+    lines.extend([
+        '',
+        '[Peer]',
+        f'PublicKey = {server_pubkey}',
+        f'Endpoint = {srv_ip}:{port_number}',
+        'AllowedIPs = 0.0.0.0/0',
+    ])
+    return lines
+
+
+def get_next_available_ip(wg_interface):
+    # Извлекаем IP-адрес и CIDR для интерфейса из таблицы wg_interfaces
+    result = c.execute('SELECT wg_ip_addr, wg_ip_cidr FROM wg_interfaces WHERE wg_interface = ?', (wg_interface,)).fetchone()
+    
+    if not result:
+        raise Exception(f"Интерфейс {wg_interface} не найден в базе данных")
+    
+    wg_ip_addr, wg_ip_cidr = result
+    subnet = f"{wg_ip_addr}/{wg_ip_cidr}"  # Формируем подсеть
+
+    # Преобразуем подсеть в объект IPv4-сети
+    network = ipaddress.ip_network(subnet, strict=False)
+
+    # Извлекаем уже использованные IP-адреса из базы данных
+    used_ips = [ipaddress.ip_address(row[0]) for row in c.execute('SELECT ip FROM clients WHERE wg_interface = ?', (wg_interface,)).fetchall()]
+
+    # Добавляем IP-адрес самого интерфейса в список занятых
+    used_ips.append(ipaddress.ip_address(wg_ip_addr))
+
+    # Ищем первый доступный IP-адрес в сети
+    for ip in network.hosts():  # hosts() пропускает сеть и широковещательный адрес
+        if ip not in used_ips:
+            return str(ip)
+    
+    raise Exception("Нет доступных IP-адресов для назначения")
+
+
+def add_client():
+    # Сбор данных для нового клиента
+    name = input("Введите имя клиента: ")
+    wg_interface = input("Введите интерфейс WireGuard: ")
+
+    # Динамическое назначение IP-адреса для клиента
+    try:
+        client_ip = get_next_available_ip(wg_interface)  # Получаем доступный IP-адрес
+        print(f"Назначен IP-адрес {client_ip} для клиента {name}")
+    except Exception as e:
+        print(f"Ошибка при назначении IP-адреса: {e}")
+        return
+
+    # Генерация приватного и публичного ключей автоматически
+    generate_keys = input("Сгенерировать автоматически-(pub_key|pri_key) yes/no: ")
+    if generate_keys.lower() == 'yes':
+        priv_key = subprocess.check_output(['awg', 'genkey']).strip().decode('utf-8')
+        pub_key = subprocess.check_output(['awg', 'pubkey'], input=priv_key.encode('utf-8')).strip().decode('utf-8')
+    else:
+        priv_key = input("Введите приватный ключ: ")
+        pub_key = input("Введите публичный ключ: ")
+
+    try:
+        # Запись данных клиента в базу данных
+        priv_key = encrypt_private_key(priv_key)
+        c.execute('''INSERT INTO clients (name, pubkey, privkey, ip, wg_interface)
+                     VALUES (?, ?, ?, ?, ?)''', 
+                  (name, pub_key, priv_key, client_ip, wg_interface))
+        conn.commit()
+        print(f"Клиент {name} успешно добавлен в базу данных с IP-адресом {client_ip}")
+
+        # Добавление клиента в конфигурацию WireGuard через утилиту awg
+        subprocess.run(['awg', 'set', wg_interface, 'peer', pub_key, 'allowed-ips', client_ip + '/32'], check=True)
+        print(f"Клиент {name} успешно добавлен в конфигурацию WireGuard")
+
+    except sqlite3.Error as e:
+        print(f"Ошибка записи в базу данных: {e}")
+    except subprocess.CalledProcessError as e:
+        print(f"Ошибка добавления клиента в WireGuard: {e}")
+    
+
+def delete_client():
+    # Вывод списка клиентов перед удалением
+    list_clients()
+    
+    # Запрос имени клиента, которого нужно удалить
+    client_id = input("Введите id клиента для удаления: ")
+    
+    # Получение информации о клиенте из базы данных
+    row = c.execute('SELECT * FROM clients WHERE id = ?', (client_id,)).fetchone()
+    if not row:
+        # Если клиент не найден, выводим ошибку и выходим из функции
+        print(f"Ошибка: клиент c id {client_id} не найден")
+        return
+    
+    # Распаковка кортежа row в переменные
+    id, name, pubkey, privkey, ip, wg_interface = row
+    
+    # Удаляем клиента из файла конфигурации сервера WireGuard
+    subprocess.run(['awg', 'set', wg_interface, 'peer', pubkey, 'remove'], check=True)
+    
+    # Удаление клиента из базы данных
+    c.execute('DELETE FROM clients WHERE id = ?', (id,))
+    conn.commit()
+    
+    # Удаление клиента из конфигурации WireGuard на уровне ядра операционной системы
+    del_peer(wg_interface, pubkey)
+    
+    # Выводим сообщение об успешном удалении клиента
+    print(f"Клиент {name} удалён.")
+
+def list_clients():
+    print("Список клиентов:")
+    for id, name, pubkey, privkey, ip, wg_interface in c.execute('SELECT * FROM clients').fetchall():
+        print("============================================================================================================================")
+        print(f"{id} - {name}: {ip} ({pubkey}) ({decrypt_private_key(privkey)}) {wg_interface}")
+        print("============================================================================================================================")
+
+def list_wg_int():
+    print("Список интерфейсов:")
+    for row in c.execute(f'SELECT {WG_INTERFACE_COLUMNS} FROM wg_interfaces').fetchall():
+        id, wg_interface, awg_version, port_number, wg_ip_addr, wg_ip_cidr, private_key, pubkey, srv_ip, srv_dns, Jc, Jmin, Jmax, S1, S2, S3, S4, H1, H2, H3, H4, I1, I2, I3, I4, I5 = row
+        awg_params = build_awg_params_from_row(row)
+        awg_version = detect_awg_version(awg_version, awg_params)
+        print("============================================================================================================================")
+        print(f"ID: {id}, Interface: {wg_interface}, AWG version: {awg_version}")
+        print(f"IP-address: {wg_ip_addr}/{wg_ip_cidr}, Порт: {port_number}")
+        print(f"Public key: {pubkey}, Private Key: {private_key}")
+        print(f"Public ip: {srv_ip}, DNS: {srv_dns}")
+        for param_line in format_awg

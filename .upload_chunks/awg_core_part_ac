@@ -1,0 +1,182 @@
+nterfaces WHERE id = ?',
+        (interface_id,)
+    ).fetchone()
+    if not current_row:
+        raise LookupError('Interface not found')
+
+    current_params = build_awg_params_from_row(current_row)
+    awg_version = detect_awg_version(payload.get('awg_version', current_row[2]), current_params)
+    if awg_version not in ('1', '2'):
+        raise ValueError('Unsupported awg_version')
+
+    wg_interface = normalize_config_value(payload.get('wg_interface')) or current_row[1]
+    port_number = normalize_config_value(payload.get('port_number')) or str(current_row[3])
+    wg_ip_addr = normalize_config_value(payload.get('wg_ip_addr')) or current_row[4]
+    wg_ip_cidr = normalize_config_value(payload.get('wg_ip_cidr')) or str(current_row[5])
+    private_key = normalize_config_value(payload.get('private_key')) or current_row[6]
+    public_key = normalize_config_value(payload.get('public_key')) or current_row[7]
+    srv_ip = normalize_config_value(payload.get('srv_ip')) or current_row[8]
+    srv_dns = normalize_config_value(payload.get('srv_dns')) or current_row[9]
+
+    awg_params = prepare_awg_params_for_version(awg_version)
+    for key in awg_params.keys():
+        if key in current_params and normalize_config_value(current_params[key]) is not None:
+            awg_params[key] = current_params[key]
+    payload_awg_params = payload.get('awg_params', {})
+    if isinstance(payload_awg_params, dict):
+        for key in awg_params.keys():
+            if key in payload_awg_params:
+                awg_params[key] = normalize_config_value(payload_awg_params.get(key))
+
+    remove_interface_runtime(current_row[1])
+    try:
+        c.execute('''UPDATE wg_interfaces
+                     SET wg_interface=?, awg_version=?, wg_ip_addr=?, wg_ip_cidr=?, port_number=?, private_key=?, pubkey=?, srv_ip=?, srv_dns=?,
+                         Jc=?, Jmin=?, Jmax=?, S1=?, S2=?, S3=?, S4=?, H1=?, H2=?, H3=?, H4=?, I1=?, I2=?, I3=?, I4=?, I5=?
+                     WHERE id=?''',
+                  (
+                      wg_interface, awg_version, wg_ip_addr, wg_ip_cidr, port_number, private_key, public_key, srv_ip, srv_dns,
+                      awg_params['Jc'], awg_params['Jmin'], awg_params['Jmax'],
+                      awg_params['S1'], awg_params['S2'], awg_params['S3'], awg_params['S4'],
+                      awg_params['H1'], awg_params['H2'], awg_params['H3'], awg_params['H4'],
+                      awg_params['I1'], awg_params['I2'], awg_params['I3'], awg_params['I4'], awg_params['I5'],
+                      interface_id
+                  ))
+        if wg_interface != current_row[1]:
+            c.execute(
+                'UPDATE clients SET wg_interface = ? WHERE wg_interface = ?',
+                (wg_interface, current_row[1])
+            )
+        conn.commit()
+        apply_interface_runtime(wg_interface, port_number, wg_ip_addr, wg_ip_cidr, private_key, awg_version, awg_params)
+    except Exception:
+        conn.rollback()
+        raise
+
+    return c.execute(
+        f'SELECT {WG_INTERFACE_COLUMNS} FROM wg_interfaces WHERE id = ?',
+        (interface_id,)
+    ).fetchone()
+
+
+def create_client_service(payload):
+    name = normalize_config_value(payload.get('name'))
+    wg_interface = normalize_config_value(payload.get('wg_interface'))
+    client_ip = normalize_config_value(payload.get('ip'))
+    private_key = normalize_config_value(payload.get('privkey'))
+    public_key = normalize_config_value(payload.get('pubkey'))
+
+    if None in (name, wg_interface):
+        raise ValueError('Missing required client fields')
+    if c.execute('SELECT 1 FROM wg_interfaces WHERE wg_interface = ?', (wg_interface,)).fetchone() is None:
+        raise LookupError('Interface not found')
+
+    if client_ip is None:
+        client_ip = get_next_available_ip(wg_interface)
+    if private_key is None or public_key is None:
+        private_key, public_key = generate_keypair()
+
+    encrypted_private_key = encrypt_private_key(private_key)
+    c.execute(
+        '''INSERT INTO clients (name, pubkey, privkey, ip, wg_interface)
+           VALUES (?, ?, ?, ?, ?)''',
+        (name, public_key, encrypted_private_key, client_ip, wg_interface)
+    )
+    conn.commit()
+    subprocess.run(['awg', 'set', wg_interface, 'peer', public_key, 'allowed-ips', client_ip + '/32'], check=True)
+
+    return c.execute('SELECT * FROM clients WHERE id = last_insert_rowid()').fetchone()
+
+
+def delete_client_service(client_id):
+    row = c.execute('SELECT * FROM clients WHERE id = ?', (client_id,)).fetchone()
+    if not row:
+        raise LookupError('Client not found')
+
+    subprocess.run(['awg', 'set', row[5], 'peer', row[2], 'remove'], check=True)
+    c.execute('DELETE FROM clients WHERE id = ?', (client_id,))
+    conn.commit()
+    return row
+
+
+def update_client_service(client_id, payload):
+    current_row = c.execute('SELECT * FROM clients WHERE id = ?', (client_id,)).fetchone()
+    if not current_row:
+        raise LookupError('Client not found')
+
+    name = normalize_config_value(payload.get('name')) or current_row[1]
+    public_key = normalize_config_value(payload.get('pubkey')) or current_row[2]
+    private_key = normalize_config_value(payload.get('privkey'))
+    ip_address = normalize_config_value(payload.get('ip')) or current_row[4]
+    wg_interface = normalize_config_value(payload.get('wg_interface')) or current_row[5]
+
+    if c.execute('SELECT 1 FROM wg_interfaces WHERE wg_interface = ?', (wg_interface,)).fetchone() is None:
+        raise LookupError('Interface not found')
+
+    encrypted_private_key = current_row[3] if private_key is None else encrypt_private_key(private_key)
+
+    subprocess.run(['awg', 'set', current_row[5], 'peer', current_row[2], 'remove'], check=True)
+    c.execute(
+        '''UPDATE clients SET name=?, pubkey=?, privkey=?, ip=?, wg_interface=? WHERE id=?''',
+        (name, public_key, encrypted_private_key, ip_address, wg_interface, client_id)
+    )
+    conn.commit()
+    subprocess.run(['awg', 'set', wg_interface, 'peer', public_key, 'allowed-ips', ip_address + '/32'], check=True)
+
+    return c.execute('SELECT * FROM clients WHERE id = ?', (client_id,)).fetchone()
+
+
+def build_awg_set_command(wg_interface, port_number, key_file_path, awg_version, awg_params):
+    cmd = [
+        'awg', 'set', wg_interface,
+        'listen-port', str(port_number),
+        'private-key', key_file_path,
+    ]
+
+    awg_version = detect_awg_version(awg_version, awg_params)
+    ordered_params = []
+    if awg_version in ('1', '2'):
+        ordered_params.extend([
+            ('jc', awg_params.get('Jc')),
+            ('jmin', awg_params.get('Jmin')),
+            ('jmax', awg_params.get('Jmax')),
+            ('s1', awg_params.get('S1')),
+            ('s2', awg_params.get('S2')),
+            ('h1', awg_params.get('H1')),
+            ('h2', awg_params.get('H2')),
+            ('h3', awg_params.get('H3')),
+            ('h4', awg_params.get('H4')),
+        ])
+    if awg_version == '2':
+        ordered_params.extend([
+            ('s3', awg_params.get('S3')),
+            ('s4', awg_params.get('S4')),
+            ('i1', awg_params.get('I1')),
+            ('i2', awg_params.get('I2')),
+            ('i3', awg_params.get('I3')),
+            ('i4', awg_params.get('I4')),
+            ('i5', awg_params.get('I5')),
+        ])
+
+    for param_name, value in ordered_params:
+        normalized = normalize_config_value(value)
+        if normalized is not None:
+            cmd.extend([param_name, normalized])
+
+    return cmd
+
+
+def append_config_param(lines, key, value):
+    normalized = normalize_config_value(value)
+    if normalized is not None:
+        lines.append(f'{key} = {normalized}')
+
+
+def build_client_config_lines(client_private_key, client_ip, srv_dns, awg_version, awg_params, server_pubkey, srv_ip, port_number):
+    awg_version = detect_awg_version(awg_version, awg_params)
+    lines = [
+        '',
+        '[Interface]',
+        f'PrivateKey = {client_private_key}',
+        f'Address = {client_ip}/32',
+        f'DNS = {srv_dns}',

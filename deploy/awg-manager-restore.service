@@ -1,0 +1,16 @@
+[Unit]
+Description=Restore AmneziaWG runtime configuration from AWG Manager database
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/awg_manager
+EnvironmentFile=-/etc/wg-manager/awg-manager-restore.env
+ExecStartPre=/usr/bin/test -f ${AWG_MANAGER_ENCRYPTION_KEY_FILE}
+ExecStart=/usr/bin/python3 /opt/awg_manager/awg_manager.py -r ${AWG_MANAGER_ENCRYPTION_KEY_FILE}
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
