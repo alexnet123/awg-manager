@@ -86,7 +86,7 @@ npm run build
 ### API contract tests
 
 ```bash
-python3 -m pip install -r requirements-dev.txt
+python3 -m pip install -r requirements.txt
 pytest -q tests/test_api_contract.py
 ```
 
