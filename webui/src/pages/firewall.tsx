@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Plus, RefreshCcw, Trash2 } from 'lucide-react'
+import { Plus, RefreshCcw, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -27,6 +27,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [isBusy, setIsBusy] = React.useState(false)
   const [activeTable, setActiveTable] = React.useState<'filter' | 'nat' | 'raw' | 'mangle'>('filter')
   const [addOpen, setAddOpen] = React.useState(false)
+  const [editingRuleId, setEditingRuleId] = React.useState<string | null>(null)
   const [winPos, setWinPos] = React.useState({ x: 120, y: 120 })
   const dragRef = React.useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null)
 
@@ -51,6 +52,27 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     try {
       await createFirewallRule(props.auth, form)
       setForm(defaultRule)
+      await refresh()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function onSave(event: React.FormEvent) {
+    event.preventDefault()
+    setError(null)
+    setIsBusy(true)
+    try {
+      if (editingRuleId) {
+        await updateFirewallRule(props.auth, editingRuleId, form)
+      } else {
+        await createFirewallRule(props.auth, form)
+      }
+      setForm(defaultRule)
+      setEditingRuleId(null)
+      setAddOpen(false)
       await refresh()
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
@@ -118,6 +140,33 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     window.addEventListener('mouseup', onUp)
   }
 
+  function openCreateWindow() {
+    setEditingRuleId(null)
+    setForm({ ...defaultRule, table: activeTable, chain: chainOptionsByTable[activeTable][0] })
+    setAddOpen(true)
+  }
+
+  function openEditWindow(rule: FirewallRule) {
+    setEditingRuleId(rule.id)
+    setForm({
+      table: rule.table,
+      family: rule.family,
+      chain: rule.chain,
+      action: rule.action,
+      proto: rule.proto || null,
+      src: rule.src || null,
+      dst: rule.dst || null,
+      in_interface: rule.in_interface || null,
+      out_interface: rule.out_interface || null,
+      sport: rule.sport || null,
+      dport: rule.dport || null,
+      comment: rule.comment || null,
+      ct_state: rule.ct_state || null,
+      enabled: rule.enabled,
+    })
+    setAddOpen(true)
+  }
+
   return (
     <div className='flex min-h-[640px] flex-col gap-3'>
       <div>
@@ -146,7 +195,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
             ))}
           </div>
           <div className='flex gap-2'>
-            <Button size='sm' onClick={() => setAddOpen(true)} disabled={isBusy}>
+            <Button size='sm' onClick={openCreateWindow} disabled={isBusy}>
               <Plus />
               Add rule
             </Button>
@@ -189,9 +238,14 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
               </TableHeader>
               <TableBody>
                 {visibleRules.map((r) => (
-                  <TableRow key={r.id}>
+                  <TableRow key={r.id} className='cursor-pointer' onClick={() => openEditWindow(r)}>
                     <TableCell>
-                      <input type='checkbox' checked={r.enabled} onChange={() => void onToggle(r)} />
+                      <input
+                        type='checkbox'
+                        checked={r.enabled}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={() => void onToggle(r)}
+                      />
                     </TableCell>
                     <TableCell>{r.chain}</TableCell>
                     <TableCell>{r.action}</TableCell>
@@ -201,7 +255,15 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                     <TableCell>{r.ct_state || '—'}</TableCell>
                     <TableCell className='max-w-[320px] truncate'>{r.comment || '—'}</TableCell>
                     <TableCell>
-                      <Button size='icon' variant='ghost' onClick={() => void onDelete(r)} disabled={isBusy}>
+                      <Button
+                        size='icon'
+                        variant='ghost'
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void onDelete(r)
+                        }}
+                        disabled={isBusy}
+                      >
                         <Trash2 />
                       </Button>
                     </TableCell>
@@ -230,12 +292,21 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
               className='cursor-move rounded-t-xl border-b bg-muted/70 px-3 py-2 text-xs font-medium select-none'
               onMouseDown={onDragStart}
             >
-              Add Firewall Rule
+              <div className='flex items-center justify-between'>
+                <span>{editingRuleId ? 'Edit Firewall Rule' : 'Add Firewall Rule'}</span>
+                <button
+                  type='button'
+                  className='rounded p-1 hover:bg-background/70'
+                  onClick={() => {
+                    setAddOpen(false)
+                    setEditingRuleId(null)
+                  }}
+                >
+                  <X className='size-3.5' />
+                </button>
+              </div>
             </div>
-            <form className='space-y-2.5 p-3 text-xs' onSubmit={async (event) => {
-              await onCreate(event)
-              if (!error) setAddOpen(false)
-            }}>
+            <form className='space-y-2.5 p-3 text-xs' onSubmit={onSave}>
               <div className='space-y-1.5'>
                 <Label>Table</Label>
                 <select
@@ -318,7 +389,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                 </Button>
                 <Button type='submit' disabled={isBusy}>
                   <Plus />
-                  Add
+                  {editingRuleId ? 'Save' : 'Add'}
                 </Button>
               </div>
             </form>
