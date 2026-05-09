@@ -398,6 +398,7 @@ def _normalize_firewall_rule(payload):
     dport = normalize_config_value(payload.get('dport'))
     sport = normalize_config_value(payload.get('sport'))
     comment = normalize_config_value(payload.get('comment'))
+    ct_state = normalize_config_value(payload.get('ct_state'))
     enabled = payload.get('enabled', True)
 
     if family not in ('inet', 'ip', 'ip6'):
@@ -436,6 +437,10 @@ def _normalize_firewall_rule(payload):
         raise ValueError('out_interface contains invalid characters')
     if not isinstance(enabled, bool):
         enabled = str(enabled).lower() in ('1', 'true', 'yes', 'on')
+    if ct_state is not None:
+        ct_state = str(ct_state).lower().replace(' ', '')
+        if ct_state not in ('established,related', 'new', 'invalid'):
+            raise ValueError('ct_state must be one of: established,related | new | invalid')
     if comment is not None:
         comment = str(comment).replace('"', "'")
 
@@ -453,6 +458,7 @@ def _normalize_firewall_rule(payload):
         'sport': str(sport) if sport is not None else None,
         'dport': str(dport) if dport is not None else None,
         'comment': comment,
+        'ct_state': ct_state,
         'enabled': enabled,
     }
 
@@ -471,6 +477,8 @@ def _render_firewall_rule(rule):
         parts.append(f'{prefix} daddr {rule["dst"]}')
     if rule['proto']:
         parts.append(f'meta l4proto {rule["proto"]}')
+    if rule.get('ct_state'):
+        parts.append(f'ct state {rule["ct_state"]}')
     if rule['sport']:
         parts.append(f'{rule["proto"]} sport {rule["sport"]}')
     if rule['dport']:
@@ -521,7 +529,13 @@ def apply_firewall_rules():
     script_lines = []
     for nft_table in table_defs.keys():
         table_name = f'{FIREWALL_TABLE_PREFIX}{nft_table}'
-        script_lines.append(f'flush table {FIREWALL_TABLE_FAMILY} {table_name}')
+        # Best-effort delete to avoid "already exists" and missing table conflicts.
+        subprocess.run(
+            ['nft', 'delete', 'table', FIREWALL_TABLE_FAMILY, table_name],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
         script_lines.append(f'add table {FIREWALL_TABLE_FAMILY} {table_name}')
         for chain_name, chain_type, hook_name, priority in table_defs[nft_table]:
             script_lines.append(

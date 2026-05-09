@@ -39,6 +39,7 @@ export type FirewallRule = {
   sport?: string | null
   dport?: string | null
   comment?: string | null
+  ct_state?: 'established,related' | 'new' | 'invalid' | null
   enabled: boolean
 }
 

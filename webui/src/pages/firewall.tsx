@@ -17,6 +17,7 @@ const defaultRule: Partial<FirewallRule> = {
   dport: '22',
   enabled: true,
   comment: '',
+  ct_state: null,
 }
 
 export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
@@ -181,6 +182,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                   <TableHead>Proto</TableHead>
                   <TableHead>DPort</TableHead>
                   <TableHead>Src</TableHead>
+                  <TableHead>State</TableHead>
                   <TableHead>Comment</TableHead>
                   <TableHead />
                 </TableRow>
@@ -196,6 +198,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                     <TableCell>{r.proto || 'any'}</TableCell>
                     <TableCell>{r.dport || '—'}</TableCell>
                     <TableCell>{r.src || '—'}</TableCell>
+                    <TableCell>{r.ct_state || '—'}</TableCell>
                     <TableCell className='max-w-[320px] truncate'>{r.comment || '—'}</TableCell>
                     <TableCell>
                       <Button size='icon' variant='ghost' onClick={() => void onDelete(r)} disabled={isBusy}>
@@ -206,7 +209,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                 ))}
                 {!visibleRules.length ? (
                   <TableRow>
-                    <TableCell colSpan={8} className='py-6 text-center text-xs text-muted-foreground'>
+                    <TableCell colSpan={9} className='py-6 text-center text-xs text-muted-foreground'>
                       No rules in {activeTable} table.
                     </TableCell>
                   </TableRow>
@@ -287,6 +290,19 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                   <Label>DPort</Label>
                   <Input className='h-7' placeholder='22' value={form.dport || ''} onChange={(e) => setForm((p) => ({ ...p, dport: e.target.value || null }))} />
                 </div>
+              </div>
+              <div className='space-y-1.5'>
+                <Label>State</Label>
+                <select
+                  className='h-7 w-full rounded-md border bg-background px-2.5 text-xs'
+                  value={form.ct_state || ''}
+                  onChange={(e) => setForm((p) => ({ ...p, ct_state: (e.target.value || null) as any }))}
+                >
+                  <option value=''>any</option>
+                  <option value='established,related'>established,related</option>
+                  <option value='new'>new</option>
+                  <option value='invalid'>invalid</option>
+                </select>
               </div>
               <div className='space-y-1.5'>
                 <Label>Src CIDR</Label>
