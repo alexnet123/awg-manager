@@ -72,6 +72,24 @@ install_amneziawg_debian_like() {
   apt-get install -y amneziawg
 }
 
+ensure_awg_module_for_running_kernel() {
+  local running_kernel
+  running_kernel="$(uname -r)"
+  log "Ensuring AWG module for running kernel: ${running_kernel}"
+
+  apt_update_or_fix_backports
+  apt-get install -y "linux-headers-${running_kernel}" dkms || true
+  dkms autoinstall || true
+
+  if ! modprobe amneziawg 2>/dev/null; then
+    log "WARN: modprobe amneziawg failed for kernel ${running_kernel}"
+  fi
+
+  # Ensure module auto-load on next boots.
+  install -d -m 755 /etc/modules-load.d
+  printf 'amneziawg\n' > /etc/modules-load.d/amneziawg.conf
+}
+
 ensure_python_deps() {
   log "Installing Python dependencies"
   apt_update_or_fix_backports
@@ -108,6 +126,18 @@ pin_running_kernel() {
     "linux-headers-${running_kernel}" \
     "linux-headers-${base_ver}-common" \
     >/dev/null 2>&1 || true
+
+  # Hold all currently installed kernel image/header packages to avoid
+  # silent boot switch to another kernel after unattended package changes.
+  mapfile -t installed_kernel_pkgs < <(
+    dpkg-query -W -f='${Package}\n' \
+      'linux-image-[0-9]*-amd64' \
+      'linux-headers-[0-9]*-amd64' \
+      'linux-headers-[0-9]*-common' 2>/dev/null || true
+  )
+  if [[ ${#installed_kernel_pkgs[@]} -gt 0 ]]; then
+    apt-mark hold "${installed_kernel_pkgs[@]}" >/dev/null 2>&1 || true
+  fi
 
   # Persist kernel choice for next boot. Prefer entry id if we can find it.
   if [[ -f /boot/grub/grub.cfg ]]; then
@@ -158,6 +188,16 @@ configure_keys() {
   chmod 600 /etc/wg-manager/api.key /etc/wg-manager/encryption.key
 }
 
+configure_ip_forward() {
+  log "Enabling persistent IPv4 forwarding"
+  mkdir -p /etc/sysctl.d
+  cat > /etc/sysctl.d/99-awg-manager.conf <<'EOF'
+net.ipv4.ip_forward=1
+EOF
+  sysctl -w net.ipv4.ip_forward=1 >/dev/null
+  sysctl --system >/dev/null 2>&1 || true
+}
+
 enable_services() {
   log "Enabling services"
   systemctl enable --now awg-manager-restore.service
@@ -190,6 +230,7 @@ main() {
   cd "$project_dir"
 
   install_amneziawg_debian_like
+  ensure_awg_module_for_running_kernel
   ensure_python_deps
   configure_keys
 
@@ -206,6 +247,7 @@ main() {
   systemctl daemon-reload
   disable_auto_updates
   pin_running_kernel
+  configure_ip_forward
   enable_services
 
   log "Done."
