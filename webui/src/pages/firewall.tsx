@@ -26,6 +26,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [form, setForm] = React.useState<Partial<FirewallRule>>(defaultRule)
   const [isBusy, setIsBusy] = React.useState(false)
   const [activeTable, setActiveTable] = React.useState<'filter' | 'nat' | 'raw' | 'mangle'>('filter')
+  const [selectedRuleId, setSelectedRuleId] = React.useState<string | null>(null)
   const [addOpen, setAddOpen] = React.useState(false)
   const [editingRuleId, setEditingRuleId] = React.useState<string | null>(null)
   const [winPos, setWinPos] = React.useState({ x: 120, y: 120 })
@@ -239,10 +240,16 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
               </TableHeader>
               <TableBody>
                 {visibleRules.map((r) => (
-                  <TableRow key={r.id} className='cursor-pointer' onClick={() => openEditWindow(r)}>
+                  <TableRow
+                    key={r.id}
+                    className={`cursor-pointer ${selectedRuleId === r.id ? 'bg-muted/50' : ''}`}
+                    onClick={() => setSelectedRuleId(r.id)}
+                    onDoubleClick={() => openEditWindow(r)}
+                  >
                     <TableCell>
                       <input
                         type='checkbox'
+                        className='h-4 w-4'
                         checked={r.enabled}
                         onClick={(e) => e.stopPropagation()}
                         onChange={() => void onToggle(r)}
@@ -261,6 +268,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                         variant='ghost'
                         onClick={(e) => {
                           e.stopPropagation()
+                          setSelectedRuleId(r.id)
                           void onDelete(r)
                         }}
                         disabled={isBusy}
