@@ -23,6 +23,9 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [error, setError] = React.useState<string | null>(null)
   const [form, setForm] = React.useState<Partial<FirewallRule>>(defaultRule)
   const [isBusy, setIsBusy] = React.useState(false)
+  const [addOpen, setAddOpen] = React.useState(false)
+  const [winPos, setWinPos] = React.useState({ x: 120, y: 120 })
+  const dragRef = React.useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null)
 
   async function refresh() {
     setError(null)
@@ -80,6 +83,30 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     }
   }
 
+  function onDragStart(event: React.MouseEvent<HTMLDivElement>) {
+    dragRef.current = {
+      sx: event.clientX,
+      sy: event.clientY,
+      ox: winPos.x,
+      oy: winPos.y,
+    }
+    const onMove = (ev: MouseEvent) => {
+      const s = dragRef.current
+      if (!s) return
+      setWinPos({
+        x: Math.max(8, s.ox + ev.clientX - s.sx),
+        y: Math.max(8, s.oy + ev.clientY - s.sy),
+      })
+    }
+    const onUp = () => {
+      dragRef.current = null
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
   return (
     <div className='space-y-3'>
       <div>
@@ -87,15 +114,101 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
         <p className='text-sm text-muted-foreground'>nftables rule manager (router-style table workflow).</p>
       </div>
       {error ? <div className='rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive'>{error}</div> : null}
+      <Card className='text-xs'>
+        <CardHeader className='px-4 pb-1'>
+          <CardTitle>Rule Table</CardTitle>
+          <CardDescription>Status: {state?.active ? 'applied' : 'not applied'}</CardDescription>
+        </CardHeader>
+        <CardContent className='px-4 space-y-2'>
+          <div className='flex gap-2'>
+            <Button size='sm' onClick={() => setAddOpen(true)} disabled={isBusy}>
+              <Plus />
+              Add rule
+            </Button>
+            <Button size='sm' variant='secondary' onClick={() => void refresh()} disabled={isBusy}>
+              <RefreshCcw />
+              Refresh
+            </Button>
+            <Button
+              size='sm'
+              onClick={async () => {
+                setIsBusy(true)
+                try {
+                  await applyFirewallRules(props.auth)
+                  await refresh()
+                } catch (exc) {
+                  setError(exc instanceof Error ? exc.message : String(exc))
+                } finally {
+                  setIsBusy(false)
+                }
+              }}
+              disabled={isBusy}
+            >
+              Apply now
+            </Button>
+          </div>
+          <div className='h-[calc(100vh-280px)] min-h-[460px] overflow-auto rounded-xl border'>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>On</TableHead>
+                  <TableHead>Chain</TableHead>
+                  <TableHead>Action</TableHead>
+                  <TableHead>Proto</TableHead>
+                  <TableHead>DPort</TableHead>
+                  <TableHead>Src</TableHead>
+                  <TableHead>Comment</TableHead>
+                  <TableHead />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(state?.rules || []).map((r) => (
+                  <TableRow key={r.id}>
+                    <TableCell>
+                      <input type='checkbox' checked={r.enabled} onChange={() => void onToggle(r)} />
+                    </TableCell>
+                    <TableCell>{r.chain}</TableCell>
+                    <TableCell>{r.action}</TableCell>
+                    <TableCell>{r.proto || 'any'}</TableCell>
+                    <TableCell>{r.dport || '—'}</TableCell>
+                    <TableCell>{r.src || '—'}</TableCell>
+                    <TableCell className='max-w-[320px] truncate'>{r.comment || '—'}</TableCell>
+                    <TableCell>
+                      <Button size='icon' variant='ghost' onClick={() => void onDelete(r)} disabled={isBusy}>
+                        <Trash2 />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {!state?.rules?.length ? (
+                  <TableRow>
+                    <TableCell colSpan={8} className='py-6 text-center text-xs text-muted-foreground'>
+                      No rules yet.
+                    </TableCell>
+                  </TableRow>
+                ) : null}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
 
-      <div className='grid gap-3 lg:grid-cols-5 text-xs'>
-        <Card className='lg:col-span-2'>
-          <CardHeader className='px-4 pb-1'>
-            <CardTitle>Add Rule</CardTitle>
-            <CardDescription>Rules are applied to nft table `inet awg_manager`.</CardDescription>
-          </CardHeader>
-          <CardContent className='px-4'>
-            <form className='space-y-2.5' onSubmit={onCreate}>
+      {addOpen ? (
+        <div className='fixed inset-0 z-40'>
+          <div
+            className='absolute z-50 w-[460px] max-w-[calc(100vw-24px)] rounded-xl border bg-background shadow-2xl'
+            style={{ left: winPos.x, top: winPos.y }}
+          >
+            <div
+              className='cursor-move rounded-t-xl border-b bg-muted/70 px-3 py-2 text-xs font-medium select-none'
+              onMouseDown={onDragStart}
+            >
+              Add Firewall Rule
+            </div>
+            <form className='space-y-2.5 p-3 text-xs' onSubmit={async (event) => {
+              await onCreate(event)
+              if (!error) setAddOpen(false)
+            }}>
               <div className='grid grid-cols-2 gap-2'>
                 <div className='space-y-1.5'>
                   <Label>Chain</Label>
@@ -138,89 +251,19 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                 <Label>Comment</Label>
                 <Input className='h-7' placeholder='Allow SSH' value={form.comment || ''} onChange={(e) => setForm((p) => ({ ...p, comment: e.target.value || null }))} />
               </div>
-              <Button type='submit' className='w-full' disabled={isBusy}>
-                <Plus />
-                Add
-              </Button>
+              <div className='flex justify-end gap-2 pt-1'>
+                <Button type='button' variant='outline' onClick={() => setAddOpen(false)}>
+                  Cancel
+                </Button>
+                <Button type='submit' disabled={isBusy}>
+                  <Plus />
+                  Add
+                </Button>
+              </div>
             </form>
-          </CardContent>
-        </Card>
-
-        <Card className='lg:col-span-3'>
-          <CardHeader className='px-4 pb-1'>
-            <CardTitle>Rule Table</CardTitle>
-            <CardDescription>Status: {state?.active ? 'applied' : 'not applied'}</CardDescription>
-          </CardHeader>
-          <CardContent className='px-4 space-y-2'>
-            <div className='flex gap-2'>
-              <Button size='sm' variant='secondary' onClick={() => void refresh()} disabled={isBusy}>
-                <RefreshCcw />
-                Refresh
-              </Button>
-              <Button
-                size='sm'
-                onClick={async () => {
-                  setIsBusy(true)
-                  try {
-                    await applyFirewallRules(props.auth)
-                    await refresh()
-                  } catch (exc) {
-                    setError(exc instanceof Error ? exc.message : String(exc))
-                  } finally {
-                    setIsBusy(false)
-                  }
-                }}
-                disabled={isBusy}
-              >
-                Apply now
-              </Button>
-            </div>
-            <div className='max-h-[440px] overflow-auto rounded-xl border'>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>On</TableHead>
-                    <TableHead>Chain</TableHead>
-                    <TableHead>Action</TableHead>
-                    <TableHead>Proto</TableHead>
-                    <TableHead>DPort</TableHead>
-                    <TableHead>Src</TableHead>
-                    <TableHead>Comment</TableHead>
-                    <TableHead />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(state?.rules || []).map((r) => (
-                    <TableRow key={r.id}>
-                      <TableCell>
-                        <input type='checkbox' checked={r.enabled} onChange={() => void onToggle(r)} />
-                      </TableCell>
-                      <TableCell>{r.chain}</TableCell>
-                      <TableCell>{r.action}</TableCell>
-                      <TableCell>{r.proto || 'any'}</TableCell>
-                      <TableCell>{r.dport || '—'}</TableCell>
-                      <TableCell>{r.src || '—'}</TableCell>
-                      <TableCell className='max-w-[220px] truncate'>{r.comment || '—'}</TableCell>
-                      <TableCell>
-                        <Button size='icon' variant='ghost' onClick={() => void onDelete(r)} disabled={isBusy}>
-                          <Trash2 />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {!state?.rules?.length ? (
-                    <TableRow>
-                      <TableCell colSpan={8} className='py-6 text-center text-xs text-muted-foreground'>
-                        No rules yet.
-                      </TableCell>
-                    </TableRow>
-                  ) : null}
-                </TableBody>
-              </Table>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
