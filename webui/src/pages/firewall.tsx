@@ -118,18 +118,20 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   }
 
   return (
-    <div className='space-y-3'>
+    <div className='flex min-h-[640px] flex-col gap-3'>
       <div>
         <h2 className='text-lg font-semibold tracking-tight'>Firewall</h2>
         <p className='text-sm text-muted-foreground'>nftables rule manager (router-style table workflow).</p>
       </div>
-      {error ? <div className='rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive'>{error}</div> : null}
-      <Card className='text-xs'>
+      <div className='min-h-9'>
+        {error ? <div className='rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive'>{error}</div> : null}
+      </div>
+      <Card className='flex min-h-0 flex-1 flex-col text-xs'>
         <CardHeader className='px-4 pb-1'>
           <CardTitle>Rule Table</CardTitle>
           <CardDescription>Status: {state?.active ? 'applied' : 'not applied'}</CardDescription>
         </CardHeader>
-        <CardContent className='px-4 space-y-2'>
+        <CardContent className='flex min-h-0 flex-1 flex-col gap-2 px-4'>
           <div className='flex flex-wrap gap-2'>
             {(['filter', 'nat', 'raw', 'mangle'] as const).map((t) => (
               <Button
@@ -169,7 +171,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
               Apply now
             </Button>
           </div>
-          <div className='h-[calc(100vh-280px)] min-h-[460px] overflow-auto rounded-xl border'>
+          <div className='min-h-0 flex-1 overflow-y-scroll rounded-xl border'>
             <Table>
               <TableHeader>
                 <TableRow>
