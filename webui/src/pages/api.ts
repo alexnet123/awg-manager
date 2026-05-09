@@ -21,6 +21,7 @@ export type ClientItem = {
   pubkey: string
   ip: string
   wg_interface: string
+  allowed_ips: string
   privkey?: string
 }
 

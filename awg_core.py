@@ -91,6 +91,12 @@ c.execute('''CREATE TABLE IF NOT EXISTS clients (
                 wg_interface TEXT NOT NULL
             )''')
 
+# Дополнительные per-client параметры конфигурации без изменения схемы clients
+c.execute('''CREATE TABLE IF NOT EXISTS client_settings (
+                client_id INTEGER PRIMARY KEY,
+                allowed_ips TEXT NOT NULL DEFAULT '0.0.0.0/0'
+            )''')
+
 # Создание таблицы wg_interfaces
 c.execute('''CREATE TABLE IF NOT EXISTS wg_interfaces (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -583,12 +589,18 @@ def serialize_interface_row(row):
 
 
 def serialize_client_row(row, include_private_key=False):
+    settings_row = c.execute(
+        'SELECT allowed_ips FROM client_settings WHERE client_id = ?',
+        (row[0],)
+    ).fetchone()
+    allowed_ips = settings_row[0] if settings_row and normalize_config_value(settings_row[0]) is not None else '0.0.0.0/0'
     client_data = {
         'id': row[0],
         'name': row[1],
         'pubkey': row[2],
         'ip': row[4],
         'wg_interface': row[5],
+        'allowed_ips': allowed_ips,
     }
     if include_private_key:
         client_data['privkey'] = decrypt_private_key(row[3])
@@ -596,6 +608,11 @@ def serialize_client_row(row, include_private_key=False):
 
 
 def build_client_config(client_row, interface_row):
+    settings_row = c.execute(
+        'SELECT allowed_ips FROM client_settings WHERE client_id = ?',
+        (client_row[0],)
+    ).fetchone()
+    allowed_ips = settings_row[0] if settings_row and normalize_config_value(settings_row[0]) is not None else '0.0.0.0/0'
     awg_params = build_awg_params_from_row(interface_row)
     client_lines = build_client_config_lines(
         str(decrypt_private_key(client_row[3])),
@@ -605,7 +622,8 @@ def build_client_config(client_row, interface_row):
         awg_params,
         interface_row[7],
         interface_row[8],
-        interface_row[3]
+        interface_row[3],
+        allowed_ips,
     )
     return '\n'.join(client_lines) + '\n'
 
@@ -847,6 +865,7 @@ def create_client_service(payload):
     client_ip = normalize_config_value(payload.get('ip'))
     private_key = normalize_config_value(payload.get('privkey'))
     public_key = normalize_config_value(payload.get('pubkey'))
+    allowed_ips = normalize_config_value(payload.get('allowed_ips')) or '0.0.0.0/0'
 
     if None in (name, wg_interface):
         raise ValueError('Missing required client fields')
@@ -864,10 +883,15 @@ def create_client_service(payload):
            VALUES (?, ?, ?, ?, ?)''',
         (name, public_key, encrypted_private_key, client_ip, wg_interface)
     )
+    client_id = c.lastrowid
+    c.execute(
+        'INSERT OR REPLACE INTO client_settings (client_id, allowed_ips) VALUES (?, ?)',
+        (client_id, allowed_ips)
+    )
     conn.commit()
     subprocess.run(['awg', 'set', wg_interface, 'peer', public_key, 'allowed-ips', client_ip + '/32'], check=True)
 
-    return c.execute('SELECT * FROM clients WHERE id = last_insert_rowid()').fetchone()
+    return c.execute('SELECT * FROM clients WHERE id = ?', (client_id,)).fetchone()
 
 
 def delete_client_service(client_id):
@@ -876,6 +900,7 @@ def delete_client_service(client_id):
         raise LookupError('Client not found')
 
     subprocess.run(['awg', 'set', row[5], 'peer', row[2], 'remove'], check=True)
+    c.execute('DELETE FROM client_settings WHERE client_id = ?', (client_id,))
     c.execute('DELETE FROM clients WHERE id = ?', (client_id,))
     conn.commit()
     return row
@@ -890,6 +915,7 @@ def update_client_service(client_id, payload):
     public_key = normalize_config_value(payload.get('pubkey')) or current_row[2]
     private_key = normalize_config_value(payload.get('privkey'))
     requested_ip = normalize_config_value(payload.get('ip'))
+    allowed_ips = normalize_config_value(payload.get('allowed_ips'))
     ip_address = requested_ip or current_row[4]
     wg_interface = normalize_config_value(payload.get('wg_interface')) or current_row[5]
 
@@ -909,6 +935,11 @@ def update_client_service(client_id, payload):
         '''UPDATE clients SET name=?, pubkey=?, privkey=?, ip=?, wg_interface=? WHERE id=?''',
         (name, public_key, encrypted_private_key, ip_address, wg_interface, client_id)
     )
+    if allowed_ips is not None:
+        c.execute(
+            'INSERT OR REPLACE INTO client_settings (client_id, allowed_ips) VALUES (?, ?)',
+            (client_id, allowed_ips)
+        )
     conn.commit()
     subprocess.run(['awg', 'set', wg_interface, 'peer', public_key, 'allowed-ips', ip_address + '/32'], check=True)
 
@@ -961,7 +992,7 @@ def append_config_param(lines, key, value):
         lines.append(f'{key} = {normalized}')
 
 
-def build_client_config_lines(client_private_key, client_ip, srv_dns, awg_version, awg_params, server_pubkey, srv_ip, port_number):
+def build_client_config_lines(client_private_key, client_ip, srv_dns, awg_version, awg_params, server_pubkey, srv_ip, port_number, allowed_ips='0.0.0.0/0'):
     awg_version = detect_awg_version(awg_version, awg_params)
     lines = [
         '',
@@ -995,7 +1026,7 @@ def build_client_config_lines(client_private_key, client_ip, srv_dns, awg_versio
         '[Peer]',
         f'PublicKey = {server_pubkey}',
         f'Endpoint = {srv_ip}:{port_number}',
-        'AllowedIPs = 0.0.0.0/0',
+        f'AllowedIPs = {allowed_ips}',
     ])
     return lines
 

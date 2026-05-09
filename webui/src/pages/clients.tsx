@@ -34,6 +34,7 @@ export function ClientsPage(props: { auth: AuthState; refreshNonce: number }) {
     name: '',
     wg_interface: '',
     ip: '',
+    allowed_ips: '0.0.0.0/0',
   })
   const [isSavingEdit, setIsSavingEdit] = React.useState(false)
 
@@ -41,6 +42,7 @@ export function ClientsPage(props: { auth: AuthState; refreshNonce: number }) {
     name: '',
     wg_interface: '',
     ip: '',
+    allowed_ips: '0.0.0.0/0',
   })
   const [query, setQuery] = React.useState('')
   const [page, setPage] = React.useState(1)
@@ -90,8 +92,9 @@ export function ClientsPage(props: { auth: AuthState; refreshNonce: number }) {
     try {
       const payload: any = { name: form.name.trim(), wg_interface: form.wg_interface.trim() }
       if (form.ip.trim()) payload.ip = form.ip.trim()
+      payload.allowed_ips = form.allowed_ips.trim() || '0.0.0.0/0'
       await createClient(props.auth, payload)
-      setForm((p) => ({ ...p, name: '', ip: '' }))
+      setForm((p) => ({ ...p, name: '', ip: '', allowed_ips: '0.0.0.0/0' }))
       await refresh()
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
@@ -180,6 +183,15 @@ export function ClientsPage(props: { auth: AuthState; refreshNonce: number }) {
                 <Label>Client IP</Label>
                 <Input className='h-7' value={form.ip} onChange={(e) => setForm((p) => ({ ...p, ip: e.target.value }))} placeholder='10.8.0.2' />
               </div>
+              <div className='space-y-1.5'>
+                <Label>AllowedIPs</Label>
+                <Input
+                  className='h-7'
+                  value={form.allowed_ips}
+                  onChange={(e) => setForm((p) => ({ ...p, allowed_ips: e.target.value }))}
+                  placeholder='0.0.0.0/0'
+                />
+              </div>
               <Button type='submit' className='w-full' disabled={!interfaces.length}>
                 <Plus />
                 Create
@@ -242,6 +254,7 @@ export function ClientsPage(props: { auth: AuthState; refreshNonce: number }) {
                           name: it.name,
                           wg_interface: it.wg_interface,
                           ip: it.ip,
+                          allowed_ips: it.allowed_ips || '0.0.0.0/0',
                         })
                         setDrawerOpen(true)
                         setActiveTab('config')
@@ -307,6 +320,15 @@ export function ClientsPage(props: { auth: AuthState; refreshNonce: number }) {
                     placeholder='10.8.0.2 (optional)'
                     value={editForm.ip}
                     onChange={(e) => setEditForm((p) => ({ ...p, ip: e.target.value }))}
+                  />
+                </div>
+                <div className='space-y-1.5'>
+                  <Label>AllowedIPs</Label>
+                  <Input
+                    className='h-7'
+                    placeholder='0.0.0.0/0'
+                    value={editForm.allowed_ips}
+                    onChange={(e) => setEditForm((p) => ({ ...p, allowed_ips: e.target.value }))}
                   />
                 </div>
                 <div className='space-y-2'>
@@ -380,12 +402,14 @@ export function ClientsPage(props: { auth: AuthState; refreshNonce: number }) {
                         wg_interface: editForm.wg_interface.trim(),
                       }
                       if (editForm.ip.trim()) payload.ip = editForm.ip.trim()
+                      payload.allowed_ips = editForm.allowed_ips.trim() || '0.0.0.0/0'
                       const updated = await updateClient(props.auth, selected.id, payload)
                       setSelected(updated)
                       setEditForm({
                         name: updated.name,
                         wg_interface: updated.wg_interface,
                         ip: updated.ip,
+                        allowed_ips: updated.allowed_ips || '0.0.0.0/0',
                       })
                       await Promise.all([
                         loadConfig(updated.id),
