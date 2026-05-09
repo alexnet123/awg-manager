@@ -221,7 +221,7 @@ main() {
     esac
   done
 
-  if [[ ! -f "$project_dir/awg_api.py" ]]; then
+  if [[ ! -f "$project_dir/api_core.py" ]]; then
     log "Project dir doesn't look like an AWG Manager checkout: $project_dir"
     log "Hint: upload the repo to $project_dir first"
     exit 2
@@ -237,12 +237,12 @@ main() {
   # Make systemd units point to the chosen project dir and listen host/port.
   install_systemd_units
   sed -i "s|WorkingDirectory=/opt/awg_manager|WorkingDirectory=${project_dir}|g" /etc/systemd/system/awg-manager-api.service
-  sed -i "s|/opt/awg_manager/awg_api.py|${project_dir}/awg_api.py|g" /etc/systemd/system/awg-manager-api.service
+  sed -i "s|/opt/awg_manager/api_core.py|${project_dir}/api_core.py|g" /etc/systemd/system/awg-manager-api.service
   sed -i "s|/opt/awg_manager/awg_manager.py|${project_dir}/awg_manager.py|g" /etc/systemd/system/awg-manager-restore.service
   sed -i "s|WorkingDirectory=/opt/awg_manager|WorkingDirectory=${project_dir}|g" /etc/systemd/system/awg-manager-restore.service
 
   # Update listen host/port.
-  sed -i "s|/usr/bin/python3 .* awg_api.py 0.0.0.0 8787 -r|/usr/bin/python3 ${project_dir}/awg_api.py ${listen_host} ${listen_port} -r|g" /etc/systemd/system/awg-manager-api.service
+  sed -i "s|/usr/bin/python3 .* api_core.py 0.0.0.0 8787 -r|/usr/bin/python3 ${project_dir}/api_core.py ${listen_host} ${listen_port} -r|g" /etc/systemd/system/awg-manager-api.service
 
   systemctl daemon-reload
   disable_auto_updates

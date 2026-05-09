@@ -9,10 +9,9 @@ User=root
 WorkingDirectory=/opt/awg_manager
 EnvironmentFile=-/etc/wg-manager/awg-manager-api.env
 ExecStartPre=/usr/bin/test -f ${AWG_MANAGER_ENCRYPTION_KEY_FILE}
-ExecStart=/usr/bin/python3 /opt/awg_manager/awg_api.py 0.0.0.0 8787 -r ${AWG_MANAGER_ENCRYPTION_KEY_FILE}
+ExecStart=/usr/bin/python3 /opt/awg_manager/api_core.py 0.0.0.0 8787 -r ${AWG_MANAGER_ENCRYPTION_KEY_FILE}
 Restart=on-failure
 RestartSec=2
 
 [Install]
 WantedBy=multi-user.target
-

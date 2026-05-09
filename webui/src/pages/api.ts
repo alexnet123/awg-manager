@@ -39,7 +39,17 @@ export type FirewallRule = {
   sport?: string | null
   dport?: string | null
   comment?: string | null
-  ct_state?: 'established,related' | 'new' | 'invalid' | null
+  ct_state?: 'established,related' | 'new' | 'invalid' | 'related' | 'established' | 'untracked' | null
+  nat_type?: 'masquerade' | 'snat' | 'dnat' | 'redirect' | null
+  to_addr?: string | null
+  to_port?: string | null
+  notrack?: boolean
+  mark_set?: string | null
+  ct_mark_set?: string | null
+  log_prefix?: string | null
+  log_level?: 'emerg' | 'alert' | 'crit' | 'err' | 'warn' | 'notice' | 'info' | 'debug' | null
+  limit_rate?: string | null
+  counter?: boolean
   enabled: boolean
 }
 

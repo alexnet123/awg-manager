@@ -73,7 +73,7 @@ API_KEY_ENV_VAR = 'AWG_MANAGER_API_KEY'
 API_KEY_FILE = os.path.join(bd_path, 'api.key')
 FIREWALL_RULES_FILE = os.path.join(bd_path, 'firewall_rules.json')
 FIREWALL_TABLE_FAMILY = 'inet'
-FIREWALL_TABLE_PREFIX = 'awg_'
+FIREWALL_TABLE_PREFIX = ''
 if os.path.isdir(bd_path):
     # Подключение к базе данных
     conn = sqlite3.connect(bd_path+"/"+"clients.db")
@@ -399,6 +399,16 @@ def _normalize_firewall_rule(payload):
     sport = normalize_config_value(payload.get('sport'))
     comment = normalize_config_value(payload.get('comment'))
     ct_state = normalize_config_value(payload.get('ct_state'))
+    nat_type = normalize_config_value(payload.get('nat_type'))
+    to_addr = normalize_config_value(payload.get('to_addr'))
+    to_port = normalize_config_value(payload.get('to_port'))
+    notrack = payload.get('notrack', False)
+    mark_set = normalize_config_value(payload.get('mark_set'))
+    ct_mark_set = normalize_config_value(payload.get('ct_mark_set'))
+    log_prefix = normalize_config_value(payload.get('log_prefix'))
+    log_level = normalize_config_value(payload.get('log_level'))
+    limit_rate = normalize_config_value(payload.get('limit_rate'))
+    counter = payload.get('counter', False)
     enabled = payload.get('enabled', True)
 
     if family not in ('inet', 'ip', 'ip6'):
@@ -439,10 +449,54 @@ def _normalize_firewall_rule(payload):
         enabled = str(enabled).lower() in ('1', 'true', 'yes', 'on')
     if ct_state is not None:
         ct_state = str(ct_state).lower().replace(' ', '')
-        if ct_state not in ('established,related', 'new', 'invalid'):
-            raise ValueError('ct_state must be one of: established,related | new | invalid')
+        if ct_state not in ('established,related', 'new', 'invalid', 'related', 'established', 'untracked'):
+            raise ValueError('ct_state must be one of: established,related | new | invalid | related | established | untracked')
     if comment is not None:
         comment = str(comment).replace('"', "'")
+    if nat_type is not None:
+        nat_type = str(nat_type).lower()
+        if nat_type not in ('masquerade', 'snat', 'dnat', 'redirect'):
+            raise ValueError('nat_type must be one of: masquerade, snat, dnat, redirect')
+    if nft_table != 'nat' and nat_type is not None:
+        raise ValueError('nat_type is only valid for nat table')
+    if nat_type is not None:
+        if nat_type == 'masquerade' and chain != 'postrouting':
+            raise ValueError('masquerade is valid only in postrouting chain')
+        if nat_type == 'snat' and chain not in ('postrouting', 'input'):
+            raise ValueError('snat is valid only in postrouting/input chains')
+        if nat_type in ('dnat', 'redirect') and chain not in ('prerouting', 'output'):
+            raise ValueError(f'{nat_type} is valid only in prerouting/output chains')
+    if to_addr is not None:
+        try:
+            ipaddress.ip_address(str(to_addr))
+        except ValueError:
+            raise ValueError('to_addr must be a valid IP address')
+    if to_port is not None and not re.fullmatch(r'[0-9]{1,5}(-[0-9]{1,5})?', str(to_port)):
+        raise ValueError('to_port must be like 53 or 1000-2000')
+    if to_addr is not None and nat_type not in ('snat', 'dnat'):
+        raise ValueError('to_addr is only valid for snat/dnat')
+    if to_port is not None and nat_type not in ('snat', 'dnat', 'masquerade', 'redirect'):
+        raise ValueError('to_port is only valid for nat statements')
+    if not isinstance(notrack, bool):
+        notrack = str(notrack).lower() in ('1', 'true', 'yes', 'on')
+    if notrack and nft_table != 'raw':
+        raise ValueError('notrack is only valid for raw table')
+    if mark_set is not None and not re.fullmatch(r'0x[0-9a-fA-F]+|[0-9]+', str(mark_set)):
+        raise ValueError('mark_set must be integer or hex (e.g. 10 or 0x1)')
+    if ct_mark_set is not None and not re.fullmatch(r'0x[0-9a-fA-F]+|[0-9]+', str(ct_mark_set)):
+        raise ValueError('ct_mark_set must be integer or hex (e.g. 10 or 0x1)')
+    if log_level is not None:
+        log_level = str(log_level).lower()
+        if log_level not in ('emerg', 'alert', 'crit', 'err', 'warn', 'notice', 'info', 'debug'):
+            raise ValueError('log_level must be one of emerg, alert, crit, err, warn, notice, info, debug')
+    if log_prefix is not None:
+        log_prefix = str(log_prefix).replace('"', "'")
+    if limit_rate is not None:
+        if not re.fullmatch(r'[0-9]+/(second|minute|hour|day)', str(limit_rate).lower()):
+            raise ValueError('limit_rate must be like 10/second or 200/minute')
+        limit_rate = str(limit_rate).lower()
+    if not isinstance(counter, bool):
+        counter = str(counter).lower() in ('1', 'true', 'yes', 'on')
 
     return {
         'id': str(payload.get('id') or uuid.uuid4().hex),
@@ -459,6 +513,16 @@ def _normalize_firewall_rule(payload):
         'dport': str(dport) if dport is not None else None,
         'comment': comment,
         'ct_state': ct_state,
+        'nat_type': nat_type,
+        'to_addr': to_addr,
+        'to_port': str(to_port) if to_port is not None else None,
+        'notrack': notrack,
+        'mark_set': str(mark_set) if mark_set is not None else None,
+        'ct_mark_set': str(ct_mark_set) if ct_mark_set is not None else None,
+        'log_prefix': log_prefix,
+        'log_level': log_level,
+        'limit_rate': limit_rate,
+        'counter': counter,
         'enabled': enabled,
     }
 
@@ -483,6 +547,33 @@ def _render_firewall_rule(rule):
         parts.append(f'{rule["proto"]} sport {rule["sport"]}')
     if rule['dport']:
         parts.append(f'{rule["proto"]} dport {rule["dport"]}')
+    if rule.get('limit_rate'):
+        parts.append(f'limit rate {rule["limit_rate"]}')
+    if rule.get('log_prefix') or rule.get('log_level'):
+        log_parts = ['log']
+        if rule.get('log_prefix'):
+            log_parts.append(f'prefix "{rule["log_prefix"]}"')
+        if rule.get('log_level'):
+            log_parts.append(f'level {rule["log_level"]}')
+        parts.append(' '.join(log_parts))
+    if rule.get('counter'):
+        parts.append('counter')
+    if rule.get('notrack'):
+        parts.append('notrack')
+    if rule.get('mark_set'):
+        parts.append(f'meta mark set {rule["mark_set"]}')
+    if rule.get('ct_mark_set'):
+        parts.append(f'ct mark set {rule["ct_mark_set"]}')
+    nat_type = rule.get('nat_type')
+    if nat_type:
+        nat_stmt = nat_type
+        if nat_type in ('snat', 'dnat') and rule.get('to_addr'):
+            nat_stmt += f' to {rule["to_addr"]}'
+            if rule.get('to_port'):
+                nat_stmt += f':{rule["to_port"]}'
+        elif nat_type in ('masquerade', 'redirect') and rule.get('to_port'):
+            nat_stmt += f' to :{rule["to_port"]}'
+        parts.append(nat_stmt)
     parts.append(rule['action'])
     if rule['comment']:
         parts.append(f'comment "{rule["comment"]}"')

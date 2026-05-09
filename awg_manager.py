@@ -57,7 +57,7 @@ def run_cli():
 
 def main():
     if "--api" in sys.argv:
-        from awg_api import start_api_server
+        from api_core import start_api_server
         api_index = sys.argv.index("--api")
         api_host = sys.argv[api_index + 1] if len(sys.argv) > api_index + 1 else '127.0.0.1'
         api_port = int(sys.argv[api_index + 2]) if len(sys.argv) > api_index + 2 else 8787

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`awg_api.py` exposes HTTP API methods for managing:
+`api_core.py` exposes HTTP API methods for managing:
 
 - AmneziaWG interfaces
 - clients
@@ -35,19 +35,19 @@ python3 awg_manager.py --api
 Run the API module directly:
 
 ```bash
-python3 awg_api.py
+python3 api_core.py
 ```
 
 Bind custom host and port:
 
 ```bash
-python3 awg_api.py 0.0.0.0 8787
+python3 api_core.py 0.0.0.0 8787
 ```
 
 Use encryption key from file:
 
 ```bash
-python3 awg_api.py 127.0.0.1 8787 -r /path/to/key.txt
+python3 api_core.py 127.0.0.1 8787 -r /path/to/key.txt
 ```
 
 Open the browser UI on the same server:
@@ -270,6 +270,12 @@ Returns AWG Manager nftables state:
 
 Creates one managed rule and applies rules immediately.
 Rule object includes table selector: `filter | nat | raw | mangle`.
+Supported fields:
+- common: `family`, `table`, `chain`, `action`, `proto`, `src`, `dst`, `in_interface`, `out_interface`, `sport`, `dport`, `ct_state`, `comment`, `enabled`
+- nat: `nat_type` (`masquerade|snat|dnat|redirect`), `to_addr`, `to_port`
+- raw: `notrack`
+- mangle: `mark_set`, `ct_mark_set`
+- extra matching/statements: `log_prefix`, `log_level`, `limit_rate` (e.g. `10/second`), `counter`
 
 `PUT /firewall/rules/{id}`
 

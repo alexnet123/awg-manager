@@ -103,7 +103,7 @@ python3 awg_manager.py -r /etc/wg-manager/encryption.key
 API:
 
 ```bash
-python3 awg_api.py 0.0.0.0 8787 -r /etc/wg-manager/encryption.key
+python3 api_core.py 0.0.0.0 8787 -r /etc/wg-manager/encryption.key
 ```
 
 ## Auth

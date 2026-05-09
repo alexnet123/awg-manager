@@ -140,7 +140,7 @@ journalctl -u awg-manager-restore.service -n 100
 Start the API manually:
 
 ```bash
-python3 awg_api.py 0.0.0.0 8787 -r /etc/wg-manager/encryption.key
+python3 api_core.py 0.0.0.0 8787 -r /etc/wg-manager/encryption.key
 ```
 
 Requests must include:
