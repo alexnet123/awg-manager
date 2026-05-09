@@ -9,6 +9,7 @@ import type { AuthState, FirewallRule, FirewallState } from './api'
 import { applyFirewallRules, createFirewallRule, deleteFirewallRule, getFirewallState, updateFirewallRule } from './api'
 
 const defaultRule: Partial<FirewallRule> = {
+  table: 'filter',
   family: 'inet',
   chain: 'input',
   action: 'accept',
@@ -23,6 +24,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [error, setError] = React.useState<string | null>(null)
   const [form, setForm] = React.useState<Partial<FirewallRule>>(defaultRule)
   const [isBusy, setIsBusy] = React.useState(false)
+  const [activeTable, setActiveTable] = React.useState<'filter' | 'nat' | 'raw' | 'mangle'>('filter')
   const [addOpen, setAddOpen] = React.useState(false)
   const [winPos, setWinPos] = React.useState({ x: 120, y: 120 })
   const dragRef = React.useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null)
@@ -83,6 +85,14 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     }
   }
 
+  const chainOptionsByTable: Record<string, FirewallRule['chain'][]> = {
+    filter: ['input', 'forward', 'output'],
+    nat: ['prerouting', 'input', 'output', 'postrouting'],
+    raw: ['prerouting', 'output'],
+    mangle: ['prerouting', 'input', 'forward', 'output', 'postrouting'],
+  }
+  const visibleRules = (state?.rules || []).filter((r) => r.table === activeTable)
+
   function onDragStart(event: React.MouseEvent<HTMLDivElement>) {
     dragRef.current = {
       sx: event.clientX,
@@ -120,6 +130,18 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
           <CardDescription>Status: {state?.active ? 'applied' : 'not applied'}</CardDescription>
         </CardHeader>
         <CardContent className='px-4 space-y-2'>
+          <div className='flex flex-wrap gap-2'>
+            {(['filter', 'nat', 'raw', 'mangle'] as const).map((t) => (
+              <Button
+                key={t}
+                size='sm'
+                variant={activeTable === t ? 'default' : 'outline'}
+                onClick={() => setActiveTable(t)}
+              >
+                {t}
+              </Button>
+            ))}
+          </div>
           <div className='flex gap-2'>
             <Button size='sm' onClick={() => setAddOpen(true)} disabled={isBusy}>
               <Plus />
@@ -162,7 +184,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(state?.rules || []).map((r) => (
+                {visibleRules.map((r) => (
                   <TableRow key={r.id}>
                     <TableCell>
                       <input type='checkbox' checked={r.enabled} onChange={() => void onToggle(r)} />
@@ -180,10 +202,10 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                     </TableCell>
                   </TableRow>
                 ))}
-                {!state?.rules?.length ? (
+                {!visibleRules.length ? (
                   <TableRow>
                     <TableCell colSpan={8} className='py-6 text-center text-xs text-muted-foreground'>
-                      No rules yet.
+                      No rules in {activeTable} table.
                     </TableCell>
                   </TableRow>
                 ) : null}
@@ -209,13 +231,34 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
               await onCreate(event)
               if (!error) setAddOpen(false)
             }}>
+              <div className='space-y-1.5'>
+                <Label>Table</Label>
+                <select
+                  className='h-7 w-full rounded-md border bg-background px-2.5 text-xs'
+                  value={form.table || 'filter'}
+                  onChange={(e) => {
+                    const nextTable = e.target.value as 'filter' | 'nat' | 'raw' | 'mangle'
+                    const nextChains = chainOptionsByTable[nextTable]
+                    setForm((p) => ({
+                      ...p,
+                      table: nextTable,
+                      chain: nextChains[0],
+                    }))
+                  }}
+                >
+                  <option value='filter'>filter</option>
+                  <option value='nat'>nat</option>
+                  <option value='raw'>raw</option>
+                  <option value='mangle'>mangle</option>
+                </select>
+              </div>
               <div className='grid grid-cols-2 gap-2'>
                 <div className='space-y-1.5'>
                   <Label>Chain</Label>
                   <select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={form.chain || 'input'} onChange={(e) => setForm((p) => ({ ...p, chain: e.target.value as FirewallRule['chain'] }))}>
-                    <option value='input'>input</option>
-                    <option value='forward'>forward</option>
-                    <option value='output'>output</option>
+                    {(chainOptionsByTable[form.table || 'filter'] || []).map((ch) => (
+                      <option key={ch} value={ch}>{ch}</option>
+                    ))}
                   </select>
                 </div>
                 <div className='space-y-1.5'>

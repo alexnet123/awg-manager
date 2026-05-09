@@ -27,8 +27,9 @@ export type ClientItem = {
 
 export type FirewallRule = {
   id: string
+  table: 'filter' | 'nat' | 'raw' | 'mangle'
   family: 'inet' | 'ip' | 'ip6'
-  chain: 'input' | 'forward' | 'output'
+  chain: 'prerouting' | 'input' | 'forward' | 'output' | 'postrouting'
   action: 'accept' | 'drop' | 'reject'
   proto?: 'tcp' | 'udp' | 'icmp' | 'icmpv6' | null
   src?: string | null
@@ -46,7 +47,7 @@ export type FirewallState = {
   rules: FirewallRule[]
   ruleset: string
   family: string
-  table: string
+  tables: string[]
 }
 
 export async function generateAwgParams(auth: AuthState, awgVersion: '1' | '2'): Promise<Record<string, string | number | null>> {

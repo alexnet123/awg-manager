@@ -73,7 +73,7 @@ API_KEY_ENV_VAR = 'AWG_MANAGER_API_KEY'
 API_KEY_FILE = os.path.join(bd_path, 'api.key')
 FIREWALL_RULES_FILE = os.path.join(bd_path, 'firewall_rules.json')
 FIREWALL_TABLE_FAMILY = 'inet'
-FIREWALL_TABLE_NAME = 'awg_manager'
+FIREWALL_TABLE_PREFIX = 'awg_'
 if os.path.isdir(bd_path):
     # Подключение к базе данных
     conn = sqlite3.connect(bd_path+"/"+"clients.db")
@@ -387,6 +387,7 @@ def _normalize_firewall_rule(payload):
         raise ValueError('Rule payload must be an object')
 
     family = normalize_config_value(payload.get('family')) or 'inet'
+    nft_table = (normalize_config_value(payload.get('table')) or 'filter').lower()
     chain = (normalize_config_value(payload.get('chain')) or '').lower()
     action = (normalize_config_value(payload.get('action')) or '').lower()
     proto = normalize_config_value(payload.get('proto'))
@@ -401,8 +402,16 @@ def _normalize_firewall_rule(payload):
 
     if family not in ('inet', 'ip', 'ip6'):
         raise ValueError('family must be one of: inet, ip, ip6')
-    if chain not in ('input', 'forward', 'output'):
-        raise ValueError('chain must be one of: input, forward, output')
+    if nft_table not in ('filter', 'nat', 'raw', 'mangle'):
+        raise ValueError('table must be one of: filter, nat, raw, mangle')
+    allowed_chains_by_table = {
+        'filter': ('input', 'forward', 'output'),
+        'nat': ('prerouting', 'input', 'output', 'postrouting'),
+        'raw': ('prerouting', 'output'),
+        'mangle': ('prerouting', 'input', 'forward', 'output', 'postrouting'),
+    }
+    if chain not in allowed_chains_by_table[nft_table]:
+        raise ValueError(f'chain "{chain}" is not valid for table "{nft_table}"')
     if action not in ('accept', 'drop', 'reject'):
         raise ValueError('action must be one of: accept, drop, reject')
     if proto is not None:
@@ -432,6 +441,7 @@ def _normalize_firewall_rule(payload):
 
     return {
         'id': str(payload.get('id') or uuid.uuid4().hex),
+        'table': nft_table,
         'family': family,
         'chain': chain,
         'action': action,
@@ -484,19 +494,47 @@ def list_firewall_rules_service():
 
 def apply_firewall_rules():
     rules = list_firewall_rules_service()
-    script_lines = [
-        f'flush table {FIREWALL_TABLE_FAMILY} {FIREWALL_TABLE_NAME}',
-        f'add table {FIREWALL_TABLE_FAMILY} {FIREWALL_TABLE_NAME}',
-        f'add chain {FIREWALL_TABLE_FAMILY} {FIREWALL_TABLE_NAME} input {{ type filter hook input priority 10; policy accept; }}',
-        f'add chain {FIREWALL_TABLE_FAMILY} {FIREWALL_TABLE_NAME} forward {{ type filter hook forward priority 10; policy accept; }}',
-        f'add chain {FIREWALL_TABLE_FAMILY} {FIREWALL_TABLE_NAME} output {{ type filter hook output priority 10; policy accept; }}',
-    ]
+    table_defs = {
+        'filter': [
+            ('input', 'filter', 'input', 0),
+            ('forward', 'filter', 'forward', 0),
+            ('output', 'filter', 'output', 0),
+        ],
+        'nat': [
+            ('prerouting', 'nat', 'prerouting', -100),
+            ('input', 'nat', 'input', 100),
+            ('output', 'nat', 'output', -100),
+            ('postrouting', 'nat', 'postrouting', 100),
+        ],
+        'raw': [
+            ('prerouting', 'filter', 'prerouting', -300),
+            ('output', 'filter', 'output', -300),
+        ],
+        'mangle': [
+            ('prerouting', 'filter', 'prerouting', -150),
+            ('input', 'filter', 'input', -150),
+            ('forward', 'filter', 'forward', -150),
+            ('output', 'filter', 'output', -150),
+            ('postrouting', 'filter', 'postrouting', -150),
+        ],
+    }
+    script_lines = []
+    for nft_table in table_defs.keys():
+        table_name = f'{FIREWALL_TABLE_PREFIX}{nft_table}'
+        script_lines.append(f'flush table {FIREWALL_TABLE_FAMILY} {table_name}')
+        script_lines.append(f'add table {FIREWALL_TABLE_FAMILY} {table_name}')
+        for chain_name, chain_type, hook_name, priority in table_defs[nft_table]:
+            script_lines.append(
+                f'add chain {FIREWALL_TABLE_FAMILY} {table_name} {chain_name} '
+                f'{{ type {chain_type} hook {hook_name} priority {priority}; policy accept; }}'
+            )
     for rule in rules:
         if not rule.get('enabled', True):
             continue
         rendered = _render_firewall_rule(rule)
+        table_name = f'{FIREWALL_TABLE_PREFIX}{rule["table"]}'
         script_lines.append(
-            f'add rule {FIREWALL_TABLE_FAMILY} {FIREWALL_TABLE_NAME} {rule["chain"]} {rendered}'
+            f'add rule {FIREWALL_TABLE_FAMILY} {table_name} {rule["chain"]} {rendered}'
         )
     script_text = '\n'.join(script_lines) + '\n'
     subprocess.run(['nft', '-f', '-'], input=script_text.encode('utf-8'), check=True)
@@ -542,25 +580,27 @@ def delete_firewall_rule_service(rule_id, apply_now=True):
 
 def get_firewall_state_service():
     rules = list_firewall_rules_service()
-    ruleset_text = ''
+    ruleset_text_parts = []
     active = False
-    try:
-        res = subprocess.run(
-            ['nft', 'list', 'table', FIREWALL_TABLE_FAMILY, FIREWALL_TABLE_NAME],
-            check=True,
-            capture_output=True,
-            text=True
-        )
-        ruleset_text = res.stdout
-        active = True
-    except Exception:
-        active = False
+    for nft_table in ('filter', 'nat', 'raw', 'mangle'):
+        table_name = f'{FIREWALL_TABLE_PREFIX}{nft_table}'
+        try:
+            res = subprocess.run(
+                ['nft', 'list', 'table', FIREWALL_TABLE_FAMILY, table_name],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            ruleset_text_parts.append(res.stdout)
+            active = True
+        except Exception:
+            continue
     return {
         'active': active,
         'rules': rules,
-        'ruleset': ruleset_text,
+        'ruleset': '\n'.join(ruleset_text_parts),
         'family': FIREWALL_TABLE_FAMILY,
-        'table': FIREWALL_TABLE_NAME,
+        'tables': ['filter', 'nat', 'raw', 'mangle'],
     }
 
 

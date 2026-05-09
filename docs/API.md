@@ -269,6 +269,7 @@ Returns AWG Manager nftables state:
 `POST /firewall/rules`
 
 Creates one managed rule and applies rules immediately.
+Rule object includes table selector: `filter | nat | raw | mangle`.
 
 `PUT /firewall/rules/{id}`
 
