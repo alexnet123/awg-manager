@@ -43,10 +43,10 @@ This command loads the encryption secret, decrypts stored client keys, and reapp
 
 The project ships with:
 
-- [deploy/awg-manager-restore.service](deploy/awg-manager-restore.service)
-- [deploy/awg-manager-restore.env.example](deploy/awg-manager-restore.env.example)
-- [deploy/awg-manager-api.service](deploy/awg-manager-api.service)
-- [deploy/awg-manager-api.env.example](deploy/awg-manager-api.env.example)
+- [deploy/awg-manager-restore.service](../deploy/awg-manager-restore.service)
+- [deploy/awg-manager-restore.env.example](../deploy/awg-manager-restore.env.example)
+- [deploy/awg-manager-api.service](../deploy/awg-manager-api.service)
+- [deploy/awg-manager-api.env.example](../deploy/awg-manager-api.env.example)
 
 ## One-Command Install
 
