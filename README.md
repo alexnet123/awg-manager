@@ -27,6 +27,39 @@ Credentials:
 - API key: `/root/key/api.key`
 - Encryption key: `/root/key/encryption.key`
 
+Server runtime copies (used by services):
+
+- API key: `/etc/wg-manager/api.key`
+- Encryption key: `/etc/wg-manager/encryption.key`
+
+## Keys: View and Regenerate
+
+Show current keys:
+
+```bash
+cat /root/key/api.key
+cat /root/key/encryption.key
+```
+
+Regenerate both keys:
+
+```bash
+install -d -m 700 /root/key /etc/wg-manager
+python3 - <<'PY'
+import secrets, pathlib
+api = secrets.token_hex(32)
+enc = secrets.token_hex(32)
+pathlib.Path('/root/key/api.key').write_text(api + '\n')
+pathlib.Path('/root/key/encryption.key').write_text(enc + '\n')
+print('API_KEY=', api)
+print('ENC_KEY=', enc)
+PY
+cp /root/key/api.key /etc/wg-manager/api.key
+cp /root/key/encryption.key /etc/wg-manager/encryption.key
+chmod 600 /root/key/api.key /root/key/encryption.key /etc/wg-manager/api.key /etc/wg-manager/encryption.key
+systemctl restart awg-manager-api.service awg-manager-restore.service
+```
+
 ## Important UI Note
 
 `webui/dist` is committed in the repository for fast deployments.

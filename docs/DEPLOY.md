@@ -61,6 +61,37 @@ Generated credentials are saved to:
 - `/root/key/api.key`
 - `/root/key/encryption.key`
 
+Service runtime keys:
+
+- `/etc/wg-manager/api.key`
+- `/etc/wg-manager/encryption.key`
+
+View keys:
+
+```bash
+cat /root/key/api.key
+cat /root/key/encryption.key
+```
+
+Regenerate keys:
+
+```bash
+install -d -m 700 /root/key /etc/wg-manager
+python3 - <<'PY'
+import secrets, pathlib
+api = secrets.token_hex(32)
+enc = secrets.token_hex(32)
+pathlib.Path('/root/key/api.key').write_text(api + '\n')
+pathlib.Path('/root/key/encryption.key').write_text(enc + '\n')
+print('API_KEY=', api)
+print('ENC_KEY=', enc)
+PY
+cp /root/key/api.key /etc/wg-manager/api.key
+cp /root/key/encryption.key /etc/wg-manager/encryption.key
+chmod 600 /root/key/api.key /root/key/encryption.key /etc/wg-manager/api.key /etc/wg-manager/encryption.key
+systemctl restart awg-manager-api.service awg-manager-restore.service
+```
+
 ## Web UI Artifacts
 
 `webui/dist` is stored in the repository for quick deployment.
