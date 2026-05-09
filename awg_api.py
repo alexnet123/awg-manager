@@ -15,9 +15,22 @@ WEBUI_DIST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'webui
 class AWGManagerAPIHandler(BaseHTTPRequestHandler):
     server_version = 'AWGManagerAPI/1.0'
 
+    def _send_security_headers(self):
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('X-Frame-Options', 'DENY')
+        self.send_header('Referrer-Policy', 'no-referrer')
+        self.send_header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+        # UI is same-origin only; API and static assets are served from one origin.
+        self.send_header(
+            'Content-Security-Policy',
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+            "script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+        )
+
     def _send_json(self, status_code, payload):
         response = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         self.send_response(status_code)
+        self._send_security_headers()
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Content-Length', str(len(response)))
         self.end_headers()
@@ -25,6 +38,7 @@ class AWGManagerAPIHandler(BaseHTTPRequestHandler):
 
     def _send_bytes(self, status_code, payload, content_type, filename=None, as_attachment=False):
         self.send_response(status_code)
+        self._send_security_headers()
         self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(payload)))
         if filename is not None:
@@ -35,6 +49,7 @@ class AWGManagerAPIHandler(BaseHTTPRequestHandler):
 
     def _send_redirect(self, location):
         self.send_response(302)
+        self._send_security_headers()
         self.send_header('Location', location)
         self.end_headers()
 

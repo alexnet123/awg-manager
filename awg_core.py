@@ -74,7 +74,7 @@ if os.path.isdir(bd_path):
     conn = sqlite3.connect(bd_path+"/"+"clients.db")
 else:
     print('Directory does not exist')
-    os.system("mkdir "+bd_path)
+    os.makedirs(bd_path, exist_ok=True)
     conn = sqlite3.connect(bd_path+"/"+"clients.db")
 
 
@@ -1171,7 +1171,7 @@ def list_wg_int_clients():
         print(f"Public ip: {srv_ip}, DNS: {srv_dns}")
         for param_line in format_awg_params_for_display(awg_version, awg_params):
             print(param_line)
-        for id, name, pubkey, privkey, ip, wg_interface in c.execute("SELECT * FROM clients WHERE wg_interface = '"+wg_interface+"'").fetchall():
+        for id, name, pubkey, privkey, ip, wg_interface in c.execute('SELECT * FROM clients WHERE wg_interface = ?', (wg_interface,)).fetchall():
             print("    |-----------------------------------------------------------------------------------------------------------------------")
             print(f"    | ID: {id} - {name}: IP-address: {ip}")
             print(f"    | Public key: {pubkey}")
@@ -1349,7 +1349,7 @@ def del_wg_int():
     id, wg_interface, awg_version, port_number, wg_ip_addr, wg_ip_cidr, private_key, pubkey, srv_ip, srv_dns, Jc, Jmin, Jmax, S1, S2, S3, S4, H1, H2, H3, H4, I1, I2, I3, I4, I5 = row2
     subprocess.run(['ip', 'link', 'set', 'down', 'dev', wg_interface], check=True)
     subprocess.run(['ip', 'link', 'del', wg_interface, 'type', 'amneziawg'], check=True)
-    c.execute("DELETE FROM wg_interfaces WHERE wg_interface = '"+wg_interface+"';")
+    c.execute('DELETE FROM wg_interfaces WHERE wg_interface = ?', (wg_interface,))
     conn.commit()
 
 
@@ -1436,7 +1436,7 @@ def update_peer():
     wg_interface = input("Введите wg_interface: ")
 
 
-    pubkey2 = c.execute("SELECT pubkey FROM clients where id = '"+id+"'").fetchone()
+    pubkey2 = c.execute('SELECT pubkey FROM clients WHERE id = ?', (id,)).fetchone()
     del_peer(wg_interface, pubkey2[0])
 
     # Обновляем запись в таблице
@@ -1452,21 +1452,20 @@ def sync(_type):
     #hard sync
     if _type == 1:
         try:
-            # Выполняем команду и сохраняем ее вывод в переменной output
-            output = subprocess.check_output("ip link show | awk -F': ' '/^.*wg/{print $2}'", shell=True)
+            output = subprocess.check_output(['ip', '-o', 'link', 'show'], text=True)
+            interfaces = []
+            for line in output.splitlines():
+                name = line.split(':', 2)[1].strip()
+                if '@' in name:
+                    name = name.split('@', 1)[0]
+                if name.startswith('wg') and len(name) > 2 and name[2:].isdigit():
+                    interfaces.append(name)
 
-            # Разбиваем вывод по символу переноса строки и преобразуем его в список
-            interfaces = output.decode().strip().split('\n')
-
-            count = subprocess.run('ip link show | grep -Pc "wg\\d"', capture_output=True, shell=True, text=True)
-
-            if len(count.stdout.strip()) == 0:
+            if not interfaces:
                 print("No matching interfaces to remove")
             else:    
-                i = 1
-                while i < len(interfaces):
-                    subprocess.run(['ip', 'link', 'delete', interfaces[i] ], check=True)
-                    i = i + 1
+                for iface_name in interfaces:
+                    subprocess.run(['ip', 'link', 'delete', iface_name], check=True)
         except subprocess.CalledProcessError as e:
             print(f'Error setting: {e}')
 
