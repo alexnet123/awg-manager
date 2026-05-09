@@ -14,7 +14,6 @@ AWG Manager is a management tool for AmneziaWG (AWG) interfaces and clients with
 - `awg_manager.py` — CLI entrypoint
 - `awg_api.py` — API + static UI server
 - `webui/` — React/Vite frontend
-- `ui/` — legacy static UI (fallback)
 - `docs/API.md` — API reference
 - `docs/DEPLOY.md` — deployment/systemd notes
 
