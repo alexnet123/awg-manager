@@ -164,6 +164,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
       ct_state: rule.ct_state || null,
       enabled: rule.enabled,
     })
+    setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 460) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 520) / 2)) })
     setAddOpen(true)
   }
 
