@@ -1,79 +1,38 @@
 # AWG Manager
 
-AWG Manager is a management tool for AmneziaWG (AWG) interfaces and clients with:
+AWG Manager is a management toolkit for AmneziaWG:
 
 - CLI
 - HTTP API
 - Web UI (`/ui/`)
-- client `.conf` + QR generation
-- AWG v1/v2 parameter support
+- client `.conf` and QR export
+- AWG v1 + v2 support (v2 by default)
 
-## Project Structure
+Russian README: [README.ru.md](README.ru.md)
 
-- `awg_core.py` — core logic (DB, crypto, runtime, CRUD services)
-- `awg_manager.py` — CLI entrypoint
-- `awg_api.py` — API + static UI server
-- `webui/` — React/Vite frontend
-- `docs/API.md` — API reference
-- `docs/DEPLOY.md` — deployment/systemd notes
-
-## Requirements
-
-- Python 3.9+
-- `awg` binary
-- `ip` (`iproute2`)
-- root privileges for runtime interface operations
-
-Install Python dependencies:
+## 10-Minute Deploy
 
 ```bash
-python3 -m pip install -r requirements.txt
+git clone https://github.com/alexnet123/awg-manager.git
+cd awg-manager
+sudo ./scripts/install_test_stand.sh --project-dir /root/awg-manager --host 0.0.0.0 --port 8787
 ```
 
-## Run
+Then open:
 
-### CLI
+`http://SERVER_IP:8787/ui/`
 
-```bash
-python3 awg_manager.py
-```
+Credentials:
 
-Restore runtime from DB:
+- API key: `/root/key/api.key`
+- Encryption key: `/root/key/encryption.key`
 
-```bash
-python3 awg_manager.py -r /etc/wg-manager/encryption.key
-```
+## Important UI Note
 
-### API
+`webui/dist` is committed in the repository for fast deployments.
+So `/ui/` works right after install, without extra frontend build steps.
 
-```bash
-python3 awg_api.py 0.0.0.0 8787 -r /etc/wg-manager/encryption.key
-```
-
-Open Web UI:
-
-```text
-http://SERVER_IP:8787/ui/
-```
-
-## Authentication
-
-API uses one header:
-
-- `X-API-Key`
-
-Key source:
-
-- `/etc/wg-manager/api.key` (or env `AWG_MANAGER_API_KEY`)
-
-## AWG Versions
-
-- `v1`: `Jc Jmin Jmax S1 S2 H1 H2 H3 H4`
-- `v2`: `v1 + S3 S4 I1 I2 I3 I4 I5`
-
-`v2` defaults are generated automatically, including dynamic `H1-H4` ranges.
-
-## Web UI Build
+Rebuild UI only when you change frontend code:
 
 ```bash
 cd webui
@@ -81,71 +40,55 @@ npm install
 npm run build
 ```
 
-## Tests
+## Requirements
 
-### API contract tests
+- Python 3.9+
+- `awg` + `ip` binaries
+- root privileges
+
+Install dependencies:
 
 ```bash
 python3 -m pip install -r requirements.txt
-pytest -q tests/test_api_contract.py
 ```
 
-### UI E2E (Playwright)
+## Main Commands
+
+CLI:
 
 ```bash
-cd webui
-npm install
-npx playwright install chromium
-PLAYWRIGHT_BASE_URL="http://127.0.0.1:8787/ui/" \
-PLAYWRIGHT_API_KEY="YOUR_API_KEY" \
-npm run test:e2e
+python3 awg_manager.py
 ```
 
-Notes:
-
-- `globalSetup` cleans interfaces/clients before each run.
-- `auth-rotate` scenario is skipped by default.
-
-## Documentation
-
-- [API reference](docs/API.md)
-- [Deployment guide](docs/DEPLOY.md)
-
-## Deployment
-
-See:
-
-- `docs/DEPLOY.md`
-- `deploy/awg-manager-api.service`
-- `deploy/awg-manager-restore.service`
-
-Quick test stand install:
+Restore runtime after reboot:
 
 ```bash
-sudo ./scripts/install_test_stand.sh --project-dir /root/awg_manager --host 0.0.0.0 --port 8787
+python3 awg_manager.py -r /etc/wg-manager/encryption.key
 ```
 
-## Prepare and Push to GitHub
-
-Repository target:
-
-`https://github.com/alexnet123/awg-manager.git`
-
-If current folder has no `.git`:
+API:
 
 ```bash
-cd awg_manager
-git init
-git branch -M main
-git remote add origin https://github.com/alexnet123/awg-manager.git
-git add .
-git commit -m "Refactor AWG manager: API/UI/tests/docs update"
-git push -u origin main
+python3 awg_api.py 0.0.0.0 8787 -r /etc/wg-manager/encryption.key
 ```
 
-If remote already has history:
+## Auth
 
-```bash
-git pull --rebase origin main
-git push
-```
+Use header:
+
+- `X-API-Key`
+
+Source:
+
+- `/etc/wg-manager/api.key`
+- or env `AWG_MANAGER_API_KEY`
+
+## AWG Versions
+
+- v1: `Jc Jmin Jmax S1 S2 H1 H2 H3 H4`
+- v2: `v1 + S3 S4 I1 I2 I3 I4 I5`
+
+## Docs
+
+- [docs/API.md](docs/API.md)
+- [docs/DEPLOY.md](docs/DEPLOY.md)

@@ -111,18 +111,18 @@ pin_running_kernel() {
 
   # Persist kernel choice for next boot. Prefer entry id if we can find it.
   if [[ -f /boot/grub/grub.cfg ]]; then
-    saved_entry="$(grep -m1 \"with Linux ${running_kernel}'\" /boot/grub/grub.cfg | sed -n \"s/.*menuentry_id_option '\\([^']*\\)'.*/\\1/p\")"
-    if [[ -n \"${saved_entry:-}\" ]]; then
+    saved_entry="$(grep -m1 "with Linux ${running_kernel}'" /boot/grub/grub.cfg | sed -n "s/.*menuentry_id_option '\([^']*\)'.*/\1/p")"
+    if [[ -n "${saved_entry:-}" ]]; then
       if ! grep -q '^GRUB_DEFAULT=saved' /etc/default/grub 2>/dev/null; then echo 'GRUB_DEFAULT=saved' >> /etc/default/grub; fi
       if ! grep -q '^GRUB_SAVEDEFAULT=true' /etc/default/grub 2>/dev/null; then echo 'GRUB_SAVEDEFAULT=true' >> /etc/default/grub; fi
       update-grub >/dev/null 2>&1 || true
-      grub-set-default \"${saved_entry}\" >/dev/null 2>&1 || true
-      log \"GRUB saved_entry set: ${saved_entry}\"
+      grub-set-default "${saved_entry}" >/dev/null 2>&1 || true
+      log "GRUB saved_entry set: ${saved_entry}"
     else
-      log \"WARN: could not detect GRUB entry id for ${running_kernel}; kernel is held but GRUB default was not changed\"
+      log "WARN: could not detect GRUB entry id for ${running_kernel}; kernel is held but GRUB default was not changed"
     fi
   else
-    log \"WARN: /boot/grub/grub.cfg not found; kernel is held but GRUB default was not changed\"
+    log "WARN: /boot/grub/grub.cfg not found; kernel is held but GRUB default was not changed"
   fi
 }
 

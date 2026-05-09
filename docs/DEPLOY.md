@@ -61,6 +61,19 @@ Generated credentials are saved to:
 - `/root/key/api.key`
 - `/root/key/encryption.key`
 
+## Web UI Artifacts
+
+`webui/dist` is stored in the repository for quick deployment.
+This allows `/ui/` to work immediately after install.
+
+Rebuild only after frontend changes:
+
+```bash
+cd webui
+npm install
+npm run build
+```
+
 Copy the service file:
 
 ```bash
