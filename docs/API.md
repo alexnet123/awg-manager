@@ -256,6 +256,32 @@ Returns full server-side interface config preview, including attached peers.
 
 Rotates the API key and returns the new value. The old API key stops working immediately.
 
+### Firewall (nftables)
+
+`GET /firewall`
+
+Returns AWG Manager nftables state:
+
+- `active` (table exists/applied)
+- `rules` (stored managed rules)
+- `ruleset` (text output of `nft list table inet awg_manager`)
+
+`POST /firewall/rules`
+
+Creates one managed rule and applies rules immediately.
+
+`PUT /firewall/rules/{id}`
+
+Updates rule by id and applies immediately.
+
+`DELETE /firewall/rules/{id}`
+
+Deletes rule by id and applies immediately.
+
+`POST /firewall/apply`
+
+Re-applies all stored managed rules to table `inet awg_manager`.
+
 Example:
 
 ```bash

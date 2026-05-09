@@ -12,6 +12,8 @@ import random
 import tempfile
 import io
 import re
+import json
+import uuid
 from cryptography.fernet import Fernet, InvalidToken
 import segno
 
@@ -69,6 +71,9 @@ encryption_key_legacy = derive_encryption_key_v1_legacy(encryption_secret)
 bd_path = '/etc/wg-manager'
 API_KEY_ENV_VAR = 'AWG_MANAGER_API_KEY'
 API_KEY_FILE = os.path.join(bd_path, 'api.key')
+FIREWALL_RULES_FILE = os.path.join(bd_path, 'firewall_rules.json')
+FIREWALL_TABLE_FAMILY = 'inet'
+FIREWALL_TABLE_NAME = 'awg_manager'
 if os.path.isdir(bd_path):
     # Подключение к базе данных
     conn = sqlite3.connect(bd_path+"/"+"clients.db")
@@ -354,6 +359,209 @@ def decode_base64_payload(payload):
         return base64.b64decode(payload, validate=True)
     except (ValueError, binascii.Error):
         raise ValueError('Invalid base64 backup payload')
+
+
+def _read_firewall_rules_file():
+    if not os.path.isfile(FIREWALL_RULES_FILE):
+        return []
+    try:
+        with open(FIREWALL_RULES_FILE, 'r', encoding='utf-8') as f:
+            payload = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    if isinstance(payload, dict):
+        payload = payload.get('rules', [])
+    if not isinstance(payload, list):
+        return []
+    return payload
+
+
+def _write_firewall_rules_file(rules):
+    os.makedirs(os.path.dirname(FIREWALL_RULES_FILE), exist_ok=True)
+    with open(FIREWALL_RULES_FILE, 'w', encoding='utf-8') as f:
+        json.dump({'rules': rules}, f, ensure_ascii=False, indent=2)
+
+
+def _normalize_firewall_rule(payload):
+    if not isinstance(payload, dict):
+        raise ValueError('Rule payload must be an object')
+
+    family = normalize_config_value(payload.get('family')) or 'inet'
+    chain = (normalize_config_value(payload.get('chain')) or '').lower()
+    action = (normalize_config_value(payload.get('action')) or '').lower()
+    proto = normalize_config_value(payload.get('proto'))
+    src = normalize_config_value(payload.get('src'))
+    dst = normalize_config_value(payload.get('dst'))
+    in_interface = normalize_config_value(payload.get('in_interface'))
+    out_interface = normalize_config_value(payload.get('out_interface'))
+    dport = normalize_config_value(payload.get('dport'))
+    sport = normalize_config_value(payload.get('sport'))
+    comment = normalize_config_value(payload.get('comment'))
+    enabled = payload.get('enabled', True)
+
+    if family not in ('inet', 'ip', 'ip6'):
+        raise ValueError('family must be one of: inet, ip, ip6')
+    if chain not in ('input', 'forward', 'output'):
+        raise ValueError('chain must be one of: input, forward, output')
+    if action not in ('accept', 'drop', 'reject'):
+        raise ValueError('action must be one of: accept, drop, reject')
+    if proto is not None:
+        proto = str(proto).lower()
+        if proto not in ('tcp', 'udp', 'icmp', 'icmpv6'):
+            raise ValueError('proto must be one of: tcp, udp, icmp, icmpv6')
+    if dport is not None and proto not in ('tcp', 'udp'):
+        raise ValueError('dport requires proto tcp or udp')
+    if sport is not None and proto not in ('tcp', 'udp'):
+        raise ValueError('sport requires proto tcp or udp')
+    if dport is not None and not re.fullmatch(r'[0-9]{1,5}(:[0-9]{1,5})?', str(dport)):
+        raise ValueError('dport must be like 80 or 1000:2000')
+    if sport is not None and not re.fullmatch(r'[0-9]{1,5}(:[0-9]{1,5})?', str(sport)):
+        raise ValueError('sport must be like 53 or 1000:2000')
+    if src is not None:
+        ipaddress.ip_network(str(src), strict=False)
+    if dst is not None:
+        ipaddress.ip_network(str(dst), strict=False)
+    if in_interface is not None and not re.fullmatch(r'[A-Za-z0-9_.:-]+', str(in_interface)):
+        raise ValueError('in_interface contains invalid characters')
+    if out_interface is not None and not re.fullmatch(r'[A-Za-z0-9_.:-]+', str(out_interface)):
+        raise ValueError('out_interface contains invalid characters')
+    if not isinstance(enabled, bool):
+        enabled = str(enabled).lower() in ('1', 'true', 'yes', 'on')
+    if comment is not None:
+        comment = str(comment).replace('"', "'")
+
+    return {
+        'id': str(payload.get('id') or uuid.uuid4().hex),
+        'family': family,
+        'chain': chain,
+        'action': action,
+        'proto': proto,
+        'src': src,
+        'dst': dst,
+        'in_interface': in_interface,
+        'out_interface': out_interface,
+        'sport': str(sport) if sport is not None else None,
+        'dport': str(dport) if dport is not None else None,
+        'comment': comment,
+        'enabled': enabled,
+    }
+
+
+def _render_firewall_rule(rule):
+    parts = []
+    if rule['in_interface']:
+        parts.append(f'iifname "{rule["in_interface"]}"')
+    if rule['out_interface']:
+        parts.append(f'oifname "{rule["out_interface"]}"')
+    if rule['src']:
+        prefix = 'ip6' if ':' in str(rule['src']) else 'ip'
+        parts.append(f'{prefix} saddr {rule["src"]}')
+    if rule['dst']:
+        prefix = 'ip6' if ':' in str(rule['dst']) else 'ip'
+        parts.append(f'{prefix} daddr {rule["dst"]}')
+    if rule['proto']:
+        parts.append(f'meta l4proto {rule["proto"]}')
+    if rule['sport']:
+        parts.append(f'{rule["proto"]} sport {rule["sport"]}')
+    if rule['dport']:
+        parts.append(f'{rule["proto"]} dport {rule["dport"]}')
+    parts.append(rule['action'])
+    if rule['comment']:
+        parts.append(f'comment "{rule["comment"]}"')
+    return ' '.join(parts)
+
+
+def list_firewall_rules_service():
+    raw_rules = _read_firewall_rules_file()
+    normalized = []
+    for payload in raw_rules:
+        try:
+            normalized.append(_normalize_firewall_rule(payload))
+        except Exception:
+            continue
+    return normalized
+
+
+def apply_firewall_rules():
+    rules = list_firewall_rules_service()
+    script_lines = [
+        f'flush table {FIREWALL_TABLE_FAMILY} {FIREWALL_TABLE_NAME}',
+        f'add table {FIREWALL_TABLE_FAMILY} {FIREWALL_TABLE_NAME}',
+        f'add chain {FIREWALL_TABLE_FAMILY} {FIREWALL_TABLE_NAME} input {{ type filter hook input priority 10; policy accept; }}',
+        f'add chain {FIREWALL_TABLE_FAMILY} {FIREWALL_TABLE_NAME} forward {{ type filter hook forward priority 10; policy accept; }}',
+        f'add chain {FIREWALL_TABLE_FAMILY} {FIREWALL_TABLE_NAME} output {{ type filter hook output priority 10; policy accept; }}',
+    ]
+    for rule in rules:
+        if not rule.get('enabled', True):
+            continue
+        rendered = _render_firewall_rule(rule)
+        script_lines.append(
+            f'add rule {FIREWALL_TABLE_FAMILY} {FIREWALL_TABLE_NAME} {rule["chain"]} {rendered}'
+        )
+    script_text = '\n'.join(script_lines) + '\n'
+    subprocess.run(['nft', '-f', '-'], input=script_text.encode('utf-8'), check=True)
+    return True
+
+
+def create_firewall_rule_service(payload, apply_now=True):
+    rules = list_firewall_rules_service()
+    rule = _normalize_firewall_rule(payload)
+    rules.append(rule)
+    _write_firewall_rules_file(rules)
+    if apply_now:
+        apply_firewall_rules()
+    return rule
+
+
+def update_firewall_rule_service(rule_id, payload, apply_now=True):
+    rules = list_firewall_rules_service()
+    existing = next((r for r in rules if r['id'] == str(rule_id)), None)
+    if existing is None:
+        raise LookupError('Firewall rule not found')
+    merged = {**existing, **(payload or {})}
+    merged['id'] = existing['id']
+    updated = _normalize_firewall_rule(merged)
+    out = [updated if r['id'] == existing['id'] else r for r in rules]
+    _write_firewall_rules_file(out)
+    if apply_now:
+        apply_firewall_rules()
+    return updated
+
+
+def delete_firewall_rule_service(rule_id, apply_now=True):
+    rules = list_firewall_rules_service()
+    existing = next((r for r in rules if r['id'] == str(rule_id)), None)
+    if existing is None:
+        raise LookupError('Firewall rule not found')
+    out = [r for r in rules if r['id'] != str(rule_id)]
+    _write_firewall_rules_file(out)
+    if apply_now:
+        apply_firewall_rules()
+    return existing
+
+
+def get_firewall_state_service():
+    rules = list_firewall_rules_service()
+    ruleset_text = ''
+    active = False
+    try:
+        res = subprocess.run(
+            ['nft', 'list', 'table', FIREWALL_TABLE_FAMILY, FIREWALL_TABLE_NAME],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        ruleset_text = res.stdout
+        active = True
+    except Exception:
+        active = False
+    return {
+        'active': active,
+        'rules': rules,
+        'ruleset': ruleset_text,
+        'family': FIREWALL_TABLE_FAMILY,
+        'table': FIREWALL_TABLE_NAME,
+    }
 
 
 def _random_h_value():

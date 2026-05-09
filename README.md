@@ -5,6 +5,7 @@ AWG Manager is a management toolkit for AmneziaWG:
 - CLI
 - HTTP API
 - Web UI (`/ui/`)
+- Firewall tab (nftables rule manager)
 - client `.conf` and QR export
 - AWG v1 + v2 support (v2 by default)
 

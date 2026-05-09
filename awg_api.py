@@ -189,6 +189,10 @@ class AWGManagerAPIHandler(BaseHTTPRequestHandler):
             self._send_json(200, {'ok': True, 'items': clients})
             return
 
+        if path_parts == ['firewall']:
+            self._send_json(200, {'ok': True, 'item': manager.get_firewall_state_service()})
+            return
+
         if path_parts == ['backup', 'download']:
             backup_bytes = manager.read_database_bytes()
             self._send_bytes(
@@ -320,6 +324,16 @@ class AWGManagerAPIHandler(BaseHTTPRequestHandler):
                 self._send_json(201, {'ok': True, 'item': manager.serialize_client_row(row, include_private_key=True)})
                 return
 
+            if path_parts == ['firewall', 'rules']:
+                row = manager.create_firewall_rule_service(payload, apply_now=True)
+                self._send_json(201, {'ok': True, 'item': row})
+                return
+
+            if path_parts == ['firewall', 'apply']:
+                manager.apply_firewall_rules()
+                self._send_json(200, {'ok': True})
+                return
+
             if path_parts == ['backup', 'restore']:
                 db_base64 = payload.get('db_base64')
                 if not isinstance(db_base64, str) or not db_base64.strip():
@@ -354,6 +368,11 @@ class AWGManagerAPIHandler(BaseHTTPRequestHandler):
                 row = manager.update_client_service(path_parts[1], payload)
                 self._send_json(200, {'ok': True, 'item': manager.serialize_client_row(row, include_private_key=True)})
                 return
+
+            if len(path_parts) == 3 and path_parts[0] == 'firewall' and path_parts[1] == 'rules':
+                row = manager.update_firewall_rule_service(path_parts[2], payload, apply_now=True)
+                self._send_json(200, {'ok': True, 'item': row})
+                return
         except Exception as exc:
             self._handle_service_error(exc)
             return
@@ -376,6 +395,11 @@ class AWGManagerAPIHandler(BaseHTTPRequestHandler):
             if len(path_parts) == 2 and path_parts[0] == 'clients':
                 row = manager.delete_client_service(path_parts[1])
                 self._send_json(200, {'ok': True, 'item': manager.serialize_client_row(row)})
+                return
+
+            if len(path_parts) == 3 and path_parts[0] == 'firewall' and path_parts[1] == 'rules':
+                row = manager.delete_firewall_rule_service(path_parts[2], apply_now=True)
+                self._send_json(200, {'ok': True, 'item': row})
                 return
         except Exception as exc:
             self._handle_service_error(exc)

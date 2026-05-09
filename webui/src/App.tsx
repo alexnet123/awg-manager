@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Download, KeyRound, LogOut, Moon, Network, RefreshCcw, Sun, Upload, Users } from 'lucide-react'
+import { Download, KeyRound, LogOut, Moon, Network, RefreshCcw, Shield, Sun, Upload, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -18,6 +18,7 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { InterfacesPage } from '@/pages/interfaces'
 import { ClientsPage } from '@/pages/clients'
+import { FirewallPage } from '@/pages/firewall'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { downloadBackup, restoreBackup } from '@/pages/api'
 
@@ -25,7 +26,7 @@ type AuthState = {
   apiKey: string
 }
 
-type RouteKey = 'interfaces' | 'clients'
+type RouteKey = 'interfaces' | 'clients' | 'firewall'
 
 const AUTH_STORAGE_KEY = 'awg_manager_auth_v1'
 
@@ -200,6 +201,16 @@ function DashboardView(props: { auth: AuthState; onLogout: () => void }) {
                 <span>Clients</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                isActive={route === 'firewall'}
+                onClick={() => setRoute('firewall')}
+                className='group-data-[collapsible=icon]:mx-auto group-data-[collapsible=icon]:h-9 group-data-[collapsible=icon]:w-9 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0'
+              >
+                <Shield className='size-4 shrink-0 group-data-[collapsible=icon]:mx-auto' />
+                <span>Firewall</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
           </SidebarMenu>
         </SidebarContent>
         <SidebarFooter>
@@ -323,6 +334,7 @@ function DashboardView(props: { auth: AuthState; onLogout: () => void }) {
           <main className='flex-1 p-3 md:p-4'>
             {route === 'interfaces' ? <InterfacesPage auth={props.auth} refreshNonce={refreshNonce} /> : null}
             {route === 'clients' ? <ClientsPage auth={props.auth} refreshNonce={refreshNonce} /> : null}
+            {route === 'firewall' ? <FirewallPage auth={props.auth} refreshNonce={refreshNonce} /> : null}
           </main>
         </div>
       </SidebarInset>

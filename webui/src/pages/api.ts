@@ -25,6 +25,30 @@ export type ClientItem = {
   privkey?: string
 }
 
+export type FirewallRule = {
+  id: string
+  family: 'inet' | 'ip' | 'ip6'
+  chain: 'input' | 'forward' | 'output'
+  action: 'accept' | 'drop' | 'reject'
+  proto?: 'tcp' | 'udp' | 'icmp' | 'icmpv6' | null
+  src?: string | null
+  dst?: string | null
+  in_interface?: string | null
+  out_interface?: string | null
+  sport?: string | null
+  dport?: string | null
+  comment?: string | null
+  enabled: boolean
+}
+
+export type FirewallState = {
+  active: boolean
+  rules: FirewallRule[]
+  ruleset: string
+  family: string
+  table: string
+}
+
 export async function generateAwgParams(auth: AuthState, awgVersion: '1' | '2'): Promise<Record<string, string | number | null>> {
   const res = await fetch('/awg/params/generate', {
     method: 'POST',
@@ -174,6 +198,49 @@ export async function restoreBackup(auth: AuthState, file: File): Promise<void> 
     method: 'POST',
     headers: headers(auth, { 'Content-Type': 'application/json' }),
     body: JSON.stringify({ db_base64: base64Payload }),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+}
+
+export async function getFirewallState(auth: AuthState): Promise<FirewallState> {
+  const res = await fetch('/firewall', { headers: headers(auth) })
+  if (!res.ok) throw new Error(await parseError(res))
+  const payload = await res.json()
+  return payload.item
+}
+
+export async function createFirewallRule(auth: AuthState, body: Partial<FirewallRule>): Promise<FirewallRule> {
+  const res = await fetch('/firewall/rules', {
+    method: 'POST',
+    headers: headers(auth, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  const payload = await res.json()
+  return payload.item
+}
+
+export async function updateFirewallRule(auth: AuthState, id: string, body: Partial<FirewallRule>): Promise<FirewallRule> {
+  const res = await fetch(`/firewall/rules/${id}`, {
+    method: 'PUT',
+    headers: headers(auth, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  const payload = await res.json()
+  return payload.item
+}
+
+export async function deleteFirewallRule(auth: AuthState, id: string): Promise<void> {
+  const res = await fetch(`/firewall/rules/${id}`, { method: 'DELETE', headers: headers(auth) })
+  if (!res.ok) throw new Error(await parseError(res))
+}
+
+export async function applyFirewallRules(auth: AuthState): Promise<void> {
+  const res = await fetch('/firewall/apply', {
+    method: 'POST',
+    headers: headers(auth, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify({}),
   })
   if (!res.ok) throw new Error(await parseError(res))
 }
