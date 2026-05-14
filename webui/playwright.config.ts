@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
 const baseURL = process.env.PLAYWRIGHT_BASE_URL || 'http://127.0.0.1:8787/ui/'
+const lowMem = process.env.PLAYWRIGHT_LOW_MEM === '1'
 
 export default defineConfig({
   testDir: './tests',
@@ -17,6 +18,11 @@ export default defineConfig({
     trace: 'off',
     screenshot: 'only-on-failure',
     video: 'off',
+    launchOptions: lowMem
+      ? {
+          args: ['--disable-gpu', '--js-flags=--jitless'],
+        }
+      : undefined,
   },
   projects: [
     {

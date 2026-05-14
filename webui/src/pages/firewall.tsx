@@ -1,13 +1,14 @@
 import * as React from 'react'
 import { Plus, X } from 'lucide-react'
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import type { AuthState, FirewallRule, FirewallState } from './api'
-import { createFirewallRule, deleteFirewallRule, getFirewallState, updateFirewallRule } from './api'
+import type { AuthState, FirewallMapItem, FirewallMapsState, FirewallRule, FirewallSchema, FirewallSetItem, FirewallSetsState, FirewallState, FirewallTableItem, FirewallTablesState } from './api'
+import { createFirewallRule, deleteFirewallMap, deleteFirewallRule, deleteFirewallSet, deleteFirewallTable, getFirewallMaps, getFirewallSchema, getFirewallSets, getFirewallState, getFirewallTables, reorderFirewallRules, resetFirewallCounters, updateFirewallRule, upsertFirewallMap, upsertFirewallSet, upsertFirewallTable } from './api'
 
 const defaultRule: Partial<FirewallRule> = {
   table: 'filter',
@@ -19,18 +20,31 @@ const defaultRule: Partial<FirewallRule> = {
   comment: '',
   ct_state: null,
   nat_type: null,
+  target_chain: null,
+  reject_type: null,
   to_addr: null,
   to_port: null,
+  nat_random: false,
+  nat_fully_random: false,
+  nat_persistent: false,
   notrack: false,
   mark_set: null,
   ct_mark_set: null,
   log_prefix: null,
   log_level: null,
+  fib_expr: null,
+  socket_expr: null,
+  rt_expr: null,
+  exthdr_expr: null,
+  ct_helper_set: null,
+  ct_timeout_set: null,
+  ct_expectation_set: null,
   limit_rate: null,
   counter: false,
 }
 
-type EditorTab = 'general' | 'advanced' | 'extra' | 'action' | 'stats'
+type EditorTab = 'base' | 'advanced' | 'action' | 'stats'
+type FieldState = 'V' | 'H' | 'D' | 'W'
 
 function parseCtState(value?: FirewallRule['ct_state'] | null) {
   return {
@@ -52,7 +66,7 @@ function buildCtState(flags: { established: boolean; related: boolean; newState:
   return null
 }
 
-function ToggleLine(props: { label: string; enabled: boolean; onToggle: () => void; children: React.ReactNode }) {
+function ToggleLine(props: { label: string; enabled: boolean; onToggle: () => void; children: React.ReactNode; inactiveHint?: string }) {
   return (
     <div className='space-y-1.5'>
       <div className='flex items-center justify-between gap-2'>
@@ -75,7 +89,7 @@ function ToggleLine(props: { label: string; enabled: boolean; onToggle: () => vo
         )
         : (
           <div className='flex h-7 items-center justify-between rounded-md border border-dashed px-2.5 text-[11px] text-muted-foreground'>
-            <span>Disabled</span>
+            <span className='truncate pr-2'>{props.inactiveHint || ''}</span>
             <button type='button' className='h-5 min-w-5 rounded border px-1 text-[11px] leading-4 text-foreground' onClick={props.onToggle}>+</button>
           </div>
         )}
@@ -83,30 +97,151 @@ function ToggleLine(props: { label: string; enabled: boolean; onToggle: () => vo
   )
 }
 
+function PlannedField(props: { label: string; placeholder: string }) {
+  return (
+    <ToggleLine label={props.label} enabled={false} onToggle={() => {}} inactiveHint={props.placeholder}>
+      <Input className='h-7' disabled placeholder={`${props.placeholder} (planned)`} />
+    </ToggleLine>
+  )
+}
+
+type FirewallMainTab = 'filter' | 'nat' | 'raw' | 'mangle' | 'sets' | 'tables' | 'maps'
+
 export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [state, setState] = React.useState<FirewallState | null>(null)
+  const [schema, setSchema] = React.useState<FirewallSchema | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [form, setForm] = React.useState<Partial<FirewallRule>>(defaultRule)
   const [isBusy, setIsBusy] = React.useState(false)
-  const [activeTable, setActiveTable] = React.useState<'filter' | 'nat' | 'raw' | 'mangle'>('filter')
+  const [activeTable, setActiveTable] = React.useState<FirewallMainTab>('filter')
   const [selectedRuleId, setSelectedRuleId] = React.useState<string | null>(null)
   const [addOpen, setAddOpen] = React.useState(false)
   const [editingRuleId, setEditingRuleId] = React.useState<string | null>(null)
-  const [ruleEditorTab, setRuleEditorTab] = React.useState<EditorTab>('general')
+  const [ruleEditorTab, setRuleEditorTab] = React.useState<EditorTab>('base')
+  const [dragRuleId, setDragRuleId] = React.useState<string | null>(null)
   const [winPos, setWinPos] = React.useState({ x: 120, y: 120 })
+  const [columnsOpen, setColumnsOpen] = React.useState(false)
+  const [visibleColumns, setVisibleColumns] = React.useState<Record<string, boolean>>({
+    chain: true,
+    action: true,
+    proto: true,
+    src: true,
+    dst: false,
+    sport: false,
+    dport: true,
+    in_interface: false,
+    out_interface: false,
+    ct_state: true,
+    comment: true,
+    packets: true,
+    bytes: true,
+  })
   const dragRef = React.useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null)
+  const [actionMode, setActionMode] = React.useState<string>('verdict')
+  const [statsSeries, setStatsSeries] = React.useState<'packets' | 'bytes'>('packets')
+  const [liveChartPoints, setLiveChartPoints] = React.useState<Array<{ idx: number; pps: number; bps: number }>>([])
+  const [chartTick, setChartTick] = React.useState(0)
+  const [setsState, setSetsState] = React.useState<FirewallSetsState>({ addr: [], port: [], iface: [] })
+  const [mapsState, setMapsState] = React.useState<FirewallMapsState>({ map: [], vmap: [] })
+  const [tablesState, setTablesState] = React.useState<FirewallTablesState>({ builtin: [], custom: [] })
+  const [activeSetKind, setActiveSetKind] = React.useState<'addr' | 'port' | 'iface'>('addr')
+  const [selectedSetId, setSelectedSetId] = React.useState<string | null>(null)
+  const [selectedMapId, setSelectedMapId] = React.useState<string | null>(null)
+  const [newSetName, setNewSetName] = React.useState('')
+  const [newSetElements, setNewSetElements] = React.useState('')
+  const [newSetComment, setNewSetComment] = React.useState('')
+  const [setOpen, setSetOpen] = React.useState(false)
+  const [editingSetId, setEditingSetId] = React.useState<string | null>(null)
+  const [mapOpen, setMapOpen] = React.useState(false)
+  const [editingMapId, setEditingMapId] = React.useState<string | null>(null)
+  const [activeMapKind, setActiveMapKind] = React.useState<'map' | 'vmap'>('map')
+  const [newMapName, setNewMapName] = React.useState('')
+  const [newMapEntries, setNewMapEntries] = React.useState('')
+  const [newMapComment, setNewMapComment] = React.useState('')
+  const [selectedTableId, setSelectedTableId] = React.useState<string | null>(null)
+  const [tableOpen, setTableOpen] = React.useState(false)
+  const [newTableFamily, setNewTableFamily] = React.useState('inet')
+  const [newTableName, setNewTableName] = React.useState('')
+  const [newChainName, setNewChainName] = React.useState('')
+  const [newChainType, setNewChainType] = React.useState<'filter' | 'nat' | 'route'>('filter')
+  const [newHook, setNewHook] = React.useState<'prerouting' | 'input' | 'forward' | 'output' | 'postrouting' | 'ingress'>('input')
+  const [newDevice, setNewDevice] = React.useState('')
+  const [newPriority, setNewPriority] = React.useState('-10')
+  const [newPolicy, setNewPolicy] = React.useState<'accept' | 'drop'>('accept')
+  const [advOpen, setAdvOpen] = React.useState<Record<string, boolean>>({
+    l4: true,
+    meta: false,
+    ct: false,
+    fib: false,
+    raw: true,
+  })
+
+  function formatCounter(value?: number) {
+    const n = Number(value || 0)
+    if (n < 1000) return String(n)
+    if (n < 1_000_000) return `${(n / 1000).toFixed(1)}K`
+    if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+    return `${(n / 1_000_000_000).toFixed(1)}G`
+  }
 
   const chainOptionsByTable: Record<string, FirewallRule['chain'][]> = {
-    filter: ['input', 'forward', 'output'],
-    nat: ['prerouting', 'input', 'output', 'postrouting'],
-    raw: ['prerouting', 'output'],
-    mangle: ['prerouting', 'input', 'forward', 'output', 'postrouting'],
+    filter: schema?.tables?.filter?.chains || ['input', 'forward', 'output'],
+    nat: schema?.tables?.nat?.chains || ['prerouting', 'input', 'output', 'postrouting'],
+    raw: schema?.tables?.raw?.chains || ['prerouting', 'output'],
+    mangle: schema?.tables?.mangle?.chains || ['prerouting', 'input', 'forward', 'output', 'postrouting'],
   }
+  const tabToRuleTable = (tab: FirewallMainTab): 'filter' | 'nat' | 'raw' | 'mangle' => (tab === 'sets' || tab === 'maps' || tab === 'tables') ? 'filter' : tab
+  const activeFormTable = (form.table || tabToRuleTable(activeTable)) as 'filter' | 'nat' | 'raw' | 'mangle'
+  const tableSupports = new Set(schema?.tables?.[activeFormTable]?.supports || [])
+  const hasSupport = (key: string) => tableSupports.has(key)
+  const effectiveChain = (form.chain || chainOptionsByTable[activeFormTable]?.[0] || 'input') as FirewallRule['chain']
+  const contextKey = `${activeFormTable}:${effectiveChain}`
+  const isFilterCtx = activeFormTable === 'filter'
+  const isNatCtx = activeFormTable === 'nat'
+  const isRawCtx = activeFormTable === 'raw'
+  const isMangleCtx = activeFormTable === 'mangle'
+
+  function generalFieldState(field: 'in_interface' | 'out_interface' | 'ct_state'): FieldState {
+    const states: Record<string, Record<typeof field, FieldState>> = {
+      'filter:input': { in_interface: 'V', out_interface: 'H', ct_state: 'V' },
+      'filter:forward': { in_interface: 'V', out_interface: 'V', ct_state: 'V' },
+      'filter:output': { in_interface: 'H', out_interface: 'V', ct_state: 'V' },
+      'nat:prerouting': { in_interface: 'V', out_interface: 'H', ct_state: 'H' },
+      'nat:input': { in_interface: 'V', out_interface: 'H', ct_state: 'H' },
+      'nat:output': { in_interface: 'H', out_interface: 'V', ct_state: 'H' },
+      'nat:postrouting': { in_interface: 'H', out_interface: 'V', ct_state: 'H' },
+      'raw:prerouting': { in_interface: 'V', out_interface: 'H', ct_state: 'H' },
+      'raw:output': { in_interface: 'H', out_interface: 'V', ct_state: 'H' },
+      'mangle:prerouting': { in_interface: 'V', out_interface: 'H', ct_state: 'V' },
+      'mangle:input': { in_interface: 'V', out_interface: 'H', ct_state: 'V' },
+      'mangle:forward': { in_interface: 'V', out_interface: 'V', ct_state: 'V' },
+      'mangle:output': { in_interface: 'H', out_interface: 'V', ct_state: 'V' },
+      'mangle:postrouting': { in_interface: 'H', out_interface: 'V', ct_state: 'V' },
+    }
+    return states[contextKey]?.[field] || 'V'
+  }
+
+  const toPortState: FieldState = contextKey === 'nat:postrouting' ? 'W' : 'V'
+
+  React.useEffect(() => {
+    if (isNatCtx) setActionMode('nat')
+    else if (isRawCtx) setActionMode('notrack')
+    else if (isMangleCtx) setActionMode('mark')
+    else setActionMode('verdict')
+  }, [isNatCtx, isRawCtx, isMangleCtx])
+
+  const selectedAction = form.nat_type || form.action || 'accept'
+  const isNatActionSelected = ['dnat', 'snat', 'masquerade', 'redirect'].includes(String(selectedAction))
+  const logEnabled = !!(form.log_prefix || form.log_level)
 
   async function refresh() {
     setError(null)
     try {
-      setState(await getFirewallState(props.auth))
+      const [fwState, fwSets, fwMaps, fwTables] = await Promise.all([getFirewallState(props.auth), getFirewallSets(props.auth), getFirewallMaps(props.auth), getFirewallTables(props.auth)])
+      setState(fwState)
+      setSetsState(fwSets)
+      setMapsState(fwMaps)
+      setTablesState(fwTables)
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
     }
@@ -118,11 +253,60 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   }, [props.refreshNonce])
 
   React.useEffect(() => {
+    void (async () => {
+      try {
+        setSchema(await getFirewallSchema(props.auth))
+      } catch {
+        // keep defaults if schema endpoint is unavailable
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.refreshNonce])
+
+  React.useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      void refresh()
+    }, 3000)
+    return () => window.clearInterval(intervalId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  React.useEffect(() => {
     if (addOpen && !editingRuleId) {
-      setForm((p) => ({ ...p, table: activeTable, chain: chainOptionsByTable[activeTable][0] }))
+      const ruleTable = tabToRuleTable(activeTable)
+      setForm((p) => ({ ...p, table: ruleTable, chain: chainOptionsByTable[ruleTable][0] }))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTable, addOpen, editingRuleId])
+
+  React.useEffect(() => {
+    if (!editingRuleId) return
+    const live = (state?.rules || []).find((r) => r.id === editingRuleId)
+    if (!live) return
+    setForm((prev) => ({
+      ...prev,
+      runtime_packets: live.runtime_packets || 0,
+      runtime_bytes: live.runtime_bytes || 0,
+      runtime_pps: live.runtime_pps || 0,
+      runtime_bps: live.runtime_bps || 0,
+      runtime_history: live.runtime_history || [],
+    }))
+  }, [state, editingRuleId])
+
+  React.useEffect(() => {
+    if (!addOpen) return
+    if ((form.table || activeTable) !== 'nat' && form.nat_type) {
+      setForm((p) => ({ ...p, nat_type: null, to_addr: null, to_port: null }))
+      return
+    }
+    if ((form.table || activeTable) === 'nat' && form.nat_type) {
+      const chain = form.chain || 'prerouting'
+      const allowedNat = schema?.tables?.nat?.nat_types_by_chain?.[chain] || ['dnat', 'redirect']
+      if (!allowedNat.includes(form.nat_type)) {
+        setForm((p) => ({ ...p, nat_type: null, to_addr: null, to_port: null }))
+      }
+    }
+  }, [addOpen, form.table, form.chain, form.nat_type, activeTable, schema])
 
   async function onSave(event: React.FormEvent) {
     event.preventDefault()
@@ -187,14 +371,16 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
 
   function openCreateWindow() {
     setEditingRuleId(null)
-    setRuleEditorTab('general')
-    setForm({ ...defaultRule, table: activeTable, chain: chainOptionsByTable[activeTable][0] })
+    setRuleEditorTab('base')
+    const ruleTable = tabToRuleTable(activeTable)
+    setForm({ ...defaultRule, table: ruleTable, chain: chainOptionsByTable[ruleTable][0] })
+    setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 760) / 2) - 60) })
     setAddOpen(true)
   }
 
   function openEditWindow(rule: FirewallRule) {
     setEditingRuleId(rule.id)
-    setRuleEditorTab('general')
+    setRuleEditorTab('base')
     setForm({
       table: rule.table,
       family: rule.family,
@@ -208,59 +394,542 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
       sport: rule.sport || null,
       dport: rule.dport || null,
       comment: rule.comment || null,
+      runtime_packets: rule.runtime_packets || 0,
+      runtime_bytes: rule.runtime_bytes || 0,
+      runtime_pps: rule.runtime_pps || 0,
+      runtime_bps: rule.runtime_bps || 0,
+      runtime_history: rule.runtime_history || [],
       ct_state: rule.ct_state || null,
       nat_type: rule.nat_type || null,
+      target_chain: rule.target_chain || null,
+      reject_type: rule.reject_type || null,
       to_addr: rule.to_addr || null,
       to_port: rule.to_port || null,
+      nat_random: !!rule.nat_random,
+      nat_fully_random: !!rule.nat_fully_random,
+      nat_persistent: !!rule.nat_persistent,
       notrack: !!rule.notrack,
       mark_set: rule.mark_set || null,
       ct_mark_set: rule.ct_mark_set || null,
       log_prefix: rule.log_prefix || null,
       log_level: rule.log_level || null,
+      fib_expr: rule.fib_expr || null,
+      socket_expr: rule.socket_expr || null,
+      rt_expr: rule.rt_expr || null,
+      exthdr_expr: rule.exthdr_expr || null,
+      ct_helper_set: rule.ct_helper_set || null,
+      ct_timeout_set: rule.ct_timeout_set || null,
+      ct_expectation_set: rule.ct_expectation_set || null,
       limit_rate: rule.limit_rate || null,
       counter: !!rule.counter,
       enabled: rule.enabled,
     })
-    setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 760) / 2)) })
+    setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 760) / 2) - 60) })
+    setLiveChartPoints([])
     setAddOpen(true)
   }
 
-  const visibleRules = (state?.rules || []).filter((r) => r.table === activeTable)
+  const activeRuleTable = tabToRuleTable(activeTable)
+  const visibleRules = (state?.rules || []).filter((r) => r.table === activeRuleTable)
+  const currentRulePackets = Number(form.runtime_packets || 0)
+  const currentRuleBytes = Number(form.runtime_bytes || 0)
+  const currentRulePps = Number(form.runtime_pps || 0)
+  const currentRuleBps = Number(form.runtime_bps || 0)
+
+  React.useEffect(() => {
+    if (!addOpen || !editingRuleId) return
+    setChartTick((x) => x + 1)
+  }, [state, addOpen, editingRuleId])
+
+  React.useEffect(() => {
+    if (!addOpen || !editingRuleId) return
+    const liveRule = (state?.rules || []).find((r) => r.id === editingRuleId)
+    const pps = Number(liveRule?.runtime_pps || currentRulePps || 0)
+    const bps = Number(liveRule?.runtime_bps || currentRuleBps || 0)
+    setLiveChartPoints((prev) => {
+      const last = prev[prev.length - 1]
+      const next = [...prev, { idx: (last?.idx || 0) + 1, pps, bps }]
+      return next.slice(-54)
+    })
+  }, [chartTick, addOpen, editingRuleId, state, currentRulePps, currentRuleBps])
+
+  const statsChart = React.useMemo(() => {
+    const points = liveChartPoints.length ? liveChartPoints : [{ idx: 1, pps: 0, bps: 0 }]
+    return { points }
+  }, [liveChartPoints])
+
+  async function onReorderDrop(targetRuleId: string) {
+    if (!dragRuleId || dragRuleId === targetRuleId) return
+    const ids = visibleRules.map((r) => r.id)
+    const from = ids.indexOf(dragRuleId)
+    const to = ids.indexOf(targetRuleId)
+    if (from < 0 || to < 0 || from === to) return
+    const next = [...ids]
+    const [moved] = next.splice(from, 1)
+    next.splice(to, 0, moved)
+    setError(null)
+    setIsBusy(true)
+    try {
+      await reorderFirewallRules(props.auth, activeRuleTable, next)
+      await refresh()
+      setSelectedRuleId(dragRuleId)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setDragRuleId(null)
+      setIsBusy(false)
+    }
+  }
+
+  const isSetTab = activeTable === 'sets'
+  const isTablesTab = activeTable === 'tables'
+  const isMapsTab = activeTable === 'maps'
+  const currentSetKind: 'addr' | 'port' | 'iface' = activeSetKind
+  const currentSetItems = currentSetKind === 'addr' ? setsState.addr : currentSetKind === 'port' ? setsState.port : setsState.iface
+  const allSetItems: Array<FirewallSetItem & { kind: 'addr' | 'port' | 'iface' }> = [
+    ...setsState.addr.map((x) => ({ ...x, kind: 'addr' as const })),
+    ...setsState.port.map((x) => ({ ...x, kind: 'port' as const })),
+    ...setsState.iface.map((x) => ({ ...x, kind: 'iface' as const })),
+  ]
+  const allMapItems: Array<FirewallMapItem & { kind: 'map' | 'vmap' }> = [
+    ...mapsState.map.map((x) => ({ ...x, kind: 'map' as const })),
+    ...mapsState.vmap.map((x) => ({ ...x, kind: 'vmap' as const })),
+  ]
+
+  function openCreateSetWindow() {
+    setEditingSetId(null)
+    setNewSetName('')
+    setNewSetElements('')
+    setNewSetComment('')
+    setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 360) / 2) - 40) })
+    setSetOpen(true)
+  }
+
+  function openEditSetWindow(item: FirewallSetItem & { kind: 'addr' | 'port' | 'iface' }) {
+    setEditingSetId(item.id)
+    setActiveSetKind(item.kind)
+    setNewSetName(item.name || '')
+    setNewSetElements((item.elements || []).join(', '))
+    setNewSetComment(item.comment || '')
+    setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 360) / 2) - 40) })
+    setSetOpen(true)
+  }
+
+  async function onSaveSet(): Promise<boolean> {
+    setError(null)
+    setIsBusy(true)
+    try {
+      const elements = newSetElements.split(',').map((x) => x.trim()).filter(Boolean)
+      await upsertFirewallSet(props.auth, currentSetKind, { id: editingSetId || undefined, name: newSetName.trim(), elements, comment: newSetComment.trim() || null })
+      setEditingSetId(null)
+      setNewSetName('')
+      setNewSetElements('')
+      setNewSetComment('')
+      await refresh()
+      return true
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+      return false
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function onDeleteSet(item: FirewallSetItem, kind: 'addr' | 'port' | 'iface') {
+    if (!confirm('Delete this set?')) return
+    setError(null)
+    setIsBusy(true)
+    try {
+      await deleteFirewallSet(props.auth, kind, item.id)
+      if (selectedSetId === item.id) setSelectedSetId(null)
+      await refresh()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function onSetEnabledSet(item: FirewallSetItem, kind: 'addr' | 'port' | 'iface', enabled: boolean) {
+    setError(null)
+    setIsBusy(true)
+    try {
+      await upsertFirewallSet(props.auth, kind, { id: item.id, name: item.name, elements: item.elements, enabled, comment: item.comment || null })
+      await refresh()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  function openCreateMapWindow() {
+    setEditingMapId(null)
+    setNewMapName('')
+    setNewMapEntries('')
+    setNewMapComment('')
+    setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 360) / 2) - 40) })
+    setMapOpen(true)
+  }
+
+  function openEditMapWindow(item: FirewallMapItem & { kind: 'map' | 'vmap' }) {
+    setEditingMapId(item.id)
+    setActiveMapKind(item.kind)
+    setNewMapName(item.name || '')
+    setNewMapEntries((item.entries || []).join(', '))
+    setNewMapComment(item.comment || '')
+    setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 360) / 2) - 40) })
+    setMapOpen(true)
+  }
+
+  async function onSaveMap(): Promise<boolean> {
+    setError(null)
+    setIsBusy(true)
+    try {
+      const entries = newMapEntries.split(',').map((x) => x.trim()).filter(Boolean)
+      await upsertFirewallMap(props.auth, activeMapKind, { id: editingMapId || undefined, name: newMapName.trim(), entries, comment: newMapComment.trim() || null })
+      setEditingMapId(null)
+      setNewMapName('')
+      setNewMapEntries('')
+      setNewMapComment('')
+      await refresh()
+      return true
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+      return false
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function onDeleteMap(item: FirewallMapItem, kind: 'map' | 'vmap') {
+    if (!confirm('Delete this map?')) return
+    setError(null)
+    setIsBusy(true)
+    try {
+      await deleteFirewallMap(props.auth, kind, item.id)
+      await refresh()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function onSetEnabledMap(item: FirewallMapItem, kind: 'map' | 'vmap', enabled: boolean) {
+    setError(null)
+    setIsBusy(true)
+    try {
+      await upsertFirewallMap(props.auth, kind, {
+        id: item.id,
+        name: item.name,
+        entries: item.entries || [],
+        comment: item.comment || null,
+        enabled,
+      })
+      await refresh()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  function openCreateTableWindow() {
+    setNewTableFamily('inet')
+    setNewTableName('')
+    setNewChainName('')
+    setNewChainType('filter')
+    setNewHook('input')
+    setNewDevice('')
+    setNewPriority('-10')
+    setNewPolicy('accept')
+    setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 420) / 2) - 40) })
+    setTableOpen(true)
+  }
+
+  async function onSaveTable(): Promise<boolean> {
+    setError(null)
+    setIsBusy(true)
+    try {
+      await upsertFirewallTable(props.auth, {
+        family: newTableFamily,
+        table_name: newTableName.trim(),
+        chain_name: newChainName.trim(),
+        chain_type: newChainType,
+        hook: newHook,
+        device: newDevice.trim() || null,
+        priority: Number(newPriority),
+        policy: newPolicy,
+      })
+      await refresh()
+      return true
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+      return false
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function onDeleteTable(item: FirewallTableItem) {
+    if (item.builtin) return
+    if (!confirm('Delete this custom table chain?')) return
+    setError(null)
+    setIsBusy(true)
+    try {
+      await deleteFirewallTable(props.auth, item.id)
+      await refresh()
+      if (selectedTableId === item.id) setSelectedTableId(null)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setIsBusy(false)
+    }
+  }
 
   return (
-    <div className='flex min-h-[640px] flex-col gap-2'>
+    <div className='flex h-[calc(100svh-7.5rem)] min-h-[640px] w-full flex-col gap-2'>
       <div><h2 className='text-lg font-semibold tracking-tight'>Firewall</h2></div>
       {error ? <div className='rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive'>{error}</div> : null}
-      <Card className='flex min-h-0 flex-1 flex-col text-xs'>
+      <Card className='flex min-h-0 w-full flex-1 flex-col text-xs'>
         <CardContent className='flex min-h-0 flex-1 flex-col gap-2 px-4 pt-0'>
-          <Tabs value={activeTable} onValueChange={(v) => setActiveTable(v as 'filter' | 'nat' | 'raw' | 'mangle')}>
+          <Tabs value={activeTable} onValueChange={(v) => setActiveTable(v as FirewallMainTab)}>
             <TabsList className='h-9'>
               <TabsTrigger className='px-4 text-sm' value='filter'>filter</TabsTrigger>
               <TabsTrigger className='px-4 text-sm' value='nat'>nat</TabsTrigger>
               <TabsTrigger className='px-4 text-sm' value='raw'>raw</TabsTrigger>
               <TabsTrigger className='px-4 text-sm' value='mangle'>mangle</TabsTrigger>
+              <TabsTrigger className='px-4 text-sm' value='sets'>sets</TabsTrigger>
+              <TabsTrigger className='px-4 text-sm' value='maps'>maps</TabsTrigger>
+              <TabsTrigger className='px-4 text-sm' value='tables'>tables</TabsTrigger>
             </TabsList>
           </Tabs>
-          <div className='flex gap-2'>
+          {!isSetTab && !isMapsTab && !isTablesTab ? <div className='flex gap-2'>
             <Button size='sm' onClick={openCreateWindow} disabled={isBusy}><Plus />Add</Button>
             <Button size='sm' variant='destructive' disabled={isBusy || !selectedRuleId} onClick={() => { const rule = visibleRules.find((r) => r.id === selectedRuleId); if (!rule) return; void onDelete(rule) }}>Del</Button>
             <Button size='sm' variant='outline' disabled={isBusy || !selectedRuleId} onClick={() => { const rule = visibleRules.find((r) => r.id === selectedRuleId); if (!rule) return; void onSetEnabled(rule, false) }}>Disable</Button>
             <Button size='sm' disabled={isBusy || !selectedRuleId} onClick={() => { const rule = visibleRules.find((r) => r.id === selectedRuleId); if (!rule) return; void onSetEnabled(rule, true) }}>Enable</Button>
-          </div>
-          <div className='min-h-0 flex-1 overflow-y-scroll rounded-xl border'>
+            <Button
+              size='sm'
+              variant='outline'
+              disabled={isBusy}
+              onClick={async () => {
+                setError(null)
+                setIsBusy(true)
+                try {
+                  await resetFirewallCounters(props.auth, activeRuleTable)
+                  await refresh()
+                } catch (exc) {
+                  setError(exc instanceof Error ? exc.message : String(exc))
+                } finally {
+                  setIsBusy(false)
+                }
+              }}
+            >
+              Reset counters
+            </Button>
+            <div className='relative'>
+              <Button size='sm' variant='outline' onClick={() => setColumnsOpen((p) => !p)}>Columns</Button>
+              {columnsOpen ? (
+                <div className='absolute left-0 top-9 z-20 min-w-56 rounded-md border bg-background p-2 shadow-xl'>
+                  {[
+                    ['chain', 'Chain'],
+                    ['action', 'Action'],
+                    ['proto', 'Proto'],
+                    ['src', 'src ip'],
+                    ['dst', 'dst ip'],
+                    ['sport', 'src port'],
+                    ['dport', 'dst port'],
+                    ['in_interface', 'In Interface'],
+                    ['out_interface', 'Out Interface'],
+                    ['ct_state', 'Connection State'],
+                    ['comment', 'Comment'],
+                    ['packets', 'Packets'],
+                    ['bytes', 'Bytes'],
+                  ].map(([key, label]) => (
+                    <label key={key} className='flex items-center gap-2 px-1 py-1 text-xs'>
+                      <input
+                        type='checkbox'
+                        className='h-3.5 w-3.5'
+                        checked={!!visibleColumns[key]}
+                        onChange={(e) => setVisibleColumns((prev) => ({ ...prev, [key]: e.target.checked }))}
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </div> : isSetTab ? (
+            <div className='flex min-h-0 flex-1 flex-col gap-2'>
+              <div className='flex gap-2'>
+                <Button size='sm' onClick={openCreateSetWindow} disabled={isBusy}><Plus />Add</Button>
+                <Button
+                  size='sm'
+                  variant='destructive'
+                  disabled={isBusy || !selectedSetId}
+                  onClick={() => {
+                    const row = allSetItems.find((x) => x.id === selectedSetId)
+                    if (!row) return
+                    void onDeleteSet(row, row.kind)
+                  }}
+                >
+                  Del
+                </Button>
+                <Button
+                  size='sm'
+                  variant='outline'
+                  disabled={isBusy || !selectedSetId}
+                  onClick={() => {
+                    const row = allSetItems.find((x) => x.id === selectedSetId)
+                    if (!row) return
+                    void onSetEnabledSet(row, row.kind, false)
+                  }}
+                >
+                  Disable
+                </Button>
+                <Button
+                  size='sm'
+                  disabled={isBusy || !selectedSetId}
+                  onClick={() => {
+                    const row = allSetItems.find((x) => x.id === selectedSetId)
+                    if (!row) return
+                    void onSetEnabledSet(row, row.kind, true)
+                  }}
+                >
+                  Enable
+                </Button>
+              </div>
+              <div className='min-h-0 w-full flex-1 overflow-y-scroll rounded-xl border'>
+                <Table>
+                  <TableHeader><TableRow><TableHead>type</TableHead><TableHead>name</TableHead><TableHead>elements</TableHead><TableHead>comment</TableHead></TableRow></TableHeader>
+                  <TableBody>
+                    {allSetItems.map((row) => (
+                      <TableRow
+                        key={row.id}
+                        className={`h-7 cursor-pointer border-b ${selectedSetId === row.id ? 'bg-muted/50' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
+                        onClick={() => setSelectedSetId(row.id)}
+                        onDoubleClick={() => openEditSetWindow(row)}
+                      >
+                        <TableCell>{row.kind}</TableCell>
+                        <TableCell>{row.name}</TableCell>
+                        <TableCell className='max-w-[700px] truncate'>{(row.elements || []).join(', ') || '—'}</TableCell>
+                        <TableCell className='max-w-[260px] truncate'>{row.comment || '—'}</TableCell>
+                      </TableRow>
+                    ))}
+                    {!allSetItems.length ? <TableRow><TableCell colSpan={4} className='py-6 text-center text-xs text-muted-foreground'>No sets yet.</TableCell></TableRow> : null}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          ) : isTablesTab ? (
+            <div className='flex min-h-0 flex-1 flex-col gap-2'>
+              <div className='flex gap-2'>
+                <Button size='sm' onClick={openCreateTableWindow} disabled={isBusy}><Plus />Add</Button>
+                <Button size='sm' variant='destructive' disabled={isBusy || !selectedTableId || selectedTableId.startsWith('builtin:')} onClick={() => { const row = tablesState.custom.find((x) => x.id === selectedTableId); if (!row) return; void onDeleteTable(row) }}>Del</Button>
+              </div>
+              <div className='min-h-0 w-full flex-1 overflow-y-scroll rounded-xl border'>
+                <Table>
+                  <TableHeader><TableRow><TableHead>family</TableHead><TableHead>table</TableHead><TableHead>chain</TableHead><TableHead>type</TableHead><TableHead>hook</TableHead><TableHead>device</TableHead><TableHead>priority</TableHead><TableHead>policy</TableHead><TableHead>origin</TableHead></TableRow></TableHeader>
+                  <TableBody>
+                    {[...tablesState.builtin, ...tablesState.custom].map((row) => (
+                      <TableRow key={row.id} className={`h-7 cursor-pointer border-b ${selectedTableId === row.id ? 'bg-muted/50' : ''}`} onClick={() => setSelectedTableId(row.id)}>
+                        <TableCell>{row.family}</TableCell>
+                        <TableCell>{row.table_name}</TableCell>
+                        <TableCell>{row.chain_name}</TableCell>
+                        <TableCell>{row.chain_type}</TableCell>
+                        <TableCell>{row.hook}</TableCell>
+                        <TableCell>{row.device || '—'}</TableCell>
+                        <TableCell>{row.priority}</TableCell>
+                        <TableCell>{row.policy}</TableCell>
+                        <TableCell>{row.builtin ? 'built-in' : 'custom'}</TableCell>
+                      </TableRow>
+                    ))}
+                    {(!tablesState.builtin.length && !tablesState.custom.length) ? <TableRow><TableCell colSpan={9} className='py-6 text-center text-xs text-muted-foreground'>No table chains yet.</TableCell></TableRow> : null}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          ) : (
+            <div className='flex min-h-0 flex-1 flex-col gap-2'>
+              <div className='flex gap-2'>
+                <Button size='sm' onClick={openCreateMapWindow} disabled={isBusy}><Plus />Add</Button>
+                <Button size='sm' variant='destructive' disabled={isBusy || !selectedMapId} onClick={() => { const row = allMapItems.find((x) => x.id === selectedMapId); if (!row) return; void onDeleteMap(row, row.kind) }}>Del</Button>
+                <Button size='sm' variant='outline' disabled={isBusy || !selectedMapId} onClick={() => { const row = allMapItems.find((x) => x.id === selectedMapId); if (!row) return; void onSetEnabledMap(row, row.kind, false) }}>Disable</Button>
+                <Button size='sm' disabled={isBusy || !selectedMapId} onClick={() => { const row = allMapItems.find((x) => x.id === selectedMapId); if (!row) return; void onSetEnabledMap(row, row.kind, true) }}>Enable</Button>
+              </div>
+              <div className='min-h-0 w-full flex-1 overflow-y-scroll rounded-xl border'>
+                <Table>
+                  <TableHeader><TableRow><TableHead>type</TableHead><TableHead>name</TableHead><TableHead>entries</TableHead><TableHead>comment</TableHead></TableRow></TableHeader>
+                  <TableBody>
+                    {allMapItems.map((row) => (
+                      <TableRow key={row.id} className={`h-7 cursor-pointer border-b ${selectedMapId === row.id ? 'bg-muted/50' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`} onClick={() => setSelectedMapId(row.id)} onDoubleClick={() => openEditMapWindow(row)}>
+                        <TableCell>{row.kind}</TableCell>
+                        <TableCell>{row.name}</TableCell>
+                        <TableCell className='max-w-[700px] truncate'>{(row.entries || []).join(', ') || '—'}</TableCell>
+                        <TableCell className='max-w-[260px] truncate'>{row.comment || '—'}</TableCell>
+                      </TableRow>
+                    ))}
+                    {!allMapItems.length ? <TableRow><TableCell colSpan={4} className='py-6 text-center text-xs text-muted-foreground'>No maps yet.</TableCell></TableRow> : null}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          )}
+          {!isSetTab && !isMapsTab && !isTablesTab ? <div className='min-h-0 w-full flex-1 overflow-y-scroll rounded-xl border'>
             <Table>
-              <TableHeader><TableRow><TableHead>Chain</TableHead><TableHead>Action</TableHead><TableHead>Proto</TableHead><TableHead>DPort</TableHead><TableHead>Src</TableHead><TableHead>State</TableHead><TableHead>Expr</TableHead></TableRow></TableHeader>
+              <TableHeader>
+                <TableRow>
+                  {visibleColumns.chain ? <TableHead>Chain</TableHead> : null}
+                  {visibleColumns.action ? <TableHead>Action</TableHead> : null}
+                  {visibleColumns.proto ? <TableHead>Proto</TableHead> : null}
+                  {visibleColumns.src ? <TableHead>src ip</TableHead> : null}
+                  {visibleColumns.dst ? <TableHead>dst ip</TableHead> : null}
+                  {visibleColumns.sport ? <TableHead>src port</TableHead> : null}
+                  {visibleColumns.dport ? <TableHead>dst port</TableHead> : null}
+                  {visibleColumns.in_interface ? <TableHead>In Interface</TableHead> : null}
+                  {visibleColumns.out_interface ? <TableHead>Out Interface</TableHead> : null}
+                  {visibleColumns.ct_state ? <TableHead>Connection State</TableHead> : null}
+                  {visibleColumns.comment ? <TableHead>Comment</TableHead> : null}
+                  {visibleColumns.packets ? <TableHead>Packets</TableHead> : null}
+                  {visibleColumns.bytes ? <TableHead>Bytes</TableHead> : null}
+                </TableRow>
+              </TableHeader>
               <TableBody>
                 {visibleRules.map((r) => (
-                  <TableRow key={r.id} className={`h-7 cursor-pointer ${selectedRuleId === r.id ? 'bg-muted/50' : ''} ${!r.enabled ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`} onClick={() => setSelectedRuleId(r.id)} onDoubleClick={() => openEditWindow(r)}>
-                    <TableCell>{r.chain}</TableCell><TableCell>{r.action}</TableCell><TableCell>{r.proto || 'any'}</TableCell><TableCell>{r.dport || '—'}</TableCell><TableCell>{r.src || '—'}</TableCell><TableCell>{r.ct_state || '—'}</TableCell>
-                    <TableCell className='max-w-[320px] truncate'>{r.table === 'nat' ? [r.nat_type, r.to_addr, r.to_port ? `:${r.to_port}` : null].filter(Boolean).join(' ') : [r.notrack ? 'notrack' : null, r.mark_set ? `mark=${r.mark_set}` : null, r.ct_mark_set ? `ctmark=${r.ct_mark_set}` : null, r.comment || null].filter(Boolean).join(' | ') || '—'}</TableCell>
+                  <TableRow
+                    key={r.id}
+                    draggable
+                    onDragStart={() => setDragRuleId(r.id)}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      void onReorderDrop(r.id)
+                    }}
+                    className={`h-7 cursor-move border-b ${selectedRuleId === r.id ? 'bg-muted/50' : ''} ${dragRuleId === r.id ? 'opacity-60' : ''} ${!r.enabled ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
+                    onClick={() => setSelectedRuleId(r.id)}
+                    onDoubleClick={() => openEditWindow(r)}
+                  >
+                    {visibleColumns.chain ? <TableCell>{r.chain}</TableCell> : null}
+                    {visibleColumns.action ? <TableCell>{r.action}</TableCell> : null}
+                    {visibleColumns.proto ? <TableCell>{r.proto || 'any'}</TableCell> : null}
+                    {visibleColumns.src ? <TableCell>{r.src || '—'}</TableCell> : null}
+                    {visibleColumns.dst ? <TableCell>{r.dst || '—'}</TableCell> : null}
+                    {visibleColumns.sport ? <TableCell>{r.sport || '—'}</TableCell> : null}
+                    {visibleColumns.dport ? <TableCell>{r.dport || '—'}</TableCell> : null}
+                    {visibleColumns.in_interface ? <TableCell>{r.in_interface || '—'}</TableCell> : null}
+                    {visibleColumns.out_interface ? <TableCell>{r.out_interface || '—'}</TableCell> : null}
+                    {visibleColumns.ct_state ? <TableCell>{r.ct_state || '—'}</TableCell> : null}
+                    {visibleColumns.comment ? <TableCell>{r.comment || '—'}</TableCell> : null}
+                    {visibleColumns.packets ? <TableCell className='whitespace-nowrap'>{formatCounter(r.runtime_packets)}</TableCell> : null}
+                    {visibleColumns.bytes ? <TableCell className='whitespace-nowrap'>{formatCounter(r.runtime_bytes)}</TableCell> : null}
                   </TableRow>
                 ))}
-                {!visibleRules.length ? <TableRow><TableCell colSpan={7} className='py-6 text-center text-xs text-muted-foreground'>No rules in {activeTable} table.</TableCell></TableRow> : null}
+                {!visibleRules.length ? <TableRow><TableCell colSpan={13} className='py-6 text-center text-xs text-muted-foreground'>No rules in {activeRuleTable} table.</TableCell></TableRow> : null}
               </TableBody>
             </Table>
-          </div>
+          </div> : null}
         </CardContent>
       </Card>
 
@@ -273,65 +942,70 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                 <button type='button' className='rounded p-1 hover:bg-background/70' onClick={() => { setAddOpen(false); setEditingRuleId(null) }}><X className='size-3.5' /></button>
               </div>
             </div>
-            <form className='space-y-2.5 p-3 text-xs' onSubmit={onSave}>
-              <Tabs value={ruleEditorTab} onValueChange={(v) => setRuleEditorTab(v as EditorTab)}>
-                <TabsList className='h-9'>
-                  <TabsTrigger className='px-3 text-xs' value='general'>General</TabsTrigger>
-                  <TabsTrigger className='px-3 text-xs' value='advanced'>Advanced</TabsTrigger>
-                  <TabsTrigger className='px-3 text-xs' value='extra'>Extra</TabsTrigger>
-                  <TabsTrigger className='px-3 text-xs' value='action'>Action</TabsTrigger>
-                  <TabsTrigger className='px-3 text-xs' value='stats'>Statistics</TabsTrigger>
-                </TabsList>
+            <form className='flex max-h-[78vh] flex-col overflow-hidden rounded-b-xl bg-background text-xs' onSubmit={onSave}>
+              <Tabs value={ruleEditorTab} onValueChange={(v) => setRuleEditorTab(v as EditorTab)} className='flex min-h-0 flex-1 flex-col'>
+                <div className='z-20 border-b bg-background px-3 py-2'>
+                  <TabsList className='h-9'>
+                    <TabsTrigger className='px-3 text-xs' value='base'>Base match</TabsTrigger>
+                    <TabsTrigger className='px-3 text-xs' value='advanced'>Advanced match</TabsTrigger>
+                    <TabsTrigger className='px-3 text-xs' value='action'>Action</TabsTrigger>
+                    <TabsTrigger className='px-3 text-xs' value='stats'>Statistics</TabsTrigger>
+                  </TabsList>
+                </div>
+                <div className='min-h-0 flex-1 overflow-y-auto p-3'>
 
-                <TabsContent value='general' className='mt-2 space-y-2.5'>
-                  <div className='rounded-md border bg-muted/40 px-2.5 py-1.5 text-[11px] text-muted-foreground'>Table: <span className='font-medium text-foreground'>{form.table || activeTable}</span></div>
-                  <div className='space-y-1.5'>
-                    <Label>Enabled</Label>
-                    <label className='flex items-center gap-2 text-xs'><input type='checkbox' className='h-4 w-4' checked={!!form.enabled} onChange={(e) => setForm((p) => ({ ...p, enabled: e.target.checked }))} />Rule is enabled</label>
-                  </div>
-                  <div className='space-y-1.5'>
-                    <Label>Comment</Label>
-                    <Input className='h-7' placeholder='Allow SSH' value={form.comment || ''} onChange={(e) => setForm((p) => ({ ...p, comment: e.target.value || null }))} />
-                  </div>
+                <TabsContent value='base' className='mt-2 space-y-2.5'>
+                  <div className='text-[11px] font-semibold text-muted-foreground'>Rule state</div>
+                  <label className='flex items-center gap-2 text-xs rounded-md border p-2'><input type='checkbox' className='h-4 w-4' checked={!!form.enabled} onChange={(e) => setForm((p) => ({ ...p, enabled: e.target.checked }))} />enabled</label>
+
+                  <div className='text-[11px] font-semibold text-muted-foreground'>Base rule placement</div>
                   <div className='space-y-1.5'>
                     <Label>Chain</Label>
                     <select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={form.chain || 'input'} onChange={(e) => setForm((p) => ({ ...p, chain: e.target.value as FirewallRule['chain'] }))}>
                       {(chainOptionsByTable[form.table || 'filter'] || []).map((ch) => (<option key={ch} value={ch}>{ch}</option>))}
                     </select>
                   </div>
-                  <ToggleLine label='Protocol' enabled={!!form.proto} onToggle={() => setForm((p) => ({ ...p, proto: p.proto ? null : 'tcp', sport: p.proto ? null : p.sport, dport: p.proto ? null : p.dport }))}>
-                    <select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={form.proto || 'tcp'} onChange={(e) => setForm((p) => ({ ...p, proto: (e.target.value || null) as any }))}>
-                      <option value='tcp'>tcp</option><option value='udp'>udp</option><option value='icmp'>icmp</option><option value='icmpv6'>icmpv6</option>
-                    </select>
-                  </ToggleLine>
-                  <div className='grid grid-cols-2 gap-2'>
-                    <ToggleLine label='Src Address' enabled={!!form.src} onToggle={() => setForm((p) => ({ ...p, src: p.src ? null : '0.0.0.0/0' }))}>
-                      <Input className='h-7' placeholder='0.0.0.0/0' value={form.src || ''} onChange={(e) => setForm((p) => ({ ...p, src: e.target.value || null }))} />
-                    </ToggleLine>
-                    <ToggleLine label='Dst Address' enabled={!!form.dst} onToggle={() => setForm((p) => ({ ...p, dst: p.dst ? null : '10.8.0.0/24' }))}>
-                      <Input className='h-7' placeholder='10.8.0.0/24' value={form.dst || ''} onChange={(e) => setForm((p) => ({ ...p, dst: e.target.value || null }))} />
-                    </ToggleLine>
-                  </div>
-                </TabsContent>
 
-                <TabsContent value='advanced' className='mt-2 space-y-2.5'>
-                  <div className='grid grid-cols-2 gap-2'>
-                    <ToggleLine label='In Interface' enabled={!!form.in_interface} onToggle={() => setForm((p) => ({ ...p, in_interface: p.in_interface ? null : 'eth0' }))}>
-                      <Input className='h-7' placeholder='eth0' value={form.in_interface || ''} onChange={(e) => setForm((p) => ({ ...p, in_interface: e.target.value || null }))} />
-                    </ToggleLine>
-                    <ToggleLine label='Out Interface' enabled={!!form.out_interface} onToggle={() => setForm((p) => ({ ...p, out_interface: p.out_interface ? null : 'awg1' }))}>
-                      <Input className='h-7' placeholder='awg1' value={form.out_interface || ''} onChange={(e) => setForm((p) => ({ ...p, out_interface: e.target.value || null }))} />
-                    </ToggleLine>
-                  </div>
-                  <div className='grid grid-cols-2 gap-2'>
-                    <ToggleLine label='Src Port' enabled={!!form.sport} onToggle={() => setForm((p) => ({ ...p, sport: p.sport ? null : '1024:65535', proto: p.sport ? p.proto : (p.proto || 'tcp') }))}>
-                      <Input className='h-7' placeholder='1024:65535' value={form.sport || ''} onChange={(e) => setForm((p) => ({ ...p, sport: e.target.value || null }))} />
-                    </ToggleLine>
-                    <ToggleLine label='Dst Port' enabled={!!form.dport} onToggle={() => setForm((p) => ({ ...p, dport: p.dport ? null : '22', proto: p.dport ? p.proto : (p.proto || 'tcp') }))}>
-                      <Input className='h-7' placeholder='22 or 1000:2000' value={form.dport || ''} onChange={(e) => setForm((p) => ({ ...p, dport: e.target.value || null }))} />
-                    </ToggleLine>
-                  </div>
-                  <ToggleLine label='Connection State' enabled={!!form.ct_state} onToggle={() => setForm((p) => ({ ...p, ct_state: p.ct_state ? null : 'new' }))}>
+                  <div className='text-[11px] font-semibold text-muted-foreground'>L3 address match</div>
+                  {hasSupport('src') || hasSupport('dst') ? <div className='grid grid-cols-2 gap-2'>
+                    {hasSupport('src') ? <ToggleLine label='Source address' enabled={!!form.src} inactiveHint='192.168.1.0/24 or @trusted_hosts' onToggle={() => setForm((p) => ({ ...p, src: p.src ? null : '0.0.0.0/0' }))}>
+                      <Input className='h-7' placeholder='192.168.1.0/24 or @trusted_hosts' value={form.src || ''} onChange={(e) => setForm((p) => ({ ...p, src: e.target.value || null }))} />
+                    </ToggleLine> : <div />}
+                    {hasSupport('dst') ? <ToggleLine label='Destination address' enabled={!!form.dst} inactiveHint='10.0.0.10 or @servers' onToggle={() => setForm((p) => ({ ...p, dst: p.dst ? null : '10.8.0.0/24' }))}>
+                      <Input className='h-7' placeholder='10.0.0.10 or @servers' value={form.dst || ''} onChange={(e) => setForm((p) => ({ ...p, dst: e.target.value || null }))} />
+                    </ToggleLine> : <div />}
+                  </div> : null}
+
+                  <div className='text-[11px] font-semibold text-muted-foreground'>L4 protocol and port match</div>
+                  {hasSupport('proto') ? <ToggleLine label='Protocol' enabled={!!form.proto} inactiveHint='any / tcp / udp / icmp' onToggle={() => setForm((p) => ({ ...p, proto: p.proto ? null : 'tcp', sport: p.proto ? null : p.sport, dport: p.proto ? null : p.dport }))}>
+                    <select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={form.proto || ''} onChange={(e) => setForm((p) => ({ ...p, proto: (e.target.value || null) as any }))}>
+                      <option value=''>any</option>
+                      {(schema?.protos || ['tcp', 'udp', 'icmp', 'icmpv6']).map((proto) => <option key={proto} value={proto}>{proto}</option>)}
+                      <option value='gre'>gre</option>
+                      <option value='esp'>esp</option>
+                    </select>
+                  </ToggleLine> : null}
+                  {hasSupport('sport') || hasSupport('dport') ? <div className='grid grid-cols-2 gap-2'>
+                    {hasSupport('sport') ? <ToggleLine label='Source port' enabled={!!form.sport} inactiveHint='1024-65535 or @admin_ports' onToggle={() => setForm((p) => ({ ...p, sport: p.sport ? null : '1024:65535', proto: p.sport ? p.proto : (p.proto || 'tcp') }))}>
+                      <Input className='h-7' placeholder='1024-65535 or @admin_ports' value={form.sport || ''} onChange={(e) => setForm((p) => ({ ...p, sport: e.target.value || null }))} />
+                    </ToggleLine> : <div />}
+                    {hasSupport('dport') ? <ToggleLine label='Destination port' enabled={!!form.dport} inactiveHint='22,80,443 or @admin_ports' onToggle={() => setForm((p) => ({ ...p, dport: p.dport ? null : '22', proto: p.dport ? p.proto : (p.proto || 'tcp') }))}>
+                      <Input className='h-7' placeholder='22, 80,443 or @admin_ports' value={form.dport || ''} onChange={(e) => setForm((p) => ({ ...p, dport: e.target.value || null }))} />
+                    </ToggleLine> : <div />}
+                  </div> : null}
+
+                  <div className='text-[11px] font-semibold text-muted-foreground'>Interface match</div>
+                  {hasSupport('in_interface') || hasSupport('out_interface') ? <div className='grid grid-cols-2 gap-2'>
+                    {hasSupport('in_interface') ? <ToggleLine label='Input interface' enabled={!!form.in_interface} inactiveHint='eth0 / lo / @lan_ifaces' onToggle={() => setForm((p) => ({ ...p, in_interface: p.in_interface ? null : 'eth0' }))}>
+                      <Input className='h-7' placeholder='eth0 / lo / @lan_ifaces' value={form.in_interface || ''} onChange={(e) => setForm((p) => ({ ...p, in_interface: e.target.value || null }))} />
+                    </ToggleLine> : <div />}
+                    {hasSupport('out_interface') ? <ToggleLine label='Output interface' enabled={!!form.out_interface} inactiveHint='eth0 / awg1 / @wan_ifaces' onToggle={() => setForm((p) => ({ ...p, out_interface: p.out_interface ? null : 'awg1' }))}>
+                      <Input className='h-7' placeholder='eth0 / awg1 / @wan_ifaces' value={form.out_interface || ''} onChange={(e) => setForm((p) => ({ ...p, out_interface: e.target.value || null }))} />
+                    </ToggleLine> : <div />}
+                  </div> : null}
+
+                  <div className='text-[11px] font-semibold text-muted-foreground'>Connection tracking match</div>
+                  {hasSupport('ct_state') && generalFieldState('ct_state') !== 'H' ? <ToggleLine label='Connection state' enabled={!!form.ct_state} inactiveHint='established,related / new / invalid' onToggle={() => setForm((p) => ({ ...p, ct_state: p.ct_state ? null : 'new' }))}>
                     <div className='grid grid-cols-2 gap-2 rounded-md border p-2'>
                       {(() => {
                         const flags = parseCtState(form.ct_state)
@@ -375,52 +1049,494 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                         )
                       })()}
                     </div>
-                  </ToggleLine>
+                  </ToggleLine> : null}
+                  <div className='grid grid-cols-2 gap-2'>
+                    <PlannedField label='Connection mark' placeholder='0x1' />
+                    <PlannedField label='Packet mark' placeholder='10 / 0x10' />
+                  </div>
+
+                  <div className='text-[11px] font-semibold text-muted-foreground'>Meta match</div>
+                  <div className='grid grid-cols-2 gap-2'>
+                    {hasSupport('limit_rate') ? <ToggleLine label='Rate limit' enabled={!!form.limit_rate} inactiveHint='10/second' onToggle={() => setForm((p) => ({ ...p, limit_rate: p.limit_rate ? null : '10/second' }))}>
+                      <Input className='h-7' placeholder='10/second' value={form.limit_rate || ''} onChange={(e) => setForm((p) => ({ ...p, limit_rate: e.target.value || null }))} />
+                    </ToggleLine> : <div />}
+                    <PlannedField label='User ID' placeholder='1000' />
+                  </div>
+                  <div className='grid grid-cols-2 gap-2'>
+                    <PlannedField label='Hour' placeholder='08:00-18:00' />
+                    <PlannedField label='DSCP' placeholder='cs5 / 46' />
+                  </div>
+
                 </TabsContent>
 
-                <TabsContent value='extra' className='mt-2 space-y-2.5'>
-                  {form.table === 'nat' ? (
-                    <div className='space-y-2 rounded-lg border p-2'>
-                      <div className='text-[11px] font-medium text-muted-foreground'>NAT</div>
-                      <div className='grid grid-cols-2 gap-2'>
-                        <div className='space-y-1.5'><Label>NAT Type</Label><select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={form.nat_type || ''} onChange={(e) => setForm((p) => ({ ...p, nat_type: (e.target.value || null) as any }))}><option value=''>none</option><option value='masquerade'>masquerade</option><option value='snat'>snat</option><option value='dnat'>dnat</option><option value='redirect'>redirect</option></select></div>
-                        <div className='space-y-1.5'><Label>To IP</Label><Input className='h-7' placeholder='192.168.1.10' value={form.to_addr || ''} onChange={(e) => setForm((p) => ({ ...p, to_addr: e.target.value || null }))} /></div>
-                      </div>
-                      <div className='space-y-1.5'><Label>To Port</Label><Input className='h-7' placeholder='8080 or 1000-2000' value={form.to_port || ''} onChange={(e) => setForm((p) => ({ ...p, to_port: e.target.value || null }))} /></div>
+                <TabsContent value='advanced' className='mt-2 space-y-2.5'>
+                  <div className='rounded-md border p-2.5 space-y-2'>
+                    <button type='button' className='w-full text-left text-[11px] font-semibold text-muted-foreground' onClick={() => setAdvOpen((p) => ({ ...p, l4: !p.l4 }))}>Network & L4 extras {advOpen.l4 ? '−' : '+'}</button>
+                    {advOpen.l4 ? <>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <PlannedField label='tcp flags' placeholder='syn / syn,ack' />
+                      <PlannedField label='icmp type' placeholder='echo-request' />
                     </div>
-                  ) : null}
-                  {form.table === 'raw' ? <label className='flex items-center gap-2 text-xs'><input type='checkbox' className='h-4 w-4' checked={!!form.notrack} onChange={(e) => setForm((p) => ({ ...p, notrack: e.target.checked }))} />Enable notrack</label> : null}
-                  {form.table === 'mangle' ? <div className='grid grid-cols-2 gap-2'><div className='space-y-1.5'><Label>Packet Mark</Label><Input className='h-7' placeholder='0x1' value={form.mark_set || ''} onChange={(e) => setForm((p) => ({ ...p, mark_set: e.target.value || null }))} /></div><div className='space-y-1.5'><Label>Connection Mark</Label><Input className='h-7' placeholder='0x10' value={form.ct_mark_set || ''} onChange={(e) => setForm((p) => ({ ...p, ct_mark_set: e.target.value || null }))} /></div></div> : null}
-                  {!['nat', 'raw', 'mangle'].includes(form.table || 'filter') ? <div className='rounded-md border border-dashed px-3 py-2 text-[11px] text-muted-foreground'>For `filter` table, this section is intentionally minimal.</div> : null}
+                    <div className='grid grid-cols-2 gap-2'>
+                      <PlannedField label='icmp code' placeholder='0' />
+                      <PlannedField label='icmpv6 type' placeholder='echo-request' />
+                    </div>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <PlannedField label='icmpv6 code' placeholder='0' />
+                      <PlannedField label='dscp' placeholder='cs5 / 46' />
+                    </div>
+                    </> : null}
+                  </div>
+
+                  <div className='rounded-md border p-2.5 space-y-2'>
+                    <button type='button' className='w-full text-left text-[11px] font-semibold text-muted-foreground' onClick={() => setAdvOpen((p) => ({ ...p, meta: !p.meta }))}>Meta match {advOpen.meta ? '−' : '+'}</button>
+                    {advOpen.meta ? <>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <PlannedField label='meta length' placeholder='64-1500' />
+                      <PlannedField label='meta priority' placeholder='1:10 / 0x10' />
+                    </div>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <PlannedField label='meta pkttype' placeholder='host/multicast' />
+                      <PlannedField label='meta cpu' placeholder='0-3' />
+                    </div>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <PlannedField label='meta iiftype' placeholder='ether / 1' />
+                      <PlannedField label='meta oiftype' placeholder='ether / 1' />
+                    </div>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <PlannedField label='meta iifgroup' placeholder='10' />
+                      <PlannedField label='meta oifgroup' placeholder='10' />
+                    </div>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <PlannedField label='packet mark match' placeholder='0x1 / 10' />
+                      <PlannedField label='ct mark match' placeholder='0x1 / 10' />
+                    </div>
+                    </> : null}
+                  </div>
+
+                  <div className='rounded-md border p-2.5 space-y-2'>
+                    <button type='button' className='w-full text-left text-[11px] font-semibold text-muted-foreground' onClick={() => setAdvOpen((p) => ({ ...p, ct: !p.ct }))}>Conntrack match {advOpen.ct ? '−' : '+'}</button>
+                    {advOpen.ct ? <>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <PlannedField label='ct direction' placeholder='original/reply' />
+                      <PlannedField label='ct status' placeholder='dnat/snat/assured' />
+                    </div>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <PlannedField label='ct original saddr' placeholder='192.168.1.10' />
+                      <PlannedField label='ct original daddr' placeholder='203.0.113.10' />
+                    </div>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <PlannedField label='ct reply saddr' placeholder='203.0.113.10' />
+                      <PlannedField label='ct reply daddr' placeholder='192.168.1.10' />
+                    </div>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <PlannedField label='ct expiration' placeholder='> 30s / 1m' />
+                      <PlannedField label='ct helper' placeholder='ftp / sip' />
+                    </div>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <PlannedField label='ct label' placeholder='label_name / 0x1' />
+                      <PlannedField label='ct event' placeholder='new/destroy/update' />
+                    </div>
+                    </> : null}
+                  </div>
+
+                  <div className='rounded-md border p-2.5 space-y-2'>
+                    <button type='button' className='w-full text-left text-[11px] font-semibold text-muted-foreground' onClick={() => setAdvOpen((p) => ({ ...p, fib: !p.fib }))}>FIB / socket / routing / L2 {advOpen.fib ? '−' : '+'}</button>
+                    {advOpen.fib ? <>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <ToggleLine label='fib expression' enabled={!!form.fib_expr} inactiveHint='fib daddr . iif oif exists' onToggle={() => setForm((p) => ({ ...p, fib_expr: p.fib_expr ? null : 'fib daddr . iif oif exists' }))}>
+                        <Input className='h-7' placeholder='fib daddr . iif oif exists' value={form.fib_expr || ''} onChange={(e) => setForm((p) => ({ ...p, fib_expr: e.target.value || null }))} />
+                      </ToggleLine>
+                      <ToggleLine label='socket expression' enabled={!!form.socket_expr} inactiveHint='socket transparent 1' onToggle={() => setForm((p) => ({ ...p, socket_expr: p.socket_expr ? null : 'socket transparent 1' }))}>
+                        <Input className='h-7' placeholder='socket transparent 1' value={form.socket_expr || ''} onChange={(e) => setForm((p) => ({ ...p, socket_expr: e.target.value || null }))} />
+                      </ToggleLine>
+                    </div>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <ToggleLine label='rt expression' enabled={!!form.rt_expr} inactiveHint='rt nexthop 192.168.0.1' onToggle={() => setForm((p) => ({ ...p, rt_expr: p.rt_expr ? null : 'rt nexthop 192.168.0.1' }))}>
+                        <Input className='h-7' placeholder='rt nexthop 192.168.0.1' value={form.rt_expr || ''} onChange={(e) => setForm((p) => ({ ...p, rt_expr: e.target.value || null }))} />
+                      </ToggleLine>
+                      <ToggleLine label='exthdr expression' enabled={!!form.exthdr_expr} inactiveHint='exthdr frag missing' onToggle={() => setForm((p) => ({ ...p, exthdr_expr: p.exthdr_expr ? null : 'exthdr frag missing' }))}>
+                        <Input className='h-7' placeholder='exthdr frag missing' value={form.exthdr_expr || ''} onChange={(e) => setForm((p) => ({ ...p, exthdr_expr: e.target.value || null }))} />
+                      </ToggleLine>
+                    </div>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <PlannedField label='fib check' placeholder='fib daddr type local' />
+                      <PlannedField label='socket match' placeholder='socket transparent 1' />
+                    </div>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <PlannedField label='rt nexthop' placeholder='192.0.2.1' />
+                      <PlannedField label='vlan id' placeholder='10' />
+                    </div>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <PlannedField label='ether src' placeholder='aa:bb:cc:dd:ee:ff' />
+                      <PlannedField label='ether dst' placeholder='aa:bb:cc:dd:ee:ff' />
+                    </div>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <PlannedField label='ether type' placeholder='0x0800' />
+                      <PlannedField label='ipv6 extension headers' placeholder='frag/routing' />
+                    </div>
+                    </> : null}
+                  </div>
+
+                  <div className='rounded-md border p-2.5 space-y-2'>
+                    <button type='button' className='w-full text-left text-[11px] font-semibold text-muted-foreground' onClick={() => setAdvOpen((p) => ({ ...p, raw: !p.raw }))}>Raw expression & debug {advOpen.raw ? '−' : '+'}</button>
+                    {advOpen.raw ? <>
+                    <ToggleLine label='raw expression' enabled={false} inactiveHint='fib daddr type local / meta priority set 1:10' onToggle={() => {}}>
+                      <Input className='h-7' disabled placeholder='fib daddr type local / meta priority set 1:10 (planned)' />
+                    </ToggleLine>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <label className='flex items-center gap-2 rounded-md border p-2 text-xs text-muted-foreground'>
+                        <input type='checkbox' disabled className='h-4 w-4' />
+                        nftrace (planned)
+                      </label>
+                      <label className='flex items-center gap-2 rounded-md border p-2 text-xs text-muted-foreground'>
+                        <input type='checkbox' disabled className='h-4 w-4' />
+                        notrack (advanced mode, planned)
+                      </label>
+                    </div>
+                    <div className='rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-900'>Warning: `notrack` is usually meaningful only in raw prerouting/output contexts.</div>
+                    </> : null}
+                  </div>
+
+                  <div className='rounded-md border border-dashed px-3 py-2 text-[11px] text-muted-foreground'>
+                    Advanced fields are now grouped by purpose; backend enablement will be added block-by-block.
+                  </div>
                 </TabsContent>
 
                 <TabsContent value='action' className='mt-2 space-y-2.5'>
-                  <div className='space-y-1.5'><Label>Action</Label><select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={form.action || 'accept'} onChange={(e) => setForm((p) => ({ ...p, action: e.target.value as FirewallRule['action'] }))}><option value='accept'>accept</option><option value='drop'>drop</option><option value='reject'>reject</option></select></div>
+                  <div className='text-[11px] font-semibold text-muted-foreground'>Verdict / Action</div>
+                  <div className='space-y-1.5'>
+                    <Label>Action</Label>
+                    <select
+                      className='h-7 w-full rounded-md border bg-background px-2.5 text-xs'
+                      value={String(selectedAction)}
+                      onChange={(e) => {
+                        const v = e.target.value
+                        if (['dnat', 'snat', 'masquerade', 'redirect'].includes(v)) {
+                          setForm((p) => ({ ...p, nat_type: v as any, action: 'accept', target_chain: null }))
+                        } else {
+                          setForm((p) => ({ ...p, action: v as FirewallRule['action'], nat_type: null }))
+                        }
+                      }}
+                    >
+                      <option value='accept'>accept</option>
+                      <option value='drop'>drop</option>
+                      <option value='reject'>reject</option>
+                      <option value='jump'>jump</option>
+                      <option value='goto'>goto</option>
+                      <option value='return'>return</option>
+                      <option value='dnat'>dnat</option>
+                      <option value='snat'>snat</option>
+                      <option value='masquerade'>masquerade</option>
+                      <option value='redirect'>redirect</option>
+                    </select>
+                  </div>
+                  <ToggleLine
+                    label='Target / to'
+                    inactiveHint='192.168.1.10:80 / chain_name / :8080'
+                    enabled={isNatActionSelected || form.action === 'jump' || form.action === 'goto'}
+                    onToggle={() => setForm((p) => ({ ...p, target_chain: p.target_chain ? null : 'input', to_addr: p.to_addr ? null : '192.168.1.10' }))}
+                  >
+                    <Input
+                      className='h-7'
+                      placeholder='192.168.1.10:80 / chain_name / :8080'
+                      value={isNatActionSelected ? `${form.to_addr || ''}${form.to_port ? `:${form.to_port}` : ''}` : (form.target_chain || '')}
+                      onChange={(e) => {
+                        const raw = e.target.value
+                        if (isNatActionSelected) {
+                          const [addr, port] = raw.split(':')
+                          setForm((p) => ({ ...p, to_addr: addr || null, to_port: port || null }))
+                        } else {
+                          setForm((p) => ({ ...p, target_chain: raw || null }))
+                        }
+                      }}
+                    />
+                  </ToggleLine>
+
+                  {form.action === 'reject' ? (
+                    <div className='space-y-1.5 rounded-md border p-2'>
+                      <Label>Reject with</Label>
+                      <select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={form.reject_type || 'default'} onChange={(e) => setForm((p) => ({ ...p, reject_type: e.target.value === 'default' ? null : e.target.value }))}>
+                        <option value='default'>default</option>
+                        <option value='icmpx port-unreachable'>icmpx port-unreachable</option>
+                        <option value='icmpx admin-prohibited'>icmpx admin-prohibited</option>
+                        <option value='icmp type host-unreachable'>icmp type host-unreachable</option>
+                        <option value='tcp reset'>tcp reset</option>
+                      </select>
+                    </div>
+                  ) : null}
+
+                  {isNatActionSelected ? (
+                    <div className='space-y-1.5 rounded-md border p-2'>
+                      <Label>NAT options</Label>
+                      <div className='flex flex-wrap items-center gap-3 text-xs'>
+                        <label className='flex items-center gap-2'><input type='checkbox' className='h-4 w-4' checked={!!form.nat_random} onChange={(e) => setForm((p) => ({ ...p, nat_random: e.target.checked }))} />random</label>
+                        <label className='flex items-center gap-2'><input type='checkbox' className='h-4 w-4' checked={!!form.nat_fully_random} onChange={(e) => setForm((p) => ({ ...p, nat_fully_random: e.target.checked }))} />fully-random</label>
+                        <label className='flex items-center gap-2'><input type='checkbox' className='h-4 w-4' checked={!!form.nat_persistent} onChange={(e) => setForm((p) => ({ ...p, nat_persistent: e.target.checked }))} />persistent</label>
+                      </div>
+                    </div>
+                  ) : null}
+
                   <div className='grid grid-cols-2 gap-2'>
-                    <ToggleLine label='Limit Rate' enabled={!!form.limit_rate} onToggle={() => setForm((p) => ({ ...p, limit_rate: p.limit_rate ? null : '20/minute' }))}>
-                      <Input className='h-7' placeholder='10/second or 200/minute' value={form.limit_rate || ''} onChange={(e) => setForm((p) => ({ ...p, limit_rate: e.target.value || null }))} />
+                    {hasSupport('mark_set') ? <ToggleLine label='meta mark set' enabled={!!form.mark_set} inactiveHint='0x1 or 10' onToggle={() => setForm((p) => ({ ...p, mark_set: p.mark_set ? null : '0x1' }))}>
+                      <Input className='h-7' placeholder='0x1 or 10' value={form.mark_set || ''} onChange={(e) => setForm((p) => ({ ...p, mark_set: e.target.value || null }))} />
+                    </ToggleLine> : <div />}
+                    {hasSupport('ct_mark_set') ? <ToggleLine label='ct mark set' enabled={!!form.ct_mark_set} inactiveHint='0x1 or 10' onToggle={() => setForm((p) => ({ ...p, ct_mark_set: p.ct_mark_set ? null : '0x1' }))}>
+                      <Input className='h-7' placeholder='0x1 or 10' value={form.ct_mark_set || ''} onChange={(e) => setForm((p) => ({ ...p, ct_mark_set: e.target.value || null }))} />
+                    </ToggleLine> : <div />}
+                  </div>
+                  <div className='grid grid-cols-3 gap-2'>
+                    <ToggleLine label='ct helper set' enabled={!!form.ct_helper_set} inactiveHint='ftp-standard' onToggle={() => setForm((p) => ({ ...p, ct_helper_set: p.ct_helper_set ? null : 'ftp-standard' }))}>
+                      <Input className='h-7' placeholder='ftp-standard' value={form.ct_helper_set || ''} onChange={(e) => setForm((p) => ({ ...p, ct_helper_set: e.target.value || null }))} />
                     </ToggleLine>
-                    <ToggleLine label='Log Prefix' enabled={!!form.log_prefix} onToggle={() => setForm((p) => ({ ...p, log_prefix: p.log_prefix ? null : 'FW' }))}>
-                      <Input className='h-7' placeholder='FW DROP' value={form.log_prefix || ''} onChange={(e) => setForm((p) => ({ ...p, log_prefix: e.target.value || null }))} />
+                    <ToggleLine label='ct timeout set' enabled={!!form.ct_timeout_set} inactiveHint='customtimeout' onToggle={() => setForm((p) => ({ ...p, ct_timeout_set: p.ct_timeout_set ? null : 'customtimeout' }))}>
+                      <Input className='h-7' placeholder='customtimeout' value={form.ct_timeout_set || ''} onChange={(e) => setForm((p) => ({ ...p, ct_timeout_set: e.target.value || null }))} />
+                    </ToggleLine>
+                    <ToggleLine label='ct expectation set' enabled={!!form.ct_expectation_set} inactiveHint='expect' onToggle={() => setForm((p) => ({ ...p, ct_expectation_set: p.ct_expectation_set ? null : 'expect' }))}>
+                      <Input className='h-7' placeholder='expect' value={form.ct_expectation_set || ''} onChange={(e) => setForm((p) => ({ ...p, ct_expectation_set: e.target.value || null }))} />
                     </ToggleLine>
                   </div>
-                  <ToggleLine label='Log Level' enabled={!!form.log_level} onToggle={() => setForm((p) => ({ ...p, log_level: p.log_level ? null : 'info' }))}>
-                    <select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={form.log_level || 'info'} onChange={(e) => setForm((p) => ({ ...p, log_level: (e.target.value || null) as any }))}>
-                      <option value='emerg'>emerg</option><option value='alert'>alert</option><option value='crit'>crit</option><option value='err'>err</option><option value='warn'>warn</option><option value='notice'>notice</option><option value='info'>info</option><option value='debug'>debug</option>
-                    </select>
-                  </ToggleLine>
+
+                  <div className='space-y-1.5 border-t pt-2'>
+                    <Label>Logging</Label>
+                    <label className='flex items-center gap-2 text-xs'>
+                      <input type='checkbox' className='h-4 w-4' checked={logEnabled} onChange={(e) => setForm((p) => e.target.checked ? ({ ...p, log_level: p.log_level || 'info' }) : ({ ...p, log_prefix: null, log_level: null }))} />
+                      log
+                    </label>
+                    <ToggleLine
+                      label='Log prefix'
+                      enabled={logEnabled && !!form.log_prefix}
+                      inactiveHint='FW input:'
+                      onToggle={() => setForm((p) => ({ ...p, log_prefix: p.log_prefix ? null : 'FW input:' }))}
+                    >
+                      <Input
+                        className='h-7'
+                        placeholder='FW input:'
+                        value={form.log_prefix || ''}
+                        onChange={(e) => setForm((p) => ({ ...p, log_prefix: e.target.value || null }))}
+                      />
+                    </ToggleLine>
+                    <ToggleLine
+                      label='Log level'
+                      enabled={logEnabled && !!form.log_level}
+                      inactiveHint='info'
+                      onToggle={() => setForm((p) => ({ ...p, log_level: p.log_level ? null : 'info' }))}
+                    >
+                      <select
+                        className='h-7 w-full rounded-md border bg-background px-2.5 text-xs'
+                        value={form.log_level || 'info'}
+                        onChange={(e) => setForm((p) => ({ ...p, log_level: (e.target.value || null) as any }))}
+                      >
+                        <option value='emerg'>emerg</option>
+                        <option value='alert'>alert</option>
+                        <option value='crit'>crit</option>
+                        <option value='err'>err</option>
+                        <option value='warn'>warn</option>
+                        <option value='notice'>notice</option>
+                        <option value='info'>info</option>
+                        <option value='debug'>debug</option>
+                      </select>
+                    </ToggleLine>
+                  </div>
+
                 </TabsContent>
 
                 <TabsContent value='stats' className='mt-2 space-y-2.5'>
-                  <label className='flex items-center gap-2 text-xs'><input type='checkbox' className='h-4 w-4' checked={!!form.counter} onChange={(e) => setForm((p) => ({ ...p, counter: e.target.checked }))} />Enable nft `counter` for this rule</label>
+                  {hasSupport('counter') ? <label className='flex items-center gap-2 text-xs'><input type='checkbox' className='h-4 w-4' checked={!!form.counter} onChange={(e) => setForm((p) => ({ ...p, counter: e.target.checked }))} />Enable nft `counter` for this rule</label> : null}
+                  <div className='grid grid-cols-2 gap-2'>
+                    <div className='space-y-1'>
+                      <Label className='text-[11px]'>packets</Label>
+                      <Input className='h-7' disabled value='runtime value after save' />
+                    </div>
+                    <div className='space-y-1'>
+                      <Label className='text-[11px]'>bytes</Label>
+                      <Input className='h-7' disabled value='runtime value after save' />
+                    </div>
+                  </div>
+                  <div className='grid grid-cols-2 gap-2'>
+                    <div className='space-y-1'>
+                      <Label className='text-[11px]'>handle</Label>
+                      <Input className='h-7' disabled value='planned' />
+                    </div>
+                    <div className='space-y-1'>
+                      <Label className='text-[11px]'>counter status</Label>
+                      <Input className='h-7' disabled value={form.counter ? 'enabled' : 'disabled'} />
+                    </div>
+                  </div>
+                  <div className='rounded-md border p-2'>
+                    <div className='mb-2 flex items-center gap-2 text-[11px] font-semibold text-muted-foreground'>
+                      <span>Current rule traffic</span>
+                      <span className='rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700'>beta</span>
+                    </div>
+                    <div className='rounded-md border bg-muted/20 p-2'>
+                      <div className='h-28 w-full'>
+                        <ResponsiveContainer width='100%' height='100%'>
+                          <LineChart data={statsChart.points} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
+                            <CartesianGrid strokeDasharray='3 3' vertical={false} stroke='hsl(var(--border))' />
+                            <XAxis dataKey='idx' tickLine={false} axisLine={false} tick={{ fontSize: 10 }} />
+                            <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 10 }} width={28} />
+                            <Tooltip
+                              contentStyle={{ borderRadius: 8, border: '1px solid hsl(var(--border))', background: 'hsl(var(--background))' }}
+                              labelFormatter={(v) => `Sample ${v}`}
+                              formatter={(value, name) => [
+                                name === 'pps' ? Number(value || 0).toFixed(2) : formatCounter(Number(value || 0)),
+                                name === 'pps' ? 'packets/sec' : 'bytes/sec',
+                              ]}
+                            />
+                            {statsSeries === 'bytes' ? <Line type='linear' dataKey='bps' stroke='#60a5fa' strokeWidth={2} dot={false} isAnimationActive={false} /> : null}
+                            {statsSeries === 'packets' ? <Line type='linear' dataKey='pps' stroke='#2563eb' strokeWidth={2} dot={false} isAnimationActive={false} /> : null}
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
+                      {!form.counter ? (
+                        <div className='mt-1 rounded border border-dashed px-2 py-1 text-[10px] text-muted-foreground'>
+                          Counter disabled: enable `nft counter` to collect live chart data.
+                        </div>
+                      ) : null}
+                      <div className='mt-1 flex items-center justify-between text-[11px]'>
+                        <span className='text-muted-foreground'>Packets/sec: <span className='font-medium text-foreground'>{currentRulePps.toFixed(2)}</span></span>
+                        <span className='text-muted-foreground'>Bytes/sec: <span className='font-medium text-foreground'>{formatCounter(currentRuleBps)}</span></span>
+                      </div>
+                      <div className='mt-2 flex items-center gap-2 text-[10px]'>
+                        <button type='button' className={`rounded border px-2 py-1 ${statsSeries === 'packets' ? 'border-blue-600 bg-blue-600 text-white' : 'border-border bg-background text-muted-foreground'}`} onClick={() => setStatsSeries('packets')}>Packets/sec</button>
+                        <button type='button' className={`rounded border px-2 py-1 ${statsSeries === 'bytes' ? 'border-blue-400 bg-blue-400 text-white' : 'border-border bg-background text-muted-foreground'}`} onClick={() => setStatsSeries('bytes')}>Bytes/sec</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div className='rounded-md border border-dashed px-2 py-1.5 text-[10px] text-muted-foreground'>
+                    Live chart uses current runtime counters of this rule.
+                  </div>
                 </TabsContent>
+                </div>
               </Tabs>
 
-              <div className='flex justify-end gap-2 pt-1'>
+              <div className='flex justify-end gap-2 border-t bg-background px-3 py-2'>
                 <Button type='button' variant='outline' onClick={() => setAddOpen(false)}>Cancel</Button>
                 <Button type='submit' disabled={isBusy}><Plus />{editingRuleId ? 'Save' : 'Add'}</Button>
               </div>
             </form>
+          </div>
+        </div>
+      ) : null}
+
+      {setOpen ? (
+        <div className='fixed inset-0 z-40'>
+          <div className='absolute z-50 w-[560px] max-w-[calc(100vw-24px)] rounded-xl border bg-background shadow-2xl' style={{ left: winPos.x, top: winPos.y }}>
+            <div className='cursor-move rounded-t-xl border-b bg-muted/70 px-3 py-2 text-xs font-medium select-none' onMouseDown={onDragStart}>
+              <div className='flex items-center justify-between'>
+                <span>{editingSetId ? `Edit ${currentSetKind} set` : `Add ${currentSetKind} set`}</span>
+                <button type='button' className='rounded p-1 hover:bg-background/70' onClick={() => setSetOpen(false)}><X className='size-3.5' /></button>
+              </div>
+            </div>
+            <div className='flex max-h-[78vh] flex-col overflow-hidden rounded-b-xl bg-background text-xs'>
+              <div className='flex-1 overflow-y-auto p-3 space-y-3'>
+                <div className='space-y-1.5'>
+                  <Label>Set type</Label>
+                  <select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={activeSetKind} onChange={(e) => setActiveSetKind(e.target.value as 'addr' | 'port' | 'iface')}>
+                    <option value='addr'>addr</option>
+                    <option value='port'>port</option>
+                    <option value='iface'>iface</option>
+                  </select>
+                </div>
+                <div className='space-y-1.5'>
+                  <Label>Set name</Label>
+                  <Input className='h-7' placeholder='set_name' value={newSetName} onChange={(e) => setNewSetName(e.target.value)} />
+                </div>
+                <div className='space-y-1.5'>
+                  <Label>Elements (comma-separated)</Label>
+                  <Input
+                    className='h-7'
+                    placeholder={currentSetKind === 'iface' ? 'eth0, awg1' : currentSetKind === 'port' ? '22, 443, 51820' : '10.0.0.0/24, 192.168.1.0/24'}
+                    value={newSetElements}
+                    onChange={(e) => setNewSetElements(e.target.value)}
+                  />
+                </div>
+                <div className='space-y-1.5'>
+                  <Label>Comment</Label>
+                  <Input className='h-7' placeholder='Optional comment' value={newSetComment} onChange={(e) => setNewSetComment(e.target.value)} />
+                </div>
+              </div>
+              <div className='flex justify-end gap-2 border-t bg-background px-3 py-2'>
+                <Button type='button' variant='outline' onClick={() => setSetOpen(false)}>Cancel</Button>
+                <Button type='button' disabled={isBusy || !newSetName.trim()} onClick={async () => { const ok = await onSaveSet(); if (ok) setSetOpen(false) }}><Plus />{editingSetId ? 'Save' : 'Add'}</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {mapOpen ? (
+        <div className='fixed inset-0 z-40'>
+          <div className='absolute z-50 w-[560px] max-w-[calc(100vw-24px)] rounded-xl border bg-background shadow-2xl' style={{ left: winPos.x, top: winPos.y }}>
+            <div className='cursor-move rounded-t-xl border-b bg-muted/70 px-3 py-2 text-xs font-medium select-none' onMouseDown={onDragStart}>
+              <div className='flex items-center justify-between'>
+                <span>{editingMapId ? `Edit ${activeMapKind}` : `Add ${activeMapKind}`}</span>
+                <button type='button' className='rounded p-1 hover:bg-background/70' onClick={() => setMapOpen(false)}><X className='size-3.5' /></button>
+              </div>
+            </div>
+            <div className='flex max-h-[78vh] flex-col overflow-hidden rounded-b-xl bg-background text-xs'>
+              <div className='flex-1 overflow-y-auto p-3 space-y-3'>
+                <div className='space-y-1.5'>
+                  <Label>Type</Label>
+                  <select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={activeMapKind} onChange={(e) => setActiveMapKind(e.target.value as 'map' | 'vmap')}>
+                    <option value='map'>map</option>
+                    <option value='vmap'>vmap</option>
+                  </select>
+                </div>
+                <div className='space-y-1.5'>
+                  <Label>Name</Label>
+                  <Input className='h-7' placeholder='map_name' value={newMapName} onChange={(e) => setNewMapName(e.target.value)} />
+                </div>
+                <div className='space-y-1.5'>
+                  <Label>Entries (comma-separated, key:value)</Label>
+                  <Input className='h-7' placeholder='tcp:accept, udp:drop' value={newMapEntries} onChange={(e) => setNewMapEntries(e.target.value)} />
+                </div>
+                <div className='space-y-1.5'>
+                  <Label>Comment</Label>
+                  <Input className='h-7' placeholder='Optional comment' value={newMapComment} onChange={(e) => setNewMapComment(e.target.value)} />
+                </div>
+              </div>
+              <div className='flex justify-end gap-2 border-t bg-background px-3 py-2'>
+                <Button type='button' variant='outline' onClick={() => setMapOpen(false)}>Cancel</Button>
+                <Button type='button' disabled={isBusy || !newMapName.trim()} onClick={async () => { const ok = await onSaveMap(); if (ok) setMapOpen(false) }}><Plus />{editingMapId ? 'Save' : 'Add'}</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {tableOpen ? (
+        <div className='fixed inset-0 z-40'>
+          <div className='absolute z-50 w-[560px] max-w-[calc(100vw-24px)] rounded-xl border bg-background shadow-2xl' style={{ left: winPos.x, top: winPos.y }}>
+            <div className='cursor-move rounded-t-xl border-b bg-muted/70 px-3 py-2 text-xs font-medium select-none' onMouseDown={onDragStart}>
+              <div className='flex items-center justify-between'>
+                <span>Add Table Chain</span>
+                <button type='button' className='rounded p-1 hover:bg-background/70' onClick={() => setTableOpen(false)}><X className='size-3.5' /></button>
+              </div>
+            </div>
+            <div className='flex max-h-[78vh] flex-col overflow-hidden rounded-b-xl bg-background text-xs'>
+              <div className='flex-1 overflow-y-auto p-3 space-y-3'>
+                <div className='space-y-1.5'><Label>Family</Label><select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={newTableFamily} onChange={(e) => setNewTableFamily(e.target.value)}><option value='inet'>inet</option></select></div>
+                <div className='space-y-1.5'><Label>Table name</Label><Input className='h-7' placeholder='custom_table' value={newTableName} onChange={(e) => setNewTableName(e.target.value)} /></div>
+                <div className='space-y-1.5'><Label>Chain name</Label><Input className='h-7' placeholder='input_custom' value={newChainName} onChange={(e) => setNewChainName(e.target.value)} /></div>
+                <div className='grid grid-cols-2 gap-2'>
+                  <div className='space-y-1.5'><Label>Chain type</Label><select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={newChainType} onChange={(e) => setNewChainType(e.target.value as any)}><option value='filter'>filter</option><option value='nat'>nat</option><option value='route'>route</option></select></div>
+                  <div className='space-y-1.5'><Label>Hook</Label><select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={newHook} onChange={(e) => setNewHook(e.target.value as any)}><option value='prerouting'>prerouting</option><option value='input'>input</option><option value='forward'>forward</option><option value='output'>output</option><option value='postrouting'>postrouting</option><option value='ingress'>ingress</option></select></div>
+                </div>
+                <div className='space-y-1.5'><Label>Device</Label><Input className='h-7' placeholder='eth0 (optional)' value={newDevice} onChange={(e) => setNewDevice(e.target.value)} /></div>
+                <div className='grid grid-cols-2 gap-2'>
+                  <div className='space-y-1.5'><Label>Priority</Label><Input className='h-7' value={newPriority} onChange={(e) => setNewPriority(e.target.value)} /></div>
+                  <div className='space-y-1.5'><Label>Policy</Label><select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={newPolicy} onChange={(e) => setNewPolicy(e.target.value as any)}><option value='accept'>accept</option><option value='drop'>drop</option></select></div>
+                </div>
+                <div className='rounded border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-900'>
+                  Built-in priorities are reserved: -300, -150, -100, 0, 100.
+                </div>
+              </div>
+              <div className='flex justify-end gap-2 border-t bg-background px-3 py-2'>
+                <Button type='button' variant='outline' onClick={() => setTableOpen(false)}>Cancel</Button>
+                <Button type='button' disabled={isBusy || !newTableName.trim() || !newChainName.trim()} onClick={async () => { const ok = await onSaveTable(); if (ok) setTableOpen(false) }}><Plus />Add</Button>
+              </div>
+            </div>
           </div>
         </div>
       ) : null}

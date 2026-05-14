@@ -10,7 +10,7 @@ export async function login(page: Page) {
   await expect(page.getByText('Sign in')).toBeVisible()
   await page.locator('input[type="password"]').first().fill(apiKey)
   await page.getByRole('button', { name: 'Enter' }).click()
-  await expect(page.getByRole('heading', { name: 'Interfaces' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Interfaces' })).toBeVisible({ timeout: 30_000 })
 }
 
 export async function createInterfaceViaUi(page: Page, opts: {

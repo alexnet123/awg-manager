@@ -14,6 +14,7 @@ import io
 import re
 import json
 import uuid
+import time
 from cryptography.fernet import Fernet, InvalidToken
 import segno
 
@@ -72,8 +73,71 @@ bd_path = '/etc/wg-manager'
 API_KEY_ENV_VAR = 'AWG_MANAGER_API_KEY'
 API_KEY_FILE = os.path.join(bd_path, 'api.key')
 FIREWALL_RULES_FILE = os.path.join(bd_path, 'firewall_rules.json')
+FIREWALL_SETS_FILE = os.path.join(bd_path, 'firewall_sets.json')
+FIREWALL_MAPS_FILE = os.path.join(bd_path, 'firewall_maps.json')
+FIREWALL_TABLES_FILE = os.path.join(bd_path, 'firewall_tables.json')
+FIREWALL_MANAGED_TABLES_FILE = os.path.join(bd_path, 'firewall_managed_tables.json')
+FIREWALL_STATS_FILE = os.path.join(bd_path, 'firewall_stats.json')
 FIREWALL_TABLE_FAMILY = 'inet'
 FIREWALL_TABLE_PREFIX = ''
+FIREWALL_SCHEMA = {
+    'family': FIREWALL_TABLE_FAMILY,
+    'tables': {
+        'filter': {
+            'chains': ['input', 'forward', 'output'],
+            'nat_types': [],
+            'supports': ['proto', 'src', 'dst', 'sport', 'dport', 'ct_state', 'in_interface', 'out_interface', 'action', 'counter', 'log', 'limit_rate'],
+        },
+        'nat': {
+            'chains': ['prerouting', 'input', 'output', 'postrouting'],
+            'nat_types_by_chain': {
+                'prerouting': ['dnat', 'redirect'],
+                'input': [],
+                'output': ['dnat', 'redirect'],
+                'postrouting': ['snat', 'masquerade'],
+            },
+            'supports': ['proto', 'src', 'dst', 'sport', 'dport', 'ct_state', 'in_interface', 'out_interface', 'action', 'counter', 'log', 'limit_rate', 'nat_type', 'to_addr', 'to_port', 'nat_random', 'nat_fully_random', 'nat_persistent'],
+        },
+        'raw': {
+            'chains': ['prerouting', 'output'],
+            'nat_types': [],
+            'supports': ['proto', 'src', 'dst', 'sport', 'dport', 'ct_state', 'in_interface', 'out_interface', 'action', 'counter', 'notrack'],
+        },
+        'mangle': {
+            'chains': ['prerouting', 'input', 'forward', 'output', 'postrouting'],
+            'nat_types': [],
+            'supports': ['proto', 'src', 'dst', 'sport', 'dport', 'ct_state', 'in_interface', 'out_interface', 'action', 'counter', 'mark_set', 'ct_mark_set', 'log', 'limit_rate'],
+        },
+    },
+    'actions': ['accept', 'drop', 'reject', 'jump', 'goto', 'return'],
+    'protos': ['tcp', 'udp', 'icmp', 'icmpv6'],
+    'ct_states': ['established,related', 'new', 'invalid', 'related', 'established', 'untracked'],
+}
+FIREWALL_DEFAULT_TABLE_DEFS = {
+    'filter': [
+        ('input', 'filter', 'input', 0, None, 'accept'),
+        ('forward', 'filter', 'forward', 0, None, 'accept'),
+        ('output', 'filter', 'output', 0, None, 'accept'),
+    ],
+    'nat': [
+        ('prerouting', 'nat', 'prerouting', -100, None, 'accept'),
+        ('input', 'nat', 'input', 100, None, 'accept'),
+        ('output', 'nat', 'output', -100, None, 'accept'),
+        ('postrouting', 'nat', 'postrouting', 100, None, 'accept'),
+    ],
+    'raw': [
+        ('prerouting', 'filter', 'prerouting', -300, None, 'accept'),
+        ('output', 'filter', 'output', -300, None, 'accept'),
+    ],
+    'mangle': [
+        ('prerouting', 'filter', 'prerouting', -150, None, 'accept'),
+        ('input', 'filter', 'input', -150, None, 'accept'),
+        ('forward', 'filter', 'forward', -150, None, 'accept'),
+        ('output', 'filter', 'output', -150, None, 'accept'),
+        ('postrouting', 'filter', 'postrouting', -150, None, 'accept'),
+    ],
+}
+FIREWALL_RESERVED_PRIORITIES = {-300, -150, -100, 0, 100}
 if os.path.isdir(bd_path):
     # Подключение к базе данных
     conn = sqlite3.connect(bd_path+"/"+"clients.db")
@@ -376,6 +440,114 @@ def _read_firewall_rules_file():
     return payload
 
 
+def _read_json_file(path, default):
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            payload = json.load(f)
+            return payload if isinstance(payload, type(default)) else default
+    except Exception:
+        return default
+
+
+def _write_json_file(path, payload):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+
+
+def _read_firewall_sets_file():
+    data = _read_json_file(FIREWALL_SETS_FILE, {})
+    return {
+        'addr': data.get('addr', []),
+        'port': data.get('port', []),
+        'iface': data.get('iface', []),
+    }
+
+
+def _write_firewall_sets_file(data):
+    _write_json_file(FIREWALL_SETS_FILE, data)
+
+
+def _read_firewall_maps_file():
+    data = _read_json_file(FIREWALL_MAPS_FILE, {})
+    return {
+        'map': data.get('map', []),
+        'vmap': data.get('vmap', []),
+    }
+
+
+def _write_firewall_maps_file(data):
+    _write_json_file(FIREWALL_MAPS_FILE, data)
+
+
+def _read_firewall_tables_file():
+    data = _read_json_file(FIREWALL_TABLES_FILE, {})
+    rows = data.get('tables', [])
+    if not isinstance(rows, list):
+        rows = []
+    out = []
+    for row in rows:
+        if isinstance(row, dict):
+            out.append(row)
+    return {'tables': out}
+
+
+def _write_firewall_tables_file(data):
+    _write_json_file(FIREWALL_TABLES_FILE, data)
+
+
+def _read_managed_tables_file():
+    data = _read_json_file(FIREWALL_MANAGED_TABLES_FILE, {})
+    items = data.get('tables', [])
+    out = []
+    if isinstance(items, list):
+        for x in items:
+            v = normalize_config_value(x)
+            if v is not None:
+                out.append(str(v).lower())
+    return {'tables': sorted(set(out))}
+
+
+def _write_managed_tables_file(data):
+    rows = data.get('tables', []) if isinstance(data, dict) else []
+    clean = []
+    if isinstance(rows, list):
+        for x in rows:
+            v = normalize_config_value(x)
+            if v is not None:
+                clean.append(str(v).lower())
+    _write_json_file(FIREWALL_MANAGED_TABLES_FILE, {'tables': sorted(set(clean))})
+
+
+def _list_inet_tables_runtime():
+    res = subprocess.run(
+        ['nft', 'list', 'tables'],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if res.returncode != 0:
+        return []
+    out = []
+    for line in (res.stdout or '').splitlines():
+        line = line.strip()
+        if line.startswith('table inet '):
+            name = line.split('table inet ', 1)[1].strip()
+            if name:
+                out.append(name)
+    return sorted(set(out))
+
+
+def _read_firewall_stats_file():
+    data = _read_json_file(FIREWALL_STATS_FILE, {})
+    return data if isinstance(data, dict) else {}
+
+
+def _write_firewall_stats_file(data):
+    _write_json_file(FIREWALL_STATS_FILE, data)
+
+
 def _write_firewall_rules_file(rules):
     os.makedirs(os.path.dirname(FIREWALL_RULES_FILE), exist_ok=True)
     with open(FIREWALL_RULES_FILE, 'w', encoding='utf-8') as f:
@@ -400,6 +572,8 @@ def _normalize_firewall_rule(payload):
     comment = normalize_config_value(payload.get('comment'))
     ct_state = normalize_config_value(payload.get('ct_state'))
     nat_type = normalize_config_value(payload.get('nat_type'))
+    target_chain = normalize_config_value(payload.get('target_chain'))
+    reject_type = normalize_config_value(payload.get('reject_type'))
     to_addr = normalize_config_value(payload.get('to_addr'))
     to_port = normalize_config_value(payload.get('to_port'))
     notrack = payload.get('notrack', False)
@@ -407,24 +581,54 @@ def _normalize_firewall_rule(payload):
     ct_mark_set = normalize_config_value(payload.get('ct_mark_set'))
     log_prefix = normalize_config_value(payload.get('log_prefix'))
     log_level = normalize_config_value(payload.get('log_level'))
+    fib_expr = normalize_config_value(payload.get('fib_expr'))
+    socket_expr = normalize_config_value(payload.get('socket_expr'))
+    rt_expr = normalize_config_value(payload.get('rt_expr'))
+    exthdr_expr = normalize_config_value(payload.get('exthdr_expr'))
+    ct_helper_set = normalize_config_value(payload.get('ct_helper_set'))
+    ct_timeout_set = normalize_config_value(payload.get('ct_timeout_set'))
+    ct_expectation_set = normalize_config_value(payload.get('ct_expectation_set'))
+    nat_random = payload.get('nat_random', False)
+    nat_fully_random = payload.get('nat_fully_random', False)
+    nat_persistent = payload.get('nat_persistent', False)
     limit_rate = normalize_config_value(payload.get('limit_rate'))
     counter = payload.get('counter', False)
     enabled = payload.get('enabled', True)
 
-    if family not in ('inet', 'ip', 'ip6'):
-        raise ValueError('family must be one of: inet, ip, ip6')
+    if family != FIREWALL_TABLE_FAMILY:
+        raise ValueError(f'family must be {FIREWALL_TABLE_FAMILY}')
     if nft_table not in ('filter', 'nat', 'raw', 'mangle'):
         raise ValueError('table must be one of: filter, nat, raw, mangle')
     allowed_chains_by_table = {
-        'filter': ('input', 'forward', 'output'),
-        'nat': ('prerouting', 'input', 'output', 'postrouting'),
-        'raw': ('prerouting', 'output'),
-        'mangle': ('prerouting', 'input', 'forward', 'output', 'postrouting'),
+        table: tuple(config['chains'])
+        for table, config in FIREWALL_SCHEMA['tables'].items()
     }
     if chain not in allowed_chains_by_table[nft_table]:
         raise ValueError(f'chain "{chain}" is not valid for table "{nft_table}"')
-    if action not in ('accept', 'drop', 'reject'):
-        raise ValueError('action must be one of: accept, drop, reject')
+    if action not in ('accept', 'drop', 'reject', 'jump', 'goto', 'return'):
+        raise ValueError('action must be one of: accept, drop, reject, jump, goto, return')
+    if nft_table != 'filter' and action in ('jump', 'goto', 'return'):
+        raise ValueError('jump/goto/return are currently supported only in filter table')
+    if action in ('jump', 'goto'):
+        if target_chain is None:
+            raise ValueError('target_chain is required for jump/goto')
+        if not re.fullmatch(r'[A-Za-z0-9_.-]+', str(target_chain)):
+            raise ValueError('target_chain contains invalid characters')
+        if str(target_chain).lower() in ('input', 'forward', 'output'):
+            raise ValueError('target_chain must be a user-defined chain, not base hook chain')
+    elif target_chain is not None:
+        raise ValueError('target_chain is only valid for jump/goto')
+    if reject_type is not None:
+        if action != 'reject':
+            raise ValueError('reject_type is only valid when action=reject')
+        allowed_reject = {
+            'icmpx port-unreachable',
+            'icmpx admin-prohibited',
+            'icmp type host-unreachable',
+            'tcp reset',
+        }
+        if str(reject_type) not in allowed_reject:
+            raise ValueError('reject_type must be one of: icmpx port-unreachable | icmpx admin-prohibited | icmp type host-unreachable | tcp reset')
     if proto is not None:
         proto = str(proto).lower()
         if proto not in ('tcp', 'udp', 'icmp', 'icmpv6'):
@@ -433,10 +637,22 @@ def _normalize_firewall_rule(payload):
         raise ValueError('dport requires proto tcp or udp')
     if sport is not None and proto not in ('tcp', 'udp'):
         raise ValueError('sport requires proto tcp or udp')
-    if dport is not None and not re.fullmatch(r'[0-9]{1,5}(:[0-9]{1,5})?', str(dport)):
-        raise ValueError('dport must be like 80 or 1000:2000')
-    if sport is not None and not re.fullmatch(r'[0-9]{1,5}(:[0-9]{1,5})?', str(sport)):
-        raise ValueError('sport must be like 53 or 1000:2000')
+    def _parse_port_or_range(raw, field_name):
+        if not re.fullmatch(r'[0-9]{1,5}(:[0-9]{1,5})?', str(raw)):
+            raise ValueError(f'{field_name} must be like 80 or 1000:2000')
+        if ':' in str(raw):
+            left, right = str(raw).split(':', 1)
+            p1, p2 = int(left), int(right)
+            if p1 < 1 or p2 < 1 or p1 > 65535 or p2 > 65535 or p1 > p2:
+                raise ValueError(f'{field_name} range must be within 1..65535 and start <= end')
+        else:
+            p = int(str(raw))
+            if p < 1 or p > 65535:
+                raise ValueError(f'{field_name} must be in range 1..65535')
+    if dport is not None:
+        _parse_port_or_range(dport, 'dport')
+    if sport is not None:
+        _parse_port_or_range(sport, 'sport')
     if src is not None:
         ipaddress.ip_network(str(src), strict=False)
     if dst is not None:
@@ -449,7 +665,7 @@ def _normalize_firewall_rule(payload):
         enabled = str(enabled).lower() in ('1', 'true', 'yes', 'on')
     if ct_state is not None:
         ct_state = str(ct_state).lower().replace(' ', '')
-        if ct_state not in ('established,related', 'new', 'invalid', 'related', 'established', 'untracked'):
+        if ct_state not in FIREWALL_SCHEMA['ct_states']:
             raise ValueError('ct_state must be one of: established,related | new | invalid | related | established | untracked')
     if comment is not None:
         comment = str(comment).replace('"', "'")
@@ -460,12 +676,23 @@ def _normalize_firewall_rule(payload):
     if nft_table != 'nat' and nat_type is not None:
         raise ValueError('nat_type is only valid for nat table')
     if nat_type is not None:
-        if nat_type == 'masquerade' and chain != 'postrouting':
-            raise ValueError('masquerade is valid only in postrouting chain')
-        if nat_type == 'snat' and chain not in ('postrouting', 'input'):
-            raise ValueError('snat is valid only in postrouting/input chains')
-        if nat_type in ('dnat', 'redirect') and chain not in ('prerouting', 'output'):
-            raise ValueError(f'{nat_type} is valid only in prerouting/output chains')
+        allowed_nat_types = FIREWALL_SCHEMA['tables']['nat']['nat_types_by_chain'].get(chain, [])
+        if nat_type not in allowed_nat_types:
+            raise ValueError(f'{nat_type} is not valid in {chain} chain for nat table')
+    if not isinstance(nat_random, bool):
+        nat_random = str(nat_random).lower() in ('1', 'true', 'yes', 'on')
+    if not isinstance(nat_fully_random, bool):
+        nat_fully_random = str(nat_fully_random).lower() in ('1', 'true', 'yes', 'on')
+    if not isinstance(nat_persistent, bool):
+        nat_persistent = str(nat_persistent).lower() in ('1', 'true', 'yes', 'on')
+    if nft_table != 'nat' and (nat_random or nat_fully_random or nat_persistent):
+        raise ValueError('nat flags are only valid for nat table')
+    if nat_fully_random and nat_type not in ('snat', 'dnat', 'masquerade', 'redirect'):
+        raise ValueError('nat_fully_random requires a nat_type statement')
+    if nat_random and nat_type not in ('snat', 'dnat', 'masquerade', 'redirect'):
+        raise ValueError('nat_random requires a nat_type statement')
+    if nat_persistent and nat_type not in ('snat', 'dnat', 'masquerade', 'redirect'):
+        raise ValueError('nat_persistent requires a nat_type statement')
     if to_addr is not None:
         try:
             ipaddress.ip_address(str(to_addr))
@@ -497,6 +724,26 @@ def _normalize_firewall_rule(payload):
         limit_rate = str(limit_rate).lower()
     if not isinstance(counter, bool):
         counter = str(counter).lower() in ('1', 'true', 'yes', 'on')
+    for fld, val in (
+        ('fib_expr', fib_expr),
+        ('socket_expr', socket_expr),
+        ('rt_expr', rt_expr),
+        ('exthdr_expr', exthdr_expr),
+    ):
+        if val is not None:
+            if len(str(val)) > 160:
+                raise ValueError(f'{fld} is too long')
+            if not re.fullmatch(r'[A-Za-z0-9_ .:/,!=<>\-]+', str(val)):
+                raise ValueError(f'{fld} contains invalid characters')
+    for fld, val in (
+        ('ct_helper_set', ct_helper_set),
+        ('ct_timeout_set', ct_timeout_set),
+        ('ct_expectation_set', ct_expectation_set),
+    ):
+        if val is not None and not re.fullmatch(r'[A-Za-z0-9_.-]+', str(val)):
+            raise ValueError(f'{fld} contains invalid characters')
+    if ct_helper_set is not None or ct_timeout_set is not None or ct_expectation_set is not None:
+        raise ValueError('ct_helper_set/ct_timeout_set/ct_expectation_set require nft stateful ct objects and are not enabled yet')
 
     return {
         'id': str(payload.get('id') or uuid.uuid4().hex),
@@ -514,13 +761,25 @@ def _normalize_firewall_rule(payload):
         'comment': comment,
         'ct_state': ct_state,
         'nat_type': nat_type,
+        'target_chain': target_chain,
+        'reject_type': reject_type,
         'to_addr': to_addr,
         'to_port': str(to_port) if to_port is not None else None,
+        'nat_random': nat_random,
+        'nat_fully_random': nat_fully_random,
+        'nat_persistent': nat_persistent,
         'notrack': notrack,
         'mark_set': str(mark_set) if mark_set is not None else None,
         'ct_mark_set': str(ct_mark_set) if ct_mark_set is not None else None,
         'log_prefix': log_prefix,
         'log_level': log_level,
+        'fib_expr': fib_expr,
+        'socket_expr': socket_expr,
+        'rt_expr': rt_expr,
+        'exthdr_expr': exthdr_expr,
+        'ct_helper_set': ct_helper_set,
+        'ct_timeout_set': ct_timeout_set,
+        'ct_expectation_set': ct_expectation_set,
         'limit_rate': limit_rate,
         'counter': counter,
         'enabled': enabled,
@@ -528,6 +787,12 @@ def _normalize_firewall_rule(payload):
 
 
 def _render_firewall_rule(rule):
+    def _render_port_value(raw):
+        value = str(raw)
+        if ':' in value:
+            return value.replace(':', '-')
+        return value
+
     parts = []
     if rule['in_interface']:
         parts.append(f'iifname "{rule["in_interface"]}"')
@@ -544,11 +809,19 @@ def _render_firewall_rule(rule):
     if rule.get('ct_state'):
         parts.append(f'ct state {rule["ct_state"]}')
     if rule['sport']:
-        parts.append(f'{rule["proto"]} sport {rule["sport"]}')
+        parts.append(f'{rule["proto"]} sport {_render_port_value(rule["sport"])}')
     if rule['dport']:
-        parts.append(f'{rule["proto"]} dport {rule["dport"]}')
+        parts.append(f'{rule["proto"]} dport {_render_port_value(rule["dport"])}')
     if rule.get('limit_rate'):
         parts.append(f'limit rate {rule["limit_rate"]}')
+    if rule.get('fib_expr'):
+        parts.append(str(rule['fib_expr']))
+    if rule.get('socket_expr'):
+        parts.append(str(rule['socket_expr']))
+    if rule.get('rt_expr'):
+        parts.append(str(rule['rt_expr']))
+    if rule.get('exthdr_expr'):
+        parts.append(str(rule['exthdr_expr']))
     if rule.get('log_prefix') or rule.get('log_level'):
         log_parts = ['log']
         if rule.get('log_prefix'):
@@ -564,20 +837,107 @@ def _render_firewall_rule(rule):
         parts.append(f'meta mark set {rule["mark_set"]}')
     if rule.get('ct_mark_set'):
         parts.append(f'ct mark set {rule["ct_mark_set"]}')
+    if rule.get('ct_helper_set'):
+        parts.append(f'ct helper set "{rule["ct_helper_set"]}"')
+    if rule.get('ct_timeout_set'):
+        parts.append(f'ct timeout set "{rule["ct_timeout_set"]}"')
+    if rule.get('ct_expectation_set'):
+        parts.append(f'ct expectation set "{rule["ct_expectation_set"]}"')
     nat_type = rule.get('nat_type')
     if nat_type:
         nat_stmt = nat_type
         if nat_type in ('snat', 'dnat') and rule.get('to_addr'):
-            nat_stmt += f' to {rule["to_addr"]}'
+            to_addr = str(rule['to_addr'])
+            family_prefix = 'ip6' if ':' in to_addr else 'ip'
+            nat_stmt += f' {family_prefix} to {to_addr}'
             if rule.get('to_port'):
                 nat_stmt += f':{rule["to_port"]}'
         elif nat_type in ('masquerade', 'redirect') and rule.get('to_port'):
             nat_stmt += f' to :{rule["to_port"]}'
+        nat_flags = []
+        if rule.get('nat_random'):
+            nat_flags.append('random')
+        if rule.get('nat_fully_random'):
+            nat_flags.append('fully-random')
+        if rule.get('nat_persistent'):
+            nat_flags.append('persistent')
+        if nat_flags:
+            nat_stmt += ' ' + ','.join(nat_flags)
         parts.append(nat_stmt)
-    parts.append(rule['action'])
+    else:
+        action = rule['action']
+        if action in ('jump', 'goto'):
+            parts.append(f'{action} {rule.get("target_chain")}')
+        elif action == 'reject' and rule.get('reject_type'):
+            parts.append(f'reject with {rule["reject_type"]}')
+        else:
+            parts.append(action)
     if rule['comment']:
         parts.append(f'comment "{rule["comment"]}"')
     return ' '.join(parts)
+
+
+def _infer_map_token_type(token):
+    t = str(token or '').strip()
+    if not t:
+        return 'ifname'
+    if t.lower() in ('established', 'related', 'new', 'invalid', 'untracked'):
+        return 'ct_state'
+    if t.lower() in (
+        'echo-reply', 'destination-unreachable', 'source-quench', 'redirect', 'echo-request',
+        'router-advertisement', 'router-solicitation', 'time-exceeded', 'parameter-problem',
+        'timestamp-request', 'timestamp-reply', 'address-mask-request', 'address-mask-reply',
+    ):
+        return 'icmp_type'
+    if t.lower() in ('accept', 'drop', 'queue', 'continue', 'return'):
+        return 'verdict'
+    try:
+        ipaddress.ip_address(t)
+        return 'ipv4_addr' if '.' in t else 'ipv6_addr'
+    except Exception:
+        pass
+    try:
+        ipaddress.ip_network(t, strict=False)
+        return 'ipv4_addr' if '.' in t else 'ipv6_addr'
+    except Exception:
+        pass
+    if re.fullmatch(r'\d{1,5}', t):
+        return 'inet_service'
+    if re.fullmatch(r'0x[0-9a-fA-F]+|\d+', t):
+        return 'mark'
+    return 'ifname'
+
+
+def _format_map_token(token, token_type):
+    t = str(token or '').strip()
+    if token_type == 'ifname':
+        return f'"{t}"'
+    return t
+
+
+def _build_map_declaration_and_elements(item):
+    entries = [x for x in (item.get('entries') or []) if x and ':' in str(x)]
+    if not entries:
+        return None
+    pairs = []
+    for entry in entries:
+        key, value = str(entry).split(':', 1)
+        key = key.strip()
+        value = value.strip()
+        if not key or not value:
+            continue
+        pairs.append((key, value))
+    if not pairs:
+        return None
+    key_type = _infer_map_token_type(pairs[0][0])
+    value_type = 'verdict' if item.get('kind') == 'vmap' else _infer_map_token_type(pairs[0][1])
+    has_prefix = any('/' in key for key, _ in pairs)
+    flags_clause = ' flags interval;' if has_prefix and key_type in ('ipv4_addr', 'ipv6_addr') else ''
+    decl_stmt = f'type {key_type} : {value_type};{flags_clause}'
+    elems = []
+    for key, value in pairs:
+        elems.append(f'{_format_map_token(key, key_type)} : {_format_map_token(value, value_type)}')
+    return decl_stmt, elems
 
 
 def list_firewall_rules_service():
@@ -593,30 +953,47 @@ def list_firewall_rules_service():
 
 def apply_firewall_rules():
     rules = list_firewall_rules_service()
-    table_defs = {
-        'filter': [
-            ('input', 'filter', 'input', 0),
-            ('forward', 'filter', 'forward', 0),
-            ('output', 'filter', 'output', 0),
-        ],
-        'nat': [
-            ('prerouting', 'nat', 'prerouting', -100),
-            ('input', 'nat', 'input', 100),
-            ('output', 'nat', 'output', -100),
-            ('postrouting', 'nat', 'postrouting', 100),
-        ],
-        'raw': [
-            ('prerouting', 'filter', 'prerouting', -300),
-            ('output', 'filter', 'output', -300),
-        ],
-        'mangle': [
-            ('prerouting', 'filter', 'prerouting', -150),
-            ('input', 'filter', 'input', -150),
-            ('forward', 'filter', 'forward', -150),
-            ('output', 'filter', 'output', -150),
-            ('postrouting', 'filter', 'postrouting', -150),
-        ],
-    }
+    sets_data = _read_firewall_sets_file()
+    maps_data = _read_firewall_maps_file()
+    table_defs = dict(FIREWALL_DEFAULT_TABLE_DEFS)
+    custom_tables = _read_firewall_tables_file().get('tables', [])
+    for row in custom_tables:
+        table_name = normalize_config_value(row.get('table_name'))
+        chain_name = normalize_config_value(row.get('chain_name'))
+        chain_type = normalize_config_value(row.get('chain_type'))
+        hook_name = normalize_config_value(row.get('hook'))
+        policy = normalize_config_value(row.get('policy')) or 'accept'
+        if table_name is None or chain_name is None or chain_type is None or hook_name is None:
+            continue
+        try:
+            priority = int(row.get('priority'))
+        except Exception:
+            continue
+        dev = normalize_config_value(row.get('device'))
+        table_key = str(table_name).strip().lower()
+        table_defs.setdefault(table_key, [])
+        table_defs[table_key].append((str(chain_name), str(chain_type), str(hook_name), priority, (str(dev) if dev else None), str(policy)))
+    active_table_names = {str(name).lower() for name in table_defs.keys()}
+    managed = _read_managed_tables_file().get('tables', [])
+    stale_managed = [t for t in managed if t not in active_table_names]
+    for stale in stale_managed:
+        subprocess.run(
+            ['nft', 'delete', 'table', FIREWALL_TABLE_FAMILY, str(stale)],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    # Also prune any runtime inet table that is outside the active manager set.
+    # This prevents orphaned custom tables from surviving after JSON state cleanup.
+    runtime_tables = _list_inet_tables_runtime()
+    for runtime_name in runtime_tables:
+        if runtime_name.lower() not in active_table_names:
+            subprocess.run(
+                ['nft', 'delete', 'table', FIREWALL_TABLE_FAMILY, str(runtime_name)],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
     script_lines = []
     for nft_table in table_defs.keys():
         table_name = f'{FIREWALL_TABLE_PREFIX}{nft_table}'
@@ -628,11 +1005,55 @@ def apply_firewall_rules():
             stderr=subprocess.DEVNULL
         )
         script_lines.append(f'add table {FIREWALL_TABLE_FAMILY} {table_name}')
-        for chain_name, chain_type, hook_name, priority in table_defs[nft_table]:
+        for chain_info in table_defs[nft_table]:
+            if len(chain_info) == 4:
+                chain_name, chain_type, hook_name, priority = chain_info
+                device = None
+                policy = 'accept'
+            else:
+                chain_name, chain_type, hook_name, priority, device, policy = chain_info
+            dev_clause = f' device "{device}"' if device else ''
             script_lines.append(
                 f'add chain {FIREWALL_TABLE_FAMILY} {table_name} {chain_name} '
-                f'{{ type {chain_type} hook {hook_name} priority {priority}; policy accept; }}'
+                f'{{ type {chain_type} hook {hook_name}{dev_clause} priority {priority}; policy {policy}; }}'
             )
+        # create shared sets in each table to allow matching from any chain/table
+        for item in sets_data.get('addr', []):
+            if item.get('name') and item.get('enabled', True):
+                elems = [x for x in (item.get('elements') or []) if x]
+                flags_clause = ' flags interval;' if any('/' in str(x) for x in elems) else ''
+                script_lines.append(f'add set {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ type ipv4_addr;{flags_clause} }}')
+                if elems:
+                    script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
+        for item in sets_data.get('port', []):
+            if item.get('name') and item.get('enabled', True):
+                script_lines.append(f'add set {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ type inet_service; }}')
+                elems = [x for x in (item.get('elements') or []) if x]
+                if elems:
+                    script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
+        for item in sets_data.get('iface', []):
+            if item.get('name') and item.get('enabled', True):
+                script_lines.append(f'add set {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ type ifname; }}')
+                elems = [f'"{x}"' for x in (item.get('elements') or []) if x]
+                if elems:
+                    script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
+        # create shared maps and vmaps in each table
+        for item in maps_data.get('map', []):
+            if item.get('name') and item.get('enabled', True):
+                built = _build_map_declaration_and_elements(item)
+                if not built:
+                    continue
+                decl_stmt, elems = built
+                script_lines.append(f'add map {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {decl_stmt} }}')
+                script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
+        for item in maps_data.get('vmap', []):
+            if item.get('name') and item.get('enabled', True):
+                built = _build_map_declaration_and_elements(item)
+                if not built:
+                    continue
+                decl_stmt, elems = built
+                script_lines.append(f'add map {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {decl_stmt} }}')
+                script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
     for rule in rules:
         if not rule.get('enabled', True):
             continue
@@ -649,10 +1070,33 @@ def apply_firewall_rules():
 def create_firewall_rule_service(payload, apply_now=True):
     rules = list_firewall_rules_service()
     rule = _normalize_firewall_rule(payload)
-    rules.append(rule)
-    _write_firewall_rules_file(rules)
-    if apply_now:
-        apply_firewall_rules()
+    # Idempotency guard for concurrent duplicate creates from UI/API retries.
+    # Keep one logical rule for the same effective payload.
+    identity_keys = (
+        'table', 'family', 'chain', 'action', 'proto', 'src', 'dst',
+        'in_interface', 'out_interface', 'sport', 'dport', 'comment', 'ct_state',
+        'nat_type', 'target_chain', 'reject_type', 'to_addr', 'to_port',
+        'nat_random', 'nat_fully_random', 'nat_persistent', 'notrack',
+        'mark_set', 'ct_mark_set', 'log_prefix', 'log_level',
+        'fib_expr', 'socket_expr', 'rt_expr', 'exthdr_expr',
+        'ct_helper_set', 'ct_timeout_set', 'ct_expectation_set',
+        'limit_rate', 'counter', 'enabled',
+    )
+    for existing in rules:
+        if all(existing.get(k) == rule.get(k) for k in identity_keys):
+            if apply_now:
+                apply_firewall_rules()
+            return existing
+    out = list(rules)
+    out.append(rule)
+    _write_firewall_rules_file(out)
+    try:
+        if apply_now:
+            apply_firewall_rules()
+    except Exception:
+        # Rollback persisted state if runtime apply fails.
+        _write_firewall_rules_file(rules)
+        raise
     return rule
 
 
@@ -666,8 +1110,12 @@ def update_firewall_rule_service(rule_id, payload, apply_now=True):
     updated = _normalize_firewall_rule(merged)
     out = [updated if r['id'] == existing['id'] else r for r in rules]
     _write_firewall_rules_file(out)
-    if apply_now:
-        apply_firewall_rules()
+    try:
+        if apply_now:
+            apply_firewall_rules()
+    except Exception:
+        _write_firewall_rules_file(rules)
+        raise
     return updated
 
 
@@ -678,35 +1126,476 @@ def delete_firewall_rule_service(rule_id, apply_now=True):
         raise LookupError('Firewall rule not found')
     out = [r for r in rules if r['id'] != str(rule_id)]
     _write_firewall_rules_file(out)
+    try:
+        if apply_now:
+            apply_firewall_rules()
+    except Exception:
+        _write_firewall_rules_file(rules)
+        raise
+    return existing
+
+
+def reorder_firewall_rules_service(table, ordered_ids, apply_now=True):
+    nft_table = normalize_config_value(table)
+    if nft_table is None:
+        raise ValueError('table is required')
+    nft_table = nft_table.lower()
+    if nft_table not in ('filter', 'nat', 'raw', 'mangle'):
+        raise ValueError('table must be one of: filter, nat, raw, mangle')
+    if not isinstance(ordered_ids, list) or not all(isinstance(x, str) and x.strip() for x in ordered_ids):
+        raise ValueError('ordered_ids must be a non-empty list of rule ids')
+
+    rules = list_firewall_rules_service()
+    table_rules = [r for r in rules if r.get('table') == nft_table]
+    table_ids = [r['id'] for r in table_rules]
+    incoming_ids = [x.strip() for x in ordered_ids]
+    if sorted(table_ids) != sorted(incoming_ids):
+        raise ValueError('ordered_ids must contain exactly all ids from selected table')
+
+    by_id = {r['id']: r for r in table_rules}
+    reordered_table_rules = [by_id[rid] for rid in incoming_ids]
+    out = []
+    inserted = False
+    for rule in rules:
+        if rule.get('table') == nft_table:
+            if not inserted:
+                out.extend(reordered_table_rules)
+                inserted = True
+            continue
+        out.append(rule)
+    if not inserted:
+        out.extend(reordered_table_rules)
+
+    _write_firewall_rules_file(out)
     if apply_now:
         apply_firewall_rules()
-    return existing
+    return reordered_table_rules
+
+
+def reset_firewall_counters_service(table=None):
+    tables = ('filter', 'nat', 'raw', 'mangle')
+    if table is None:
+        target_tables = tables
+    else:
+        nft_table = normalize_config_value(table)
+        if nft_table is None:
+            raise ValueError('table is empty')
+        nft_table = nft_table.lower()
+        if nft_table not in tables:
+            raise ValueError('table must be one of: filter, nat, raw, mangle')
+        target_tables = (nft_table,)
+
+    reset_count = 0
+    for nft_table in target_tables:
+        table_name = f'{FIREWALL_TABLE_PREFIX}{nft_table}'
+        try:
+            subprocess.run(
+                ['nft', 'reset', 'counters', 'table', FIREWALL_TABLE_FAMILY, table_name],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            reset_count += 1
+        except Exception:
+            # Skip missing tables; state can be recreated by apply call.
+            continue
+    return {'ok': True, 'tables_reset': reset_count}
 
 
 def get_firewall_state_service():
     rules = list_firewall_rules_service()
-    ruleset_text_parts = []
+    runtime_counters = {}
+    ruleset_text = ''
     active = False
-    for nft_table in ('filter', 'nat', 'raw', 'mangle'):
-        table_name = f'{FIREWALL_TABLE_PREFIX}{nft_table}'
-        try:
-            res = subprocess.run(
-                ['nft', 'list', 'table', FIREWALL_TABLE_FAMILY, table_name],
-                check=True,
-                capture_output=True,
-                text=True
-            )
-            ruleset_text_parts.append(res.stdout)
+    try:
+        txt_res = subprocess.run(
+            ['nft', 'list', 'ruleset'],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        ruleset_text = txt_res.stdout
+    except Exception:
+        ruleset_text = ''
+    try:
+        json_res = subprocess.run(
+            ['nft', '-j', 'list', 'ruleset'],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        nft_json = json.loads(json_res.stdout)
+        rules_by_table_chain = {}
+        for item in nft_json.get('nftables', []):
+            rule_payload = item.get('rule')
+            if not rule_payload:
+                continue
+            table_name = str(rule_payload.get('table') or '')
+            if not table_name.startswith(FIREWALL_TABLE_PREFIX):
+                continue
+            chain_name = rule_payload.get('chain')
+            if chain_name is None:
+                continue
+            nft_table = table_name.replace(FIREWALL_TABLE_PREFIX, '', 1)
+            expr = rule_payload.get('expr', [])
+            counter_item = next((x.get('counter') for x in expr if isinstance(x, dict) and 'counter' in x), None)
+            rules_by_table_chain.setdefault((nft_table, chain_name), []).append({
+                'packets': int(counter_item.get('packets', 0)) if counter_item else 0,
+                'bytes': int(counter_item.get('bytes', 0)) if counter_item else 0,
+            })
             active = True
-        except Exception:
-            continue
+
+        chain_runtime_index = {}
+        for rule in rules:
+            if not rule.get('enabled', True):
+                continue
+            nft_table = rule.get('table')
+            chain_name = rule.get('chain')
+            key = (nft_table, chain_name)
+            idx = chain_runtime_index.get(key, 0)
+            counter_list = rules_by_table_chain.get(key, [])
+            if idx < len(counter_list):
+                runtime_counters[rule['id']] = counter_list[idx]
+            chain_runtime_index[key] = idx + 1
+    except Exception:
+        pass
+    enriched_rules = []
+    stats_store = _read_firewall_stats_file()
+    now_ts = int(time.time())
+    for rule in rules:
+        payload = dict(rule)
+        counter = runtime_counters.get(rule['id'])
+        packets = counter.get('packets') if counter else 0
+        bytes_count = counter.get('bytes') if counter else 0
+        payload['runtime_packets'] = packets
+        payload['runtime_bytes'] = bytes_count
+
+        stat_row = stats_store.get(rule['id']) if isinstance(stats_store.get(rule['id']), dict) else {}
+        last = stat_row.get('last') if isinstance(stat_row, dict) else None
+        prev_packets = int(last.get('packets', packets)) if isinstance(last, dict) else packets
+        prev_bytes = int(last.get('bytes', bytes_count)) if isinstance(last, dict) else bytes_count
+        prev_t = int(last.get('t', now_ts)) if isinstance(last, dict) else now_ts
+        dt = max(1, now_ts - prev_t)
+        dpk = max(0, int(packets) - prev_packets)
+        dby = max(0, int(bytes_count) - prev_bytes)
+        pps = dpk / dt
+        bps = dby / dt
+        payload['runtime_pps'] = pps
+        payload['runtime_bps'] = bps
+
+        history = stat_row.get('history', []) if isinstance(stat_row, dict) else []
+        if not isinstance(history, list):
+            history = []
+        history.append({'t': now_ts, 'pps': pps, 'bps': bps, 'packets': packets, 'bytes': bytes_count})
+        history = history[-120:]
+        payload['runtime_history'] = history
+        stats_store[rule['id']] = {'last': {'t': now_ts, 'packets': packets, 'bytes': bytes_count}, 'history': history}
+        enriched_rules.append(payload)
+    _write_firewall_stats_file(stats_store)
     return {
         'active': active,
-        'rules': rules,
-        'ruleset': '\n'.join(ruleset_text_parts),
+        'rules': enriched_rules,
+        'ruleset': ruleset_text,
         'family': FIREWALL_TABLE_FAMILY,
         'tables': ['filter', 'nat', 'raw', 'mangle'],
     }
+
+
+def _normalize_set_item(payload, set_kind):
+    if not isinstance(payload, dict):
+        raise ValueError('set payload must be object')
+    name = normalize_config_value(payload.get('name'))
+    if name is None or not re.fullmatch(r'[A-Za-z0-9_.-]+', str(name)):
+        raise ValueError('set name is invalid')
+    elems = payload.get('elements') or []
+    if not isinstance(elems, list):
+        raise ValueError('elements must be array')
+    enabled = payload.get('enabled', True)
+    if not isinstance(enabled, bool):
+        enabled = str(enabled).lower() in ('1', 'true', 'yes', 'on')
+    comment = normalize_config_value(payload.get('comment'))
+    if comment is not None:
+        comment = str(comment).replace('"', "'")
+    out = []
+    for raw in elems:
+        val = normalize_config_value(raw)
+        if val is None:
+            continue
+        s = str(val).strip()
+        if set_kind == 'addr':
+            ipaddress.ip_network(s, strict=False)
+        elif set_kind == 'port':
+            if not re.fullmatch(r'[0-9]{1,5}', s):
+                raise ValueError('port element must be integer')
+            p = int(s)
+            if p < 1 or p > 65535:
+                raise ValueError('port element must be 1..65535')
+        elif set_kind == 'iface':
+            if not re.fullmatch(r'[A-Za-z0-9_.:-]+', s):
+                raise ValueError('iface element contains invalid characters')
+        out.append(s)
+    return {'id': str(payload.get('id') or uuid.uuid4().hex), 'name': str(name), 'elements': sorted(set(out)), 'enabled': enabled, 'comment': comment}
+
+
+def list_firewall_sets_service():
+    return _read_firewall_sets_file()
+
+
+def upsert_firewall_set_service(set_kind, payload):
+    if set_kind not in ('addr', 'port', 'iface'):
+        raise ValueError('set kind must be addr|port|iface')
+    data = _read_firewall_sets_file()
+    item = _normalize_set_item(payload, set_kind)
+    out = []
+    replaced = False
+    for row in data[set_kind]:
+        if row.get('id') == item['id']:
+            out.append(item)
+            replaced = True
+        else:
+            out.append(row)
+    if not replaced:
+        out.append(item)
+    # Keep a single logical namespace for set names across addr/port/iface.
+    existing_other_names = []
+    for kind in ('addr', 'port', 'iface'):
+        if kind == set_kind:
+            continue
+        existing_other_names.extend([str(x.get('name') or '') for x in data.get(kind, [])])
+    names = [x['name'] for x in out]
+    if len(names) != len(set(names)):
+        raise ValueError('set names must be unique within tab')
+    if item['name'] in existing_other_names:
+        raise ValueError('set name must be globally unique across addr/port/iface')
+    data[set_kind] = out
+    _write_firewall_sets_file(data)
+    apply_firewall_rules()
+    return item
+
+
+def delete_firewall_set_service(set_kind, set_id):
+    if set_kind not in ('addr', 'port', 'iface'):
+        raise ValueError('set kind must be addr|port|iface')
+    data = _read_firewall_sets_file()
+    existing = next((x for x in data[set_kind] if x.get('id') == str(set_id)), None)
+    if not existing:
+        raise LookupError('set not found')
+    data[set_kind] = [x for x in data[set_kind] if x.get('id') != str(set_id)]
+    _write_firewall_sets_file(data)
+    apply_firewall_rules()
+    return existing
+
+
+def _normalize_map_item(payload, map_kind):
+    if not isinstance(payload, dict):
+        raise ValueError('map payload must be object')
+    name = normalize_config_value(payload.get('name'))
+    if name is None or not re.fullmatch(r'[A-Za-z0-9_.-]+', str(name)):
+        raise ValueError('map name is invalid')
+    entries = payload.get('entries') or []
+    if not isinstance(entries, list):
+        raise ValueError('entries must be array')
+    enabled = payload.get('enabled', True)
+    if not isinstance(enabled, bool):
+        enabled = str(enabled).lower() in ('1', 'true', 'yes', 'on')
+    comment = normalize_config_value(payload.get('comment'))
+    if comment is not None:
+        comment = str(comment).replace('"', "'")
+    normalized_entries = []
+    for raw in entries:
+        val = normalize_config_value(raw)
+        if val is None:
+            continue
+        s = str(val).strip()
+        if ':' not in s:
+            raise ValueError('entry must be "key:value"')
+        if len(s) > 200:
+            raise ValueError('entry is too long')
+        normalized_entries.append(s)
+    return {
+        'id': str(payload.get('id') or uuid.uuid4().hex),
+        'name': str(name),
+        'entries': sorted(set(normalized_entries)),
+        'enabled': enabled,
+        'comment': comment,
+        'kind': map_kind,
+    }
+
+
+def list_firewall_maps_service():
+    return _read_firewall_maps_file()
+
+
+def upsert_firewall_map_service(map_kind, payload):
+    if map_kind not in ('map', 'vmap'):
+        raise ValueError('map kind must be map|vmap')
+    data = _read_firewall_maps_file()
+    item = _normalize_map_item(payload, map_kind)
+    out = []
+    replaced = False
+    for row in data[map_kind]:
+        if row.get('id') == item['id']:
+            out.append(item)
+            replaced = True
+        else:
+            out.append(row)
+    if not replaced:
+        out.append(item)
+    other = 'vmap' if map_kind == 'map' else 'map'
+    names = [x['name'] for x in out]
+    if len(names) != len(set(names)):
+        raise ValueError('map names must be unique within tab')
+    if item['name'] in [str(x.get('name') or '') for x in data.get(other, [])]:
+        raise ValueError('map name must be globally unique across map/vmap')
+    data[map_kind] = out
+    _write_firewall_maps_file(data)
+    apply_firewall_rules()
+    return item
+
+
+def delete_firewall_map_service(map_kind, map_id):
+    if map_kind not in ('map', 'vmap'):
+        raise ValueError('map kind must be map|vmap')
+    data = _read_firewall_maps_file()
+    existing = next((x for x in data[map_kind] if x.get('id') == str(map_id)), None)
+    if not existing:
+        raise LookupError('map not found')
+    data[map_kind] = [x for x in data[map_kind] if x.get('id') != str(map_id)]
+    _write_firewall_maps_file(data)
+    apply_firewall_rules()
+    return existing
+
+
+def list_firewall_tables_service():
+    data = _read_firewall_tables_file()
+    builtin = []
+    for table_name, chains in FIREWALL_DEFAULT_TABLE_DEFS.items():
+        for chain in chains:
+            chain_name, chain_type, hook_name, priority, device, policy = chain
+            builtin.append({
+                'id': f'builtin:{table_name}:{chain_name}:{hook_name}:{priority}',
+                'family': FIREWALL_TABLE_FAMILY,
+                'table_name': table_name,
+                'chain_name': chain_name,
+                'chain_type': chain_type,
+                'hook': hook_name,
+                'device': device,
+                'priority': int(priority),
+                'policy': policy,
+                'builtin': True,
+                'enabled': True,
+            })
+    custom = []
+    for row in data.get('tables', []):
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        item['builtin'] = False
+        custom.append(item)
+    return {'builtin': builtin, 'custom': custom}
+
+
+def _normalize_firewall_table_item(payload):
+    if not isinstance(payload, dict):
+        raise ValueError('table payload must be object')
+    family = (normalize_config_value(payload.get('family')) or FIREWALL_TABLE_FAMILY).lower()
+    if family != FIREWALL_TABLE_FAMILY:
+        raise ValueError(f'only family "{FIREWALL_TABLE_FAMILY}" is supported')
+    table_name = normalize_config_value(payload.get('table_name'))
+    chain_name = normalize_config_value(payload.get('chain_name'))
+    chain_type = (normalize_config_value(payload.get('chain_type')) or 'filter').lower()
+    hook_name = (normalize_config_value(payload.get('hook')) or 'input').lower()
+    device = normalize_config_value(payload.get('device'))
+    policy = (normalize_config_value(payload.get('policy')) or 'accept').lower()
+    try:
+        priority = int(payload.get('priority'))
+    except Exception:
+        raise ValueError('priority must be integer')
+    if table_name is None or not re.fullmatch(r'[a-zA-Z0-9_.-]+', str(table_name)):
+        raise ValueError('table_name is invalid')
+    if chain_name is None or not re.fullmatch(r'[a-zA-Z0-9_.-]+', str(chain_name)):
+        raise ValueError('chain_name is invalid')
+    if chain_type not in ('filter', 'nat', 'route'):
+        raise ValueError('chain_type must be filter|nat|route')
+    if hook_name not in ('prerouting', 'input', 'forward', 'output', 'postrouting', 'ingress'):
+        raise ValueError('hook is invalid')
+    if policy not in ('accept', 'drop'):
+        raise ValueError('policy must be accept|drop')
+    if priority in FIREWALL_RESERVED_PRIORITIES:
+        raise ValueError('priority is reserved by built-in tables')
+    return {
+        'id': str(payload.get('id') or uuid.uuid4().hex),
+        'family': family,
+        'table_name': str(table_name).lower(),
+        'chain_name': str(chain_name),
+        'chain_type': chain_type,
+        'hook': hook_name,
+        'device': (str(device) if device else None),
+        'priority': priority,
+        'policy': policy,
+        'enabled': True,
+    }
+
+
+def upsert_firewall_table_service(payload):
+    data = _read_firewall_tables_file()
+    item = _normalize_firewall_table_item(payload)
+    if item['table_name'] in FIREWALL_DEFAULT_TABLE_DEFS:
+        raise ValueError('built-in table names are reserved')
+    out = []
+    replaced = False
+    for row in data['tables']:
+        if row.get('id') == item['id']:
+            out.append(item)
+            replaced = True
+        else:
+            out.append(row)
+    if not replaced:
+        out.append(item)
+    # unique table+chain+hook+priority per custom table set
+    seen = set()
+    for row in out:
+        sig = (row.get('table_name'), row.get('chain_name'), row.get('hook'), int(row.get('priority')))
+        if sig in seen:
+            raise ValueError('duplicate chain/hook/priority in same table')
+        seen.add(sig)
+    data['tables'] = out
+    _write_firewall_tables_file(data)
+    managed = _read_managed_tables_file().get('tables', [])
+    if item['table_name'] not in managed:
+        managed.append(item['table_name'])
+    _write_managed_tables_file({'tables': managed})
+    apply_firewall_rules()
+    return item
+
+
+def delete_firewall_table_service(table_id):
+    data = _read_firewall_tables_file()
+    existing = next((x for x in data['tables'] if x.get('id') == str(table_id)), None)
+    if not existing:
+        raise LookupError('table not found')
+    data['tables'] = [x for x in data['tables'] if x.get('id') != str(table_id)]
+    _write_firewall_tables_file(data)
+    apply_firewall_rules()
+    table_name = normalize_config_value(existing.get('table_name'))
+    if table_name:
+        res = subprocess.run(
+            ['nft', 'delete', 'table', FIREWALL_TABLE_FAMILY, str(table_name)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if res.returncode != 0:
+            stderr = (res.stderr or b'').decode('utf-8', 'ignore').strip()
+            raise RuntimeError(f'failed to delete runtime nft table "{table_name}": {stderr or res.returncode}')
+        managed = _read_managed_tables_file().get('tables', [])
+        managed = [x for x in managed if x != str(table_name).lower()]
+        _write_managed_tables_file({'tables': managed})
+    return existing
+
+
+def get_firewall_schema_service():
+    return FIREWALL_SCHEMA
 
 
 def _random_h_value():
@@ -1036,7 +1925,7 @@ def apply_interface_runtime(wg_interface, port_number, wg_ip_addr, wg_ip_cidr, p
     key_file_path = create_temp_key_file(private_key)
     try:
         subprocess.run(['ip', 'link', 'add', wg_interface, 'type', 'amneziawg'], check=True)
-        subprocess.run(['ip', 'address', 'add', f'{wg_ip_addr}/{wg_ip_cidr}', 'dev', wg_interface], check=True)
+        subprocess.run(['ip', 'address', 'replace', f'{wg_ip_addr}/{wg_ip_cidr}', 'dev', wg_interface], check=True)
         subprocess.run(['ip', 'link', 'set', 'up', 'dev', wg_interface], check=True)
         subprocess.run(
             build_awg_set_command(wg_interface, port_number, key_file_path, awg_version, awg_params),
@@ -1842,7 +2731,7 @@ def sync(_type):
                 name = line.split(':', 2)[1].strip()
                 if '@' in name:
                     name = name.split('@', 1)[0]
-                if name.startswith('wg') and len(name) > 2 and name[2:].isdigit():
+                if (name.startswith('wg') and len(name) > 2 and name[2:].isdigit()) or (name.startswith('awg') and len(name) > 3 and name[3:].isdigit()):
                     interfaces.append(name)
 
             if not interfaces:
@@ -1859,8 +2748,20 @@ def sync(_type):
         id, wg_interface, awg_version, port_number, wg_ip_addr, wg_ip_cidr, private_key, pubkey, srv_ip, srv_dns, Jc, Jmin, Jmax, S1, S2, S3, S4, H1, H2, H3, H4, I1, I2, I3, I4, I5 = row
         print("Интерфейс успешно добавлен в базу данных")
         # Шаг 1: Создание интерфейса через ip link
-        subprocess.run(['ip', 'link', 'add', wg_interface, 'type', 'amneziawg'], check=True)
-        subprocess.run(['ip', 'address', 'add', f'{wg_ip_addr}/{wg_ip_cidr}', 'dev', wg_interface], check=True)
+        exists = subprocess.run(['ip', 'link', 'show', wg_interface], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+        if not exists:
+            add_res = subprocess.run(
+                ['ip', 'link', 'add', wg_interface, 'type', 'amneziawg'],
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            if add_res.returncode != 0:
+                err = (add_res.stderr or '').strip()
+                if 'File exists' not in err:
+                    raise subprocess.CalledProcessError(add_res.returncode, add_res.args, add_res.stdout, add_res.stderr)
+        subprocess.run(['ip', 'address', 'replace', f'{wg_ip_addr}/{wg_ip_cidr}', 'dev', wg_interface], check=True)
         subprocess.run(['ip', 'link', 'set', 'up', 'dev', wg_interface], check=True)
 
         # Шаг 2: Создание файла ключа
@@ -1899,6 +2800,13 @@ def sync(_type):
         # Добавление клиента в конфигурацию WireGuard через утилиту awg
         subprocess.run(['awg', 'set', client_wg_interface, 'peer', client_pubkey, 'allowed-ips', client_ip + '/32'], check=True)
         print(f"Клиент {name} успешно добавлен в конфигурацию WireGuard")
+
+    # Restore firewall runtime state (rules/sets/maps/custom tables) from persisted files.
+    try:
+        apply_firewall_rules()
+        print("Firewall runtime restored from persisted manager state")
+    except Exception as e:
+        print(f"Firewall restore error: {e}")
 
 
 
