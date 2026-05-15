@@ -143,7 +143,8 @@ function PlannedField(props: { label: string; placeholder: string }) {
   )
 }
 
-type FirewallMainTab = 'filter' | 'nat' | 'raw' | 'mangle' | 'collections' | 'tables'
+type FirewallPolicyTab = 'filter' | 'nat' | 'raw' | 'mangle'
+type FirewallSectionTab = 'policy' | 'collections' | 'table_builder'
 type CollectionKind = 'addr' | 'port' | 'iface' | 'map' | 'vmap'
 
 export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
@@ -152,7 +153,8 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [error, setError] = React.useState<string | null>(null)
   const [form, setForm] = React.useState<Partial<FirewallRule>>(defaultRule)
   const [isBusy, setIsBusy] = React.useState(false)
-  const [activeTable, setActiveTable] = React.useState<FirewallMainTab>('filter')
+  const [activeSection, setActiveSection] = React.useState<FirewallSectionTab>('policy')
+  const [activePolicyTab, setActivePolicyTab] = React.useState<FirewallPolicyTab>('filter')
   const [selectedRuleId, setSelectedRuleId] = React.useState<string | null>(null)
   const [addOpen, setAddOpen] = React.useState(false)
   const [editingRuleId, setEditingRuleId] = React.useState<string | null>(null)
@@ -223,8 +225,8 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     raw: schema?.tables?.raw?.chains || ['prerouting', 'output'],
     mangle: schema?.tables?.mangle?.chains || ['prerouting', 'input', 'forward', 'output', 'postrouting'],
   }
-  const tabToRuleTable = (tab: FirewallMainTab): 'filter' | 'nat' | 'raw' | 'mangle' => (tab === 'collections' || tab === 'tables') ? 'filter' : tab
-  const activeFormTable = (form.table || tabToRuleTable(activeTable)) as 'filter' | 'nat' | 'raw' | 'mangle'
+  const tabToRuleTable = (tab: FirewallPolicyTab): 'filter' | 'nat' | 'raw' | 'mangle' => tab
+  const activeFormTable = (form.table || tabToRuleTable(activePolicyTab)) as 'filter' | 'nat' | 'raw' | 'mangle'
   const tableSupports = new Set(schema?.tables?.[activeFormTable]?.supports || [])
   const hasSupport = (key: string) => tableSupports.has(key)
   const effectiveChain = (form.chain || chainOptionsByTable[activeFormTable]?.[0] || 'input') as FirewallRule['chain']
@@ -306,11 +308,11 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
 
   React.useEffect(() => {
     if (addOpen && !editingRuleId) {
-      const ruleTable = tabToRuleTable(activeTable)
+      const ruleTable = tabToRuleTable(activePolicyTab)
       setForm((p) => ({ ...p, table: ruleTable, chain: chainOptionsByTable[ruleTable][0] }))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTable, addOpen, editingRuleId])
+  }, [activePolicyTab, addOpen, editingRuleId])
 
   React.useEffect(() => {
     if (!editingRuleId) return
@@ -328,18 +330,18 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
 
   React.useEffect(() => {
     if (!addOpen) return
-    if ((form.table || activeTable) !== 'nat' && form.nat_type) {
+    if ((form.table || activePolicyTab) !== 'nat' && form.nat_type) {
       setForm((p) => ({ ...p, nat_type: null, to_addr: null, to_port: null }))
       return
     }
-    if ((form.table || activeTable) === 'nat' && form.nat_type) {
+    if ((form.table || activePolicyTab) === 'nat' && form.nat_type) {
       const chain = form.chain || 'prerouting'
       const allowedNat = schema?.tables?.nat?.nat_types_by_chain?.[chain] || ['dnat', 'redirect']
       if (!allowedNat.includes(form.nat_type)) {
         setForm((p) => ({ ...p, nat_type: null, to_addr: null, to_port: null }))
       }
     }
-  }, [addOpen, form.table, form.chain, form.nat_type, activeTable, schema])
+  }, [addOpen, form.table, form.chain, form.nat_type, activePolicyTab, schema])
 
   async function onSave(event: React.FormEvent) {
     event.preventDefault()
@@ -405,7 +407,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   function openCreateWindow() {
     setEditingRuleId(null)
     setRuleEditorTab('base')
-    const ruleTable = tabToRuleTable(activeTable)
+    const ruleTable = tabToRuleTable(activePolicyTab)
     setForm({ ...defaultRule, table: ruleTable, chain: chainOptionsByTable[ruleTable][0] })
     setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 760) / 2) - 60) })
     setAddOpen(true)
@@ -500,7 +502,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     setAddOpen(true)
   }
 
-  const activeRuleTable = tabToRuleTable(activeTable)
+  const activeRuleTable = tabToRuleTable(activePolicyTab)
   const visibleRules = (state?.rules || []).filter((r) => r.table === activeRuleTable)
   const currentRulePackets = Number(form.runtime_packets || 0)
   const currentRuleBytes = Number(form.runtime_bytes || 0)
@@ -552,8 +554,9 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     }
   }
 
-  const isCollectionsTab = activeTable === 'collections'
-  const isTablesTab = activeTable === 'tables'
+  const isCollectionsTab = activeSection === 'collections'
+  const isTablesTab = activeSection === 'table_builder'
+  const customTableNames = Array.from(new Set(tablesState.custom.map((x) => x.table_name))).sort((a, b) => a.localeCompare(b))
   const allSetItems: Array<FirewallSetItem & { kind: 'addr' | 'port' | 'iface' }> = [
     ...setsState.addr.map((x) => ({ ...x, kind: 'addr' as const })),
     ...setsState.port.map((x) => ({ ...x, kind: 'port' as const })),
@@ -696,16 +699,63 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
 
   async function onSaveTable(): Promise<boolean> {
     setError(null)
+    const family = newTableFamily.trim().toLowerCase()
+    const tableName = newTableName.trim()
+    const chainName = newChainName.trim()
+    const hook = newHook.trim().toLowerCase()
+    const hookValue = newHook
+    const priorityNum = Number(newPriority)
+    const device = newDevice.trim() || null
+
+    if (!tableName || !chainName) {
+      setError('Table name and chain name are required.')
+      return false
+    }
+    if (!Number.isFinite(priorityNum) || !Number.isInteger(priorityNum)) {
+      setError('Priority must be an integer.')
+      return false
+    }
+    if (!/^[A-Za-z0-9_]+$/.test(tableName)) {
+      setError('Table name allows only letters, numbers, and underscore.')
+      return false
+    }
+    if (!/^[A-Za-z0-9_]+$/.test(chainName)) {
+      setError('Chain name allows only letters, numbers, and underscore.')
+      return false
+    }
+
+    const allRows = [...tablesState.builtin, ...tablesState.custom]
+    const duplicateChainInTable = allRows.find((row) =>
+      row.family.toLowerCase() === family
+      && row.table_name === tableName
+      && row.chain_name === chainName
+    )
+    if (duplicateChainInTable) {
+      setError(`Chain "${chainName}" already exists in table "${tableName}".`)
+      return false
+    }
+
+    const hookPriorityConflict = allRows.find((row) =>
+      row.family.toLowerCase() === family
+      && String(row.hook || '').toLowerCase() === hook
+      && Number(row.priority) === priorityNum
+    )
+    if (hookPriorityConflict) {
+      const origin = hookPriorityConflict.builtin ? 'built-in' : 'custom'
+      setError(`Hook/priority conflict with ${origin} chain ${hookPriorityConflict.table_name}/${hookPriorityConflict.chain_name} (${hook}, ${priorityNum}).`)
+      return false
+    }
+
     setIsBusy(true)
     try {
       await upsertFirewallTable(props.auth, {
-        family: newTableFamily,
-        table_name: newTableName.trim(),
-        chain_name: newChainName.trim(),
+        family,
+        table_name: tableName,
+        chain_name: chainName,
         chain_type: newChainType,
-        hook: newHook,
-        device: newDevice.trim() || null,
-        priority: Number(newPriority),
+        hook: hookValue,
+        device,
+        priority: priorityNum,
         policy: newPolicy,
       })
       await refresh()
@@ -740,16 +790,43 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
       {error ? <div className='rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive'>{error}</div> : null}
       <Card className='flex min-h-0 w-full flex-1 flex-col text-xs'>
         <CardContent className='flex min-h-0 flex-1 flex-col gap-2 px-4 pt-0'>
-          <Tabs value={activeTable} onValueChange={(v) => setActiveTable(v as FirewallMainTab)}>
+          <Tabs value={activeSection} onValueChange={(v) => setActiveSection(v as FirewallSectionTab)}>
             <TabsList className='h-9'>
-              <TabsTrigger className='px-4 text-sm' value='filter'>filter</TabsTrigger>
-              <TabsTrigger className='px-4 text-sm' value='nat'>nat</TabsTrigger>
-              <TabsTrigger className='px-4 text-sm' value='raw'>raw</TabsTrigger>
-              <TabsTrigger className='px-4 text-sm' value='mangle'>mangle</TabsTrigger>
+              <TabsTrigger className='px-4 text-sm' value='policy'>policy</TabsTrigger>
               <TabsTrigger className='px-4 text-sm' value='collections'>collections</TabsTrigger>
-              <TabsTrigger className='px-4 text-sm' value='tables'>tables</TabsTrigger>
+              <TabsTrigger className='px-4 text-sm' value='table_builder'>table builder</TabsTrigger>
             </TabsList>
           </Tabs>
+          {!isCollectionsTab && !isTablesTab ? (
+            <div className='flex flex-wrap items-center gap-2'>
+              <Tabs value={activePolicyTab} onValueChange={(v) => setActivePolicyTab(v as FirewallPolicyTab)}>
+                <TabsList className='h-9'>
+                  <TabsTrigger className='px-4 text-sm' value='filter'>filter</TabsTrigger>
+                  <TabsTrigger className='px-4 text-sm' value='nat'>nat</TabsTrigger>
+                  <TabsTrigger className='px-4 text-sm' value='raw'>raw</TabsTrigger>
+                  <TabsTrigger className='px-4 text-sm' value='mangle'>mangle</TabsTrigger>
+                </TabsList>
+              </Tabs>
+              {customTableNames.length ? (
+                <div className='flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-2 py-1'>
+                  {customTableNames.map((name) => (
+                    <button
+                      key={name}
+                      type='button'
+                      className='rounded-md border border-amber-400 bg-amber-100 px-2 py-1 text-[11px] font-medium text-amber-900 hover:bg-amber-200'
+                      onClick={() => {
+                        const row = tablesState.custom.find((x) => x.table_name === name)
+                        if (row) setSelectedTableId(row.id)
+                        setActiveSection('table_builder')
+                      }}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           {!isCollectionsTab && !isTablesTab ? <div className='flex gap-2'>
             <Button size='sm' onClick={openCreateWindow} disabled={isBusy}><Plus />Add</Button>
             <Button size='sm' variant='destructive' disabled={isBusy || !selectedRuleId} onClick={() => { const rule = visibleRules.find((r) => r.id === selectedRuleId); if (!rule) return; void onDelete(rule) }}>Del</Button>

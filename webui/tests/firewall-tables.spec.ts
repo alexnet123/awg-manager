@@ -22,7 +22,7 @@ async function listTablesViaApi(page: Page) {
 test('firewall tables: add and delete custom table chain', async ({ page }) => {
   await login(page)
   await openFirewall(page)
-  await page.getByRole('tab', { name: 'tables' }).click()
+  await page.getByRole('tab', { name: 'table builder' }).click()
 
   const tableName = unique('pw_tbl')
   const tablePanel = page.locator('div.rounded-xl.border').first()
@@ -44,8 +44,9 @@ test('firewall tables: add and delete custom table chain', async ({ page }) => {
   page.once('dialog', (d) => d.accept())
   await tablePanel.locator('button').filter({ hasText: 'Del' }).first().click()
 
+  await page.getByRole('tab', { name: 'policy' }).click()
   await page.getByRole('tab', { name: 'filter' }).click()
-  await page.getByRole('tab', { name: 'tables' }).click()
+  await page.getByRole('tab', { name: 'table builder' }).click()
   await expect(page.locator('tbody tr').filter({ hasText: tableName })).toHaveCount(0)
 
   const afterDelete = await listTablesViaApi(page)
