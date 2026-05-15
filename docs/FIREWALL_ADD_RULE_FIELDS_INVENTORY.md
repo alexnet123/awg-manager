@@ -19,25 +19,29 @@ Last updated from UI source: `webui/src/pages/firewall.tsx`
 - Input interface (`in_interface`): `implemented+tested`
 - Output interface (`out_interface`): `implemented+tested`
 - Connection state (`ct_state`): `implemented+tested`
-- Connection mark match: `planned`
-- Packet mark match: `planned`
+- Connection mark match: `implemented+tested`
+- Packet mark match: `implemented+tested`
 - Rate limit (`limit_rate`): `implemented+tested`
-- User ID: `planned`
-- Hour: `planned`
-- DSCP: `planned`
+- User ID: `implemented+partially-tested`
+- Hour: `implemented+partially-tested`
+- DSCP: `implemented+partially-tested`
 
 ## Advanced Tab
 - fib expression (`fib_expr`): `implemented+tested`
 - socket expression (`socket_expr`): `implemented+tested`
 - rt expression (`rt_expr`): `implemented+tested`
 - exthdr expression (`exthdr_expr`): `implemented+tested`
-- raw expression (free-form): `planned`
-- nftrace checkbox: `planned`
-- notrack advanced checkbox: `planned`
-- tcp flags / icmp / icmpv6 detailed matchers: `planned`
-- meta extended block (`meta length/priority/pkttype/cpu/...`): `planned`
-- conntrack extended block (`ct direction/status/labels/...`): `planned`
-- l2 fields (`vlan`, `ether src/dst/type`): `planned`
+- fib check (`fib_check`): `implemented+partially-tested`
+- socket match (`socket_match`): `implemented+partially-tested`
+- rt nexthop (`rt_nexthop`): `implemented+partially-tested`
+- ipv6 extension headers (`ipv6_exthdrs`): `implemented+partially-tested`
+- raw expression (free-form): `implemented+tested (raw table only)`
+- nftrace checkbox: `implemented+tested (raw table only)`
+- notrack advanced checkbox: `implemented+tested (raw table only)`
+- tcp flags / icmp / icmpv6 detailed matchers: `implemented+partially-tested` (`tcp_flags`, `icmp_type`, `icmp_code`, `icmpv6_type`, `icmpv6_code` done)
+- meta extended block (`meta length/priority/pkttype/cpu/...`): `implemented+partially-tested` (`meta_length`, `meta_priority`, `meta_cpu`, `meta_pkttype`, `meta_iiftype`, `meta_oiftype`, `meta_iifgroup`, `meta_oifgroup` done)
+- conntrack extended block (`ct direction/status/labels/...`): `implemented+partially-tested` (`ct_status`, `ct_direction`, `ct_expiration`, `ct_helper_match`, `ct_label`, `ct_event`, `ct original/reply saddr/daddr` done)
+- l2 fields (`vlan`, `ether src/dst/type`): `implemented+partially-tested`
 
 ## Action Tab
 - Action verdict selector: `implemented+tested`
@@ -67,6 +71,19 @@ Last updated from UI source: `webui/src/pages/firewall.tsx`
 - `firewall-add-rule-stats-visual.spec.ts`: visual statistics UX (chart render, series switch, counter warning visibility)
 - `firewall-add-rule-toggle-semantics.spec.ts`: strict `+/-` semantics (field enable, value set, disable, payload omission on save)
 - `firewall-add-rule-nft-equivalence.spec.ts`: API→runtime equivalence via `/firewall.ruleset` (`filter`, `mangle`, `nat`, and disabled-rule omission)
+- `firewall-add-rule-block-a.spec.ts`: raw block fields (`raw_expr`, `nftrace`, `notrack`) runtime mapping and non-raw rejection
+- `firewall-add-rule-block-b.spec.ts`: advanced matcher subset (`tcp_flags`, `icmp*`, `meta_length`, `ct_status`) runtime mapping and proto-validation rejects
+- `firewall-add-rule-block-b2.spec.ts`: meta/ct extended subset (`meta_priority`, `meta_cpu`, `ct_direction`, `ct_expiration`) runtime mapping + negative validation
+- `firewall-add-rule-block-b3.spec.ts`: meta extras subset (`meta_pkttype`, `meta_iifgroup`, `meta_oifgroup`) runtime mapping + negative validation
+- `firewall-add-rule-block-b4.spec.ts`: meta type subset (`meta_iiftype`, `meta_oiftype`) runtime mapping + negative validation
+- `firewall-add-rule-block-b5.spec.ts`: conntrack helper match subset (`ct_helper_match`) runtime mapping + negative validation
+- `firewall-add-rule-block-b6.spec.ts`: mark match subset (`mark_match`, `ct_mark_match`) runtime mapping + negative validation
+- `firewall-add-rule-block-b7.spec.ts`: conntrack subset (`ct_label`, `ct_event`) runtime mapping + negative validation
+- `firewall-add-rule-block-b8.spec.ts`: L2 subset (`vlan_id`, `ether_src/dst`, `ether_type`) runtime mapping + negative validation
+- `firewall-add-rule-block-b9.spec.ts`: conntrack tuple address subset (`ct_original_saddr/daddr`, `ct_reply_saddr/daddr`) runtime mapping + negative validation
+- `firewall-add-rule-block-b10.spec.ts`: base matcher (`dscp`) runtime mapping + negative validation
+- `firewall-add-rule-block-b11.spec.ts`: base matchers (`user_id`, `hour`) runtime mapping + negative validation
+- `firewall-add-rule-block-b12.spec.ts`: advanced matchers (`fib_check`, `socket_match`, `rt_nexthop`, `ipv6_exthdrs`) runtime mapping + negative validation
 - `firewall-rules.spec.ts`: smoke flow for create/basic actions
 - `firewall-maps.spec.ts`: map lifecycle (outside Add Rule modal)
 - `firewall-tables.spec.ts`: table-chain lifecycle (outside Add Rule modal)

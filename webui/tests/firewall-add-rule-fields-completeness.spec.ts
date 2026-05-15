@@ -43,20 +43,24 @@ test('add-rule modal supports all firewall table tabs without crash', async ({ p
   }
 })
 
-test('add-rule planned fields remain explicitly non-editable', async ({ page }) => {
+test('add-rule key advanced toggles are present and context-aware', async ({ page }) => {
   await login(page)
   await openFirewall(page)
   const modal = await openAddRuleModal(page)
 
-  // Base planned fields
-  await expect(modal.getByText('Connection mark')).toBeVisible()
-  await expect(modal.getByText('Packet mark')).toBeVisible()
+  // Base mark match fields are now editable
+  const connMark = modal.locator("label:has-text('Connection mark')").first()
+  const pktMark = modal.locator("label:has-text('Packet mark')").first()
+  await expect(connMark).toBeVisible()
+  await expect(pktMark).toBeVisible()
+  await expect(connMark.locator('xpath=ancestor::div[contains(@class,"space-y-1.5")]').locator('button', { hasText: '+' }).first()).toBeVisible()
+  await expect(pktMark.locator('xpath=ancestor::div[contains(@class,"space-y-1.5")]').locator('button', { hasText: '+' }).first()).toBeVisible()
 
-  // Advanced planned raw expression block
+  // Advanced raw expression block
   await modal.getByRole('tab', { name: 'Advanced match' }).click()
   await expect(modal.getByText('Raw expression & debug')).toBeVisible()
   const rawExprLine = modal.locator("label:has-text('raw expression')").first()
   await expect(rawExprLine).toBeVisible()
   await expect(rawExprLine.locator('xpath=ancestor::div[2]').locator('button', { hasText: '+' }).first()).toBeVisible()
-  await expect(modal.getByText('nftrace (planned)')).toBeVisible()
+  await expect(modal.getByText('nftrace (raw table only)')).toBeVisible()
 })

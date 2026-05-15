@@ -40,6 +40,9 @@ export type FirewallRule = {
   dport?: string | null
   comment?: string | null
   ct_state?: 'established,related' | 'new' | 'invalid' | 'related' | 'established' | 'untracked' | null
+  user_id?: string | null
+  hour?: string | null
+  dscp?: string | null
   nat_type?: 'masquerade' | 'snat' | 'dnat' | 'redirect' | null
   target_chain?: string | null
   reject_type?: string | null
@@ -57,6 +60,41 @@ export type FirewallRule = {
   socket_expr?: string | null
   rt_expr?: string | null
   exthdr_expr?: string | null
+  raw_expr?: string | null
+  nftrace?: boolean
+  tcp_flags?: string | null
+  icmp_type?: string | null
+  icmp_code?: string | null
+  icmpv6_type?: string | null
+  icmpv6_code?: string | null
+  meta_length?: string | null
+  meta_priority?: string | null
+  meta_cpu?: string | null
+  meta_pkttype?: string | null
+  meta_iiftype?: string | null
+  meta_oiftype?: string | null
+  meta_iifgroup?: string | null
+  meta_oifgroup?: string | null
+  mark_match?: string | null
+  ct_mark_match?: string | null
+  ct_status?: string | null
+  ct_direction?: string | null
+  ct_expiration?: string | null
+  ct_helper_match?: string | null
+  ct_label?: string | null
+  ct_event?: string | null
+  ct_original_saddr?: string | null
+  ct_original_daddr?: string | null
+  ct_reply_saddr?: string | null
+  ct_reply_daddr?: string | null
+  fib_check?: string | null
+  socket_match?: string | null
+  rt_nexthop?: string | null
+  ipv6_exthdrs?: string | null
+  vlan_id?: string | null
+  ether_src?: string | null
+  ether_dst?: string | null
+  ether_type?: string | null
   ct_helper_set?: string | null
   ct_timeout_set?: string | null
   ct_expectation_set?: string | null

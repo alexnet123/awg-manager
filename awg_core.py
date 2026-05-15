@@ -86,7 +86,7 @@ FIREWALL_SCHEMA = {
         'filter': {
             'chains': ['input', 'forward', 'output'],
             'nat_types': [],
-            'supports': ['proto', 'src', 'dst', 'sport', 'dport', 'ct_state', 'in_interface', 'out_interface', 'action', 'counter', 'log', 'limit_rate'],
+            'supports': ['proto', 'src', 'dst', 'sport', 'dport', 'ct_state', 'in_interface', 'out_interface', 'action', 'counter', 'log', 'limit_rate', 'user_id', 'hour', 'dscp', 'tcp_flags', 'icmp_type', 'icmp_code', 'icmpv6_type', 'icmpv6_code', 'meta_length', 'meta_priority', 'meta_cpu', 'meta_pkttype', 'meta_iiftype', 'meta_oiftype', 'meta_iifgroup', 'meta_oifgroup', 'mark_match', 'ct_mark_match', 'ct_status', 'ct_direction', 'ct_expiration', 'ct_helper_match', 'ct_label', 'ct_event', 'ct_original_saddr', 'ct_original_daddr', 'ct_reply_saddr', 'ct_reply_daddr', 'fib_check', 'socket_match', 'rt_nexthop', 'ipv6_exthdrs', 'vlan_id', 'ether_src', 'ether_dst', 'ether_type'],
         },
         'nat': {
             'chains': ['prerouting', 'input', 'output', 'postrouting'],
@@ -96,17 +96,17 @@ FIREWALL_SCHEMA = {
                 'output': ['dnat', 'redirect'],
                 'postrouting': ['snat', 'masquerade'],
             },
-            'supports': ['proto', 'src', 'dst', 'sport', 'dport', 'ct_state', 'in_interface', 'out_interface', 'action', 'counter', 'log', 'limit_rate', 'nat_type', 'to_addr', 'to_port', 'nat_random', 'nat_fully_random', 'nat_persistent'],
+            'supports': ['proto', 'src', 'dst', 'sport', 'dport', 'ct_state', 'in_interface', 'out_interface', 'action', 'counter', 'log', 'limit_rate', 'user_id', 'hour', 'dscp', 'nat_type', 'to_addr', 'to_port', 'nat_random', 'nat_fully_random', 'nat_persistent', 'tcp_flags', 'icmp_type', 'icmp_code', 'icmpv6_type', 'icmpv6_code', 'meta_length', 'meta_priority', 'meta_cpu', 'meta_pkttype', 'meta_iiftype', 'meta_oiftype', 'meta_iifgroup', 'meta_oifgroup', 'mark_match', 'ct_mark_match', 'ct_status', 'ct_direction', 'ct_expiration', 'ct_helper_match', 'ct_label', 'ct_event', 'ct_original_saddr', 'ct_original_daddr', 'ct_reply_saddr', 'ct_reply_daddr', 'fib_check', 'socket_match', 'rt_nexthop', 'ipv6_exthdrs', 'vlan_id', 'ether_src', 'ether_dst', 'ether_type'],
         },
         'raw': {
             'chains': ['prerouting', 'output'],
             'nat_types': [],
-            'supports': ['proto', 'src', 'dst', 'sport', 'dport', 'ct_state', 'in_interface', 'out_interface', 'action', 'counter', 'notrack'],
+            'supports': ['proto', 'src', 'dst', 'sport', 'dport', 'ct_state', 'in_interface', 'out_interface', 'action', 'counter', 'notrack', 'raw_expr', 'nftrace', 'user_id', 'hour', 'dscp', 'tcp_flags', 'icmp_type', 'icmp_code', 'icmpv6_type', 'icmpv6_code', 'meta_length', 'meta_priority', 'meta_cpu', 'meta_pkttype', 'meta_iiftype', 'meta_oiftype', 'meta_iifgroup', 'meta_oifgroup', 'mark_match', 'ct_mark_match', 'ct_status', 'ct_direction', 'ct_expiration', 'ct_helper_match', 'ct_label', 'ct_event', 'ct_original_saddr', 'ct_original_daddr', 'ct_reply_saddr', 'ct_reply_daddr', 'fib_check', 'socket_match', 'rt_nexthop', 'ipv6_exthdrs', 'vlan_id', 'ether_src', 'ether_dst', 'ether_type'],
         },
         'mangle': {
             'chains': ['prerouting', 'input', 'forward', 'output', 'postrouting'],
             'nat_types': [],
-            'supports': ['proto', 'src', 'dst', 'sport', 'dport', 'ct_state', 'in_interface', 'out_interface', 'action', 'counter', 'mark_set', 'ct_mark_set', 'log', 'limit_rate'],
+            'supports': ['proto', 'src', 'dst', 'sport', 'dport', 'ct_state', 'in_interface', 'out_interface', 'action', 'counter', 'mark_set', 'ct_mark_set', 'log', 'limit_rate', 'user_id', 'hour', 'dscp', 'tcp_flags', 'icmp_type', 'icmp_code', 'icmpv6_type', 'icmpv6_code', 'meta_length', 'meta_priority', 'meta_cpu', 'meta_pkttype', 'meta_iiftype', 'meta_oiftype', 'meta_iifgroup', 'meta_oifgroup', 'mark_match', 'ct_mark_match', 'ct_status', 'ct_direction', 'ct_expiration', 'ct_helper_match', 'ct_label', 'ct_event', 'ct_original_saddr', 'ct_original_daddr', 'ct_reply_saddr', 'ct_reply_daddr', 'fib_check', 'socket_match', 'rt_nexthop', 'ipv6_exthdrs', 'vlan_id', 'ether_src', 'ether_dst', 'ether_type'],
         },
     },
     'actions': ['accept', 'drop', 'reject', 'jump', 'goto', 'return'],
@@ -571,6 +571,9 @@ def _normalize_firewall_rule(payload):
     sport = normalize_config_value(payload.get('sport'))
     comment = normalize_config_value(payload.get('comment'))
     ct_state = normalize_config_value(payload.get('ct_state'))
+    user_id = normalize_config_value(payload.get('user_id'))
+    hour = normalize_config_value(payload.get('hour'))
+    dscp = normalize_config_value(payload.get('dscp'))
     nat_type = normalize_config_value(payload.get('nat_type'))
     target_chain = normalize_config_value(payload.get('target_chain'))
     reject_type = normalize_config_value(payload.get('reject_type'))
@@ -585,6 +588,41 @@ def _normalize_firewall_rule(payload):
     socket_expr = normalize_config_value(payload.get('socket_expr'))
     rt_expr = normalize_config_value(payload.get('rt_expr'))
     exthdr_expr = normalize_config_value(payload.get('exthdr_expr'))
+    raw_expr = normalize_config_value(payload.get('raw_expr'))
+    nftrace = payload.get('nftrace', False)
+    tcp_flags = normalize_config_value(payload.get('tcp_flags'))
+    icmp_type = normalize_config_value(payload.get('icmp_type'))
+    icmp_code = normalize_config_value(payload.get('icmp_code'))
+    icmpv6_type = normalize_config_value(payload.get('icmpv6_type'))
+    icmpv6_code = normalize_config_value(payload.get('icmpv6_code'))
+    meta_length = normalize_config_value(payload.get('meta_length'))
+    meta_priority = normalize_config_value(payload.get('meta_priority'))
+    meta_cpu = normalize_config_value(payload.get('meta_cpu'))
+    meta_pkttype = normalize_config_value(payload.get('meta_pkttype'))
+    meta_iiftype = normalize_config_value(payload.get('meta_iiftype'))
+    meta_oiftype = normalize_config_value(payload.get('meta_oiftype'))
+    meta_iifgroup = normalize_config_value(payload.get('meta_iifgroup'))
+    meta_oifgroup = normalize_config_value(payload.get('meta_oifgroup'))
+    mark_match = normalize_config_value(payload.get('mark_match'))
+    ct_mark_match = normalize_config_value(payload.get('ct_mark_match'))
+    ct_status = normalize_config_value(payload.get('ct_status'))
+    ct_direction = normalize_config_value(payload.get('ct_direction'))
+    ct_expiration = normalize_config_value(payload.get('ct_expiration'))
+    ct_helper_match = normalize_config_value(payload.get('ct_helper_match'))
+    ct_label = normalize_config_value(payload.get('ct_label'))
+    ct_event = normalize_config_value(payload.get('ct_event'))
+    ct_original_saddr = normalize_config_value(payload.get('ct_original_saddr'))
+    ct_original_daddr = normalize_config_value(payload.get('ct_original_daddr'))
+    ct_reply_saddr = normalize_config_value(payload.get('ct_reply_saddr'))
+    ct_reply_daddr = normalize_config_value(payload.get('ct_reply_daddr'))
+    fib_check = normalize_config_value(payload.get('fib_check'))
+    socket_match = normalize_config_value(payload.get('socket_match'))
+    rt_nexthop = normalize_config_value(payload.get('rt_nexthop'))
+    ipv6_exthdrs = normalize_config_value(payload.get('ipv6_exthdrs'))
+    vlan_id = normalize_config_value(payload.get('vlan_id'))
+    ether_src = normalize_config_value(payload.get('ether_src'))
+    ether_dst = normalize_config_value(payload.get('ether_dst'))
+    ether_type = normalize_config_value(payload.get('ether_type'))
     ct_helper_set = normalize_config_value(payload.get('ct_helper_set'))
     ct_timeout_set = normalize_config_value(payload.get('ct_timeout_set'))
     ct_expectation_set = normalize_config_value(payload.get('ct_expectation_set'))
@@ -637,6 +675,12 @@ def _normalize_firewall_rule(payload):
         raise ValueError('dport requires proto tcp or udp')
     if sport is not None and proto not in ('tcp', 'udp'):
         raise ValueError('sport requires proto tcp or udp')
+    if tcp_flags is not None and proto != 'tcp':
+        raise ValueError('tcp_flags requires proto tcp')
+    if (icmp_type is not None or icmp_code is not None) and proto != 'icmp':
+        raise ValueError('icmp_type/icmp_code require proto icmp')
+    if (icmpv6_type is not None or icmpv6_code is not None) and proto != 'icmpv6':
+        raise ValueError('icmpv6_type/icmpv6_code require proto icmpv6')
     def _parse_port_or_range(raw, field_name):
         if not re.fullmatch(r'[0-9]{1,5}(:[0-9]{1,5})?', str(raw)):
             raise ValueError(f'{field_name} must be like 80 or 1000:2000')
@@ -667,6 +711,19 @@ def _normalize_firewall_rule(payload):
         ct_state = str(ct_state).lower().replace(' ', '')
         if ct_state not in FIREWALL_SCHEMA['ct_states']:
             raise ValueError('ct_state must be one of: established,related | new | invalid | related | established | untracked')
+    if user_id is not None:
+        if not re.fullmatch(r'[0-9]{1,10}', str(user_id)):
+            raise ValueError('user_id must be positive integer uid')
+    if hour is not None:
+        hour = str(hour).strip()
+        if not re.fullmatch(r'([01]\d|2[0-3]):[0-5]\d(?:-([01]\d|2[0-3]):[0-5]\d)?', hour):
+            raise ValueError('hour must be HH:MM or HH:MM-HH:MM (24h)')
+    if dscp is not None:
+        dscp = str(dscp).lower().strip()
+        if not re.fullmatch(r'cs[0-7]|af[1-4][1-3]|ef|[0-9]{1,2}', dscp):
+            raise ValueError('dscp must be class name (cs0..cs7, af11..af43, ef) or integer 0..63')
+        if dscp.isdigit() and int(dscp) > 63:
+            raise ValueError('dscp integer must be in range 0..63')
     if comment is not None:
         comment = str(comment).replace('"', "'")
     if nat_type is not None:
@@ -708,6 +765,104 @@ def _normalize_firewall_rule(payload):
         notrack = str(notrack).lower() in ('1', 'true', 'yes', 'on')
     if notrack and nft_table != 'raw':
         raise ValueError('notrack is only valid for raw table')
+    if not isinstance(nftrace, bool):
+        nftrace = str(nftrace).lower() in ('1', 'true', 'yes', 'on')
+    if nftrace and nft_table != 'raw':
+        raise ValueError('nftrace is only valid for raw table')
+    if raw_expr is not None and nft_table != 'raw':
+        raise ValueError('raw_expr is only valid for raw table')
+    if tcp_flags is not None and not re.fullmatch(r'[A-Za-z0-9_,/ ]+', str(tcp_flags)):
+        raise ValueError('tcp_flags contains invalid characters')
+    for fld, val in (('icmp_type', icmp_type), ('icmpv6_type', icmpv6_type)):
+        if val is not None and not re.fullmatch(r'[A-Za-z0-9_-]+', str(val)):
+            raise ValueError(f'{fld} contains invalid characters')
+    for fld, val in (('icmp_code', icmp_code), ('icmpv6_code', icmpv6_code)):
+        if val is not None and not re.fullmatch(r'[0-9]{1,3}', str(val)):
+            raise ValueError(f'{fld} must be 0..255')
+        if val is not None and int(str(val)) > 255:
+            raise ValueError(f'{fld} must be 0..255')
+    if meta_length is not None:
+        if not re.fullmatch(r'[0-9]{1,5}(-[0-9]{1,5})?', str(meta_length)):
+            raise ValueError('meta_length must be like 64 or 64-1500')
+        if '-' in str(meta_length):
+            a, b = str(meta_length).split('-', 1)
+            if int(a) > int(b):
+                raise ValueError('meta_length range start must be <= end')
+    if meta_priority is not None and not re.fullmatch(r'[0-9]{1,5}:[0-9]{1,5}|0x[0-9a-fA-F]+|[0-9]{1,10}', str(meta_priority)):
+        raise ValueError('meta_priority must be like 1:10, 10, or 0x10')
+    if meta_cpu is not None and not re.fullmatch(r'[0-9]{1,3}', str(meta_cpu)):
+        raise ValueError('meta_cpu must be integer (0..255)')
+    if meta_cpu is not None and int(str(meta_cpu)) > 255:
+        raise ValueError('meta_cpu must be integer (0..255)')
+    if meta_pkttype is not None:
+        meta_pkttype = str(meta_pkttype).lower()
+        if meta_pkttype not in ('host', 'broadcast', 'multicast', 'other'):
+            raise ValueError('meta_pkttype must be one of: host, broadcast, multicast, other')
+    for fld, val in (('meta_iiftype', meta_iiftype), ('meta_oiftype', meta_oiftype)):
+        if val is not None and not re.fullmatch(r'[0-9]{1,10}', str(val)):
+            raise ValueError(f'{fld} must be positive integer')
+    for fld, val in (('meta_iifgroup', meta_iifgroup), ('meta_oifgroup', meta_oifgroup)):
+        if val is not None and not re.fullmatch(r'[0-9]{1,10}', str(val)):
+            raise ValueError(f'{fld} must be positive integer')
+    for fld, val in (('mark_match', mark_match), ('ct_mark_match', ct_mark_match)):
+        if val is not None and not re.fullmatch(r'0x[0-9a-fA-F]+|[0-9]+', str(val)):
+            raise ValueError(f'{fld} must be integer or hex (e.g. 10 or 0x1)')
+    if ct_status is not None:
+        raw_tokens = [t.strip().lower() for t in str(ct_status).split(',') if t.strip()]
+        allowed_ct_status = {'expected', 'seen-reply', 'assured', 'confirmed', 'snat', 'dnat', 'dying'}
+        if not raw_tokens or any(t not in allowed_ct_status for t in raw_tokens):
+            raise ValueError('ct_status must use: expected, seen-reply, assured, confirmed, snat, dnat, dying')
+        ct_status = ','.join(raw_tokens)
+    if ct_direction is not None:
+        ct_direction = str(ct_direction).lower()
+        if ct_direction not in ('original', 'reply'):
+            raise ValueError('ct_direction must be original or reply')
+    if ct_expiration is not None and not re.fullmatch(r'[0-9]+(ms|s|m|h|d)', str(ct_expiration).lower()):
+        raise ValueError('ct_expiration must be like 30s, 1m, 2h')
+    if ct_expiration is not None:
+        ct_expiration = str(ct_expiration).lower()
+    if ct_helper_match is not None and not re.fullmatch(r'[A-Za-z0-9_.-]+', str(ct_helper_match)):
+        raise ValueError('ct_helper_match contains invalid characters')
+    if ct_label is not None and not re.fullmatch(r'[A-Za-z0-9_.-]+|0x[0-9a-fA-F]+', str(ct_label)):
+        raise ValueError('ct_label must be label name or hex mask (e.g. 0x1)')
+    if ct_event is not None:
+        raw_events = [t.strip().lower() for t in str(ct_event).split(',') if t.strip()]
+        allowed_events = {'new', 'related', 'destroy', 'reply', 'assured', 'protoinfo', 'helper', 'mark', 'natseqinfo', 'secmark'}
+        if not raw_events or any(t not in allowed_events for t in raw_events):
+            raise ValueError('ct_event must use: new, related, destroy, reply, assured, protoinfo, helper, mark, natseqinfo, secmark')
+        ct_event = ','.join(raw_events)
+    for fld, val in (
+        ('fib_check', fib_check),
+        ('socket_match', socket_match),
+        ('rt_nexthop', rt_nexthop),
+        ('ipv6_exthdrs', ipv6_exthdrs),
+    ):
+        if val is not None:
+            if len(str(val)) > 160:
+                raise ValueError(f'{fld} is too long')
+            if not re.fullmatch(r'[A-Za-z0-9_ .:/,!=<>\-]+', str(val)):
+                raise ValueError(f'{fld} contains invalid characters')
+    for fld, val in (
+        ('ct_original_saddr', ct_original_saddr),
+        ('ct_original_daddr', ct_original_daddr),
+        ('ct_reply_saddr', ct_reply_saddr),
+        ('ct_reply_daddr', ct_reply_daddr),
+    ):
+        if val is not None:
+            try:
+                ipaddress.ip_address(str(val))
+            except ValueError:
+                raise ValueError(f'{fld} must be valid IPv4/IPv6 address')
+    if vlan_id is not None:
+        if not re.fullmatch(r'[0-9]{1,4}', str(vlan_id)):
+            raise ValueError('vlan_id must be integer in range 0..4095')
+        if int(str(vlan_id)) > 4095:
+            raise ValueError('vlan_id must be integer in range 0..4095')
+    for fld, val in (('ether_src', ether_src), ('ether_dst', ether_dst)):
+        if val is not None and not re.fullmatch(r'([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}', str(val)):
+            raise ValueError(f'{fld} must be MAC like aa:bb:cc:dd:ee:ff')
+    if ether_type is not None and not re.fullmatch(r'0x[0-9a-fA-F]{1,4}|[0-9]{1,5}', str(ether_type)):
+        raise ValueError('ether_type must be hex or integer (e.g. 0x0800)')
     if mark_set is not None and not re.fullmatch(r'0x[0-9a-fA-F]+|[0-9]+', str(mark_set)):
         raise ValueError('mark_set must be integer or hex (e.g. 10 or 0x1)')
     if ct_mark_set is not None and not re.fullmatch(r'0x[0-9a-fA-F]+|[0-9]+', str(ct_mark_set)):
@@ -729,6 +884,7 @@ def _normalize_firewall_rule(payload):
         ('socket_expr', socket_expr),
         ('rt_expr', rt_expr),
         ('exthdr_expr', exthdr_expr),
+        ('raw_expr', raw_expr),
     ):
         if val is not None:
             if len(str(val)) > 160:
@@ -760,6 +916,9 @@ def _normalize_firewall_rule(payload):
         'dport': str(dport) if dport is not None else None,
         'comment': comment,
         'ct_state': ct_state,
+        'user_id': str(user_id) if user_id is not None else None,
+        'hour': hour,
+        'dscp': dscp,
         'nat_type': nat_type,
         'target_chain': target_chain,
         'reject_type': reject_type,
@@ -777,6 +936,41 @@ def _normalize_firewall_rule(payload):
         'socket_expr': socket_expr,
         'rt_expr': rt_expr,
         'exthdr_expr': exthdr_expr,
+        'raw_expr': raw_expr,
+        'nftrace': nftrace,
+        'tcp_flags': tcp_flags,
+        'icmp_type': icmp_type,
+        'icmp_code': str(icmp_code) if icmp_code is not None else None,
+        'icmpv6_type': icmpv6_type,
+        'icmpv6_code': str(icmpv6_code) if icmpv6_code is not None else None,
+        'meta_length': str(meta_length) if meta_length is not None else None,
+        'meta_priority': str(meta_priority) if meta_priority is not None else None,
+        'meta_cpu': str(meta_cpu) if meta_cpu is not None else None,
+        'meta_pkttype': meta_pkttype,
+        'meta_iiftype': str(meta_iiftype) if meta_iiftype is not None else None,
+        'meta_oiftype': str(meta_oiftype) if meta_oiftype is not None else None,
+        'meta_iifgroup': str(meta_iifgroup) if meta_iifgroup is not None else None,
+        'meta_oifgroup': str(meta_oifgroup) if meta_oifgroup is not None else None,
+        'mark_match': str(mark_match) if mark_match is not None else None,
+        'ct_mark_match': str(ct_mark_match) if ct_mark_match is not None else None,
+        'ct_status': ct_status,
+        'ct_direction': ct_direction,
+        'ct_expiration': ct_expiration,
+        'ct_helper_match': ct_helper_match,
+        'ct_label': str(ct_label) if ct_label is not None else None,
+        'ct_event': ct_event,
+        'ct_original_saddr': str(ct_original_saddr) if ct_original_saddr is not None else None,
+        'ct_original_daddr': str(ct_original_daddr) if ct_original_daddr is not None else None,
+        'ct_reply_saddr': str(ct_reply_saddr) if ct_reply_saddr is not None else None,
+        'ct_reply_daddr': str(ct_reply_daddr) if ct_reply_daddr is not None else None,
+        'fib_check': fib_check,
+        'socket_match': socket_match,
+        'rt_nexthop': rt_nexthop,
+        'ipv6_exthdrs': ipv6_exthdrs,
+        'vlan_id': str(vlan_id) if vlan_id is not None else None,
+        'ether_src': str(ether_src).lower() if ether_src is not None else None,
+        'ether_dst': str(ether_dst).lower() if ether_dst is not None else None,
+        'ether_type': str(ether_type).lower() if ether_type is not None else None,
         'ct_helper_set': ct_helper_set,
         'ct_timeout_set': ct_timeout_set,
         'ct_expectation_set': ct_expectation_set,
@@ -808,6 +1002,16 @@ def _render_firewall_rule(rule):
         parts.append(f'meta l4proto {rule["proto"]}')
     if rule.get('ct_state'):
         parts.append(f'ct state {rule["ct_state"]}')
+    if rule.get('user_id'):
+        parts.append(f'meta skuid {rule["user_id"]}')
+    if rule.get('hour'):
+        if '-' in str(rule['hour']):
+            start_h, end_h = str(rule['hour']).split('-', 1)
+            parts.append(f'meta hour "{start_h}"-"{end_h}"')
+        else:
+            parts.append(f'meta hour "{rule["hour"]}"')
+    if rule.get('dscp'):
+        parts.append(f'ip dscp {rule["dscp"]}')
     if rule['sport']:
         parts.append(f'{rule["proto"]} sport {_render_port_value(rule["sport"])}')
     if rule['dport']:
@@ -822,6 +1026,74 @@ def _render_firewall_rule(rule):
         parts.append(str(rule['rt_expr']))
     if rule.get('exthdr_expr'):
         parts.append(str(rule['exthdr_expr']))
+    if rule.get('raw_expr'):
+        parts.append(str(rule['raw_expr']))
+    if rule.get('tcp_flags'):
+        parts.append(f'tcp flags {rule["tcp_flags"]}')
+    if rule.get('icmp_type'):
+        parts.append(f'icmp type {rule["icmp_type"]}')
+    if rule.get('icmp_code'):
+        parts.append(f'icmp code {rule["icmp_code"]}')
+    if rule.get('icmpv6_type'):
+        parts.append(f'icmpv6 type {rule["icmpv6_type"]}')
+    if rule.get('icmpv6_code'):
+        parts.append(f'icmpv6 code {rule["icmpv6_code"]}')
+    if rule.get('meta_length'):
+        parts.append(f'meta length {rule["meta_length"]}')
+    if rule.get('meta_priority'):
+        parts.append(f'meta priority set {rule["meta_priority"]}')
+    if rule.get('meta_cpu'):
+        parts.append(f'meta cpu {rule["meta_cpu"]}')
+    if rule.get('meta_pkttype'):
+        parts.append(f'meta pkttype {rule["meta_pkttype"]}')
+    if rule.get('meta_iiftype'):
+        parts.append(f'meta iiftype {rule["meta_iiftype"]}')
+    if rule.get('meta_oiftype'):
+        parts.append(f'meta oiftype {rule["meta_oiftype"]}')
+    if rule.get('meta_iifgroup'):
+        parts.append(f'meta iifgroup {rule["meta_iifgroup"]}')
+    if rule.get('meta_oifgroup'):
+        parts.append(f'meta oifgroup {rule["meta_oifgroup"]}')
+    if rule.get('mark_match'):
+        parts.append(f'meta mark {rule["mark_match"]}')
+    if rule.get('ct_mark_match'):
+        parts.append(f'ct mark {rule["ct_mark_match"]}')
+    if rule.get('ct_status'):
+        parts.append(f'ct status {rule["ct_status"]}')
+    if rule.get('ct_direction'):
+        parts.append(f'ct direction {rule["ct_direction"]}')
+    if rule.get('ct_expiration'):
+        parts.append(f'ct expiration {rule["ct_expiration"]}')
+    if rule.get('ct_helper_match'):
+        parts.append(f'ct helper "{rule["ct_helper_match"]}"')
+    if rule.get('ct_label'):
+        parts.append(f'ct label {rule["ct_label"]}')
+    if rule.get('ct_event'):
+        parts.append(f'ct event set {rule["ct_event"]}')
+    if rule.get('ct_original_saddr'):
+        parts.append(f'ct original saddr {rule["ct_original_saddr"]}')
+    if rule.get('ct_original_daddr'):
+        parts.append(f'ct original daddr {rule["ct_original_daddr"]}')
+    if rule.get('ct_reply_saddr'):
+        parts.append(f'ct reply saddr {rule["ct_reply_saddr"]}')
+    if rule.get('ct_reply_daddr'):
+        parts.append(f'ct reply daddr {rule["ct_reply_daddr"]}')
+    if rule.get('fib_check'):
+        parts.append(f'fib {rule["fib_check"]}')
+    if rule.get('socket_match'):
+        parts.append(f'socket {rule["socket_match"]}')
+    if rule.get('rt_nexthop'):
+        parts.append(f'rt nexthop {rule["rt_nexthop"]}')
+    if rule.get('ipv6_exthdrs'):
+        parts.append(f'exthdr {rule["ipv6_exthdrs"]}')
+    if rule.get('vlan_id'):
+        parts.append(f'vlan id {rule["vlan_id"]}')
+    if rule.get('ether_src'):
+        parts.append(f'ether saddr {rule["ether_src"]}')
+    if rule.get('ether_dst'):
+        parts.append(f'ether daddr {rule["ether_dst"]}')
+    if rule.get('ether_type'):
+        parts.append(f'ether type {rule["ether_type"]}')
     if rule.get('log_prefix') or rule.get('log_level'):
         log_parts = ['log']
         if rule.get('log_prefix'):
@@ -833,6 +1105,8 @@ def _render_firewall_rule(rule):
         parts.append('counter')
     if rule.get('notrack'):
         parts.append('notrack')
+    if rule.get('nftrace'):
+        parts.append('meta nftrace set 1')
     if rule.get('mark_set'):
         parts.append(f'meta mark set {rule["mark_set"]}')
     if rule.get('ct_mark_set'):
@@ -864,6 +1138,9 @@ def _render_firewall_rule(rule):
         if nat_flags:
             nat_stmt += ' ' + ','.join(nat_flags)
         parts.append(nat_stmt)
+    elif rule.get('notrack'):
+        # `notrack` is a standalone raw-table statement in nft; do not append verdict action.
+        pass
     else:
         action = rule['action']
         if action in ('jump', 'goto'):
@@ -1074,9 +1351,17 @@ def create_firewall_rule_service(payload, apply_now=True):
     # Keep one logical rule for the same effective payload.
     identity_keys = (
         'table', 'family', 'chain', 'action', 'proto', 'src', 'dst',
-        'in_interface', 'out_interface', 'sport', 'dport', 'comment', 'ct_state',
+        'in_interface', 'out_interface', 'sport', 'dport', 'comment', 'ct_state', 'user_id', 'hour', 'dscp',
         'nat_type', 'target_chain', 'reject_type', 'to_addr', 'to_port',
         'nat_random', 'nat_fully_random', 'nat_persistent', 'notrack',
+        'raw_expr', 'nftrace',
+        'tcp_flags', 'icmp_type', 'icmp_code', 'icmpv6_type', 'icmpv6_code',
+        'meta_length', 'meta_priority', 'meta_cpu', 'meta_pkttype', 'meta_iiftype', 'meta_oiftype', 'meta_iifgroup', 'meta_oifgroup',
+        'mark_match', 'ct_mark_match',
+        'ct_status', 'ct_direction', 'ct_expiration', 'ct_helper_match', 'ct_label', 'ct_event',
+        'ct_original_saddr', 'ct_original_daddr', 'ct_reply_saddr', 'ct_reply_daddr',
+        'fib_check', 'socket_match', 'rt_nexthop', 'ipv6_exthdrs',
+        'vlan_id', 'ether_src', 'ether_dst', 'ether_type',
         'mark_set', 'ct_mark_set', 'log_prefix', 'log_level',
         'fib_expr', 'socket_expr', 'rt_expr', 'exthdr_expr',
         'ct_helper_set', 'ct_timeout_set', 'ct_expectation_set',

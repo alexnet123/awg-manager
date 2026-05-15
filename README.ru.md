@@ -124,3 +124,6 @@ python3 api_core.py 0.0.0.0 8787 -r /etc/wg-manager/encryption.key
 
 - [docs/API.md](docs/API.md)
 - [docs/DEPLOY.md](docs/DEPLOY.md)
+- [docs/README.md](docs/README.md) (общий индекс документации)
+- [docs/DOCS_INDEX.ru.md](docs/DOCS_INDEX.ru.md) (навигация по документации на русском)
+- [docs/TESTS_CATALOG.ru.md](docs/TESTS_CATALOG.ru.md) (полный каталог тестов: где лежат, что делают, как запускать)

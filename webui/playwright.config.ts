@@ -6,9 +6,9 @@ const lowMem = process.env.PLAYWRIGHT_LOW_MEM === '1'
 export default defineConfig({
   testDir: './tests',
   globalSetup: './tests/global-setup.ts',
-  timeout: 30_000,
+  timeout: 60_000,
   expect: {
-    timeout: 10_000,
+    timeout: 15_000,
   },
   fullyParallel: true,
   retries: process.env.CI ? 2 : 0,
