@@ -143,7 +143,8 @@ function PlannedField(props: { label: string; placeholder: string }) {
   )
 }
 
-type FirewallMainTab = 'filter' | 'nat' | 'raw' | 'mangle' | 'sets' | 'tables' | 'maps'
+type FirewallMainTab = 'filter' | 'nat' | 'raw' | 'mangle' | 'collections' | 'tables'
+type CollectionKind = 'addr' | 'port' | 'iface' | 'map' | 'vmap'
 
 export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [state, setState] = React.useState<FirewallState | null>(null)
@@ -182,7 +183,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [setsState, setSetsState] = React.useState<FirewallSetsState>({ addr: [], port: [], iface: [] })
   const [mapsState, setMapsState] = React.useState<FirewallMapsState>({ map: [], vmap: [] })
   const [tablesState, setTablesState] = React.useState<FirewallTablesState>({ builtin: [], custom: [] })
-  const [activeSetKind, setActiveSetKind] = React.useState<'addr' | 'port' | 'iface'>('addr')
+  const [collectionKind, setCollectionKind] = React.useState<CollectionKind>('addr')
   const [selectedSetId, setSelectedSetId] = React.useState<string | null>(null)
   const [selectedMapId, setSelectedMapId] = React.useState<string | null>(null)
   const [newSetName, setNewSetName] = React.useState('')
@@ -190,12 +191,6 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [newSetComment, setNewSetComment] = React.useState('')
   const [setOpen, setSetOpen] = React.useState(false)
   const [editingSetId, setEditingSetId] = React.useState<string | null>(null)
-  const [mapOpen, setMapOpen] = React.useState(false)
-  const [editingMapId, setEditingMapId] = React.useState<string | null>(null)
-  const [activeMapKind, setActiveMapKind] = React.useState<'map' | 'vmap'>('map')
-  const [newMapName, setNewMapName] = React.useState('')
-  const [newMapEntries, setNewMapEntries] = React.useState('')
-  const [newMapComment, setNewMapComment] = React.useState('')
   const [selectedTableId, setSelectedTableId] = React.useState<string | null>(null)
   const [tableOpen, setTableOpen] = React.useState(false)
   const [newTableFamily, setNewTableFamily] = React.useState('inet')
@@ -228,7 +223,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     raw: schema?.tables?.raw?.chains || ['prerouting', 'output'],
     mangle: schema?.tables?.mangle?.chains || ['prerouting', 'input', 'forward', 'output', 'postrouting'],
   }
-  const tabToRuleTable = (tab: FirewallMainTab): 'filter' | 'nat' | 'raw' | 'mangle' => (tab === 'sets' || tab === 'maps' || tab === 'tables') ? 'filter' : tab
+  const tabToRuleTable = (tab: FirewallMainTab): 'filter' | 'nat' | 'raw' | 'mangle' => (tab === 'collections' || tab === 'tables') ? 'filter' : tab
   const activeFormTable = (form.table || tabToRuleTable(activeTable)) as 'filter' | 'nat' | 'raw' | 'mangle'
   const tableSupports = new Set(schema?.tables?.[activeFormTable]?.supports || [])
   const hasSupport = (key: string) => tableSupports.has(key)
@@ -557,11 +552,8 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     }
   }
 
-  const isSetTab = activeTable === 'sets'
+  const isCollectionsTab = activeTable === 'collections'
   const isTablesTab = activeTable === 'tables'
-  const isMapsTab = activeTable === 'maps'
-  const currentSetKind: 'addr' | 'port' | 'iface' = activeSetKind
-  const currentSetItems = currentSetKind === 'addr' ? setsState.addr : currentSetKind === 'port' ? setsState.port : setsState.iface
   const allSetItems: Array<FirewallSetItem & { kind: 'addr' | 'port' | 'iface' }> = [
     ...setsState.addr.map((x) => ({ ...x, kind: 'addr' as const })),
     ...setsState.port.map((x) => ({ ...x, kind: 'port' as const })),
@@ -571,22 +563,25 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     ...mapsState.map.map((x) => ({ ...x, kind: 'map' as const })),
     ...mapsState.vmap.map((x) => ({ ...x, kind: 'vmap' as const })),
   ]
+  const allCollectionItems: Array<(FirewallSetItem & { kind: 'addr' | 'port' | 'iface' }) | (FirewallMapItem & { kind: 'map' | 'vmap' })> = [...allSetItems, ...allMapItems]
+  const selectedCollection = allCollectionItems.find((x) => (x.kind === 'map' || x.kind === 'vmap') ? x.id === selectedMapId : x.id === selectedSetId) || null
 
   function openCreateSetWindow() {
     setEditingSetId(null)
     setNewSetName('')
     setNewSetElements('')
     setNewSetComment('')
+    setCollectionKind('addr')
     setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 360) / 2) - 40) })
     setSetOpen(true)
   }
 
   function openEditSetWindow(item: FirewallSetItem & { kind: 'addr' | 'port' | 'iface' }) {
     setEditingSetId(item.id)
-    setActiveSetKind(item.kind)
     setNewSetName(item.name || '')
     setNewSetElements((item.elements || []).join(', '))
     setNewSetComment(item.comment || '')
+    setCollectionKind(item.kind)
     setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 360) / 2) - 40) })
     setSetOpen(true)
   }
@@ -596,7 +591,11 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     setIsBusy(true)
     try {
       const elements = newSetElements.split(',').map((x) => x.trim()).filter(Boolean)
-      await upsertFirewallSet(props.auth, currentSetKind, { id: editingSetId || undefined, name: newSetName.trim(), elements, comment: newSetComment.trim() || null })
+      if (collectionKind === 'map' || collectionKind === 'vmap') {
+        await upsertFirewallMap(props.auth, collectionKind, { id: editingSetId || undefined, name: newSetName.trim(), entries: elements, comment: newSetComment.trim() || null })
+      } else {
+        await upsertFirewallSet(props.auth, collectionKind, { id: editingSetId || undefined, name: newSetName.trim(), elements, comment: newSetComment.trim() || null })
+      }
       setEditingSetId(null)
       setNewSetName('')
       setNewSetElements('')
@@ -639,43 +638,14 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     }
   }
 
-  function openCreateMapWindow() {
-    setEditingMapId(null)
-    setNewMapName('')
-    setNewMapEntries('')
-    setNewMapComment('')
-    setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 360) / 2) - 40) })
-    setMapOpen(true)
-  }
-
   function openEditMapWindow(item: FirewallMapItem & { kind: 'map' | 'vmap' }) {
-    setEditingMapId(item.id)
-    setActiveMapKind(item.kind)
-    setNewMapName(item.name || '')
-    setNewMapEntries((item.entries || []).join(', '))
-    setNewMapComment(item.comment || '')
+    setCollectionKind(item.kind)
+    setEditingSetId(item.id)
+    setNewSetName(item.name || '')
+    setNewSetElements((item.entries || []).join(', '))
+    setNewSetComment(item.comment || '')
     setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 360) / 2) - 40) })
-    setMapOpen(true)
-  }
-
-  async function onSaveMap(): Promise<boolean> {
-    setError(null)
-    setIsBusy(true)
-    try {
-      const entries = newMapEntries.split(',').map((x) => x.trim()).filter(Boolean)
-      await upsertFirewallMap(props.auth, activeMapKind, { id: editingMapId || undefined, name: newMapName.trim(), entries, comment: newMapComment.trim() || null })
-      setEditingMapId(null)
-      setNewMapName('')
-      setNewMapEntries('')
-      setNewMapComment('')
-      await refresh()
-      return true
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc))
-      return false
-    } finally {
-      setIsBusy(false)
-    }
+    setSetOpen(true)
   }
 
   async function onDeleteMap(item: FirewallMapItem, kind: 'map' | 'vmap') {
@@ -776,12 +746,11 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
               <TabsTrigger className='px-4 text-sm' value='nat'>nat</TabsTrigger>
               <TabsTrigger className='px-4 text-sm' value='raw'>raw</TabsTrigger>
               <TabsTrigger className='px-4 text-sm' value='mangle'>mangle</TabsTrigger>
-              <TabsTrigger className='px-4 text-sm' value='sets'>sets</TabsTrigger>
-              <TabsTrigger className='px-4 text-sm' value='maps'>maps</TabsTrigger>
+              <TabsTrigger className='px-4 text-sm' value='collections'>collections</TabsTrigger>
               <TabsTrigger className='px-4 text-sm' value='tables'>tables</TabsTrigger>
             </TabsList>
           </Tabs>
-          {!isSetTab && !isMapsTab && !isTablesTab ? <div className='flex gap-2'>
+          {!isCollectionsTab && !isTablesTab ? <div className='flex gap-2'>
             <Button size='sm' onClick={openCreateWindow} disabled={isBusy}><Plus />Add</Button>
             <Button size='sm' variant='destructive' disabled={isBusy || !selectedRuleId} onClick={() => { const rule = visibleRules.find((r) => r.id === selectedRuleId); if (!rule) return; void onDelete(rule) }}>Del</Button>
             <Button size='sm' variant='outline' disabled={isBusy || !selectedRuleId} onClick={() => { const rule = visibleRules.find((r) => r.id === selectedRuleId); if (!rule) return; void onSetEnabled(rule, false) }}>Disable</Button>
@@ -837,18 +806,18 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                 </div>
               ) : null}
             </div>
-          </div> : isSetTab ? (
+          </div> : isCollectionsTab ? (
             <div className='flex min-h-0 flex-1 flex-col gap-2'>
               <div className='flex gap-2'>
                 <Button size='sm' onClick={openCreateSetWindow} disabled={isBusy}><Plus />Add</Button>
                 <Button
                   size='sm'
                   variant='destructive'
-                  disabled={isBusy || !selectedSetId}
+                  disabled={isBusy || !selectedCollection}
                   onClick={() => {
-                    const row = allSetItems.find((x) => x.id === selectedSetId)
-                    if (!row) return
-                    void onDeleteSet(row, row.kind)
+                    if (!selectedCollection) return
+                    if (selectedCollection.kind === 'map' || selectedCollection.kind === 'vmap') void onDeleteMap(selectedCollection, selectedCollection.kind)
+                    else void onDeleteSet(selectedCollection as FirewallSetItem & { kind: 'addr' | 'port' | 'iface' }, selectedCollection.kind)
                   }}
                 >
                   Del
@@ -856,22 +825,22 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                 <Button
                   size='sm'
                   variant='outline'
-                  disabled={isBusy || !selectedSetId}
+                  disabled={isBusy || !selectedCollection}
                   onClick={() => {
-                    const row = allSetItems.find((x) => x.id === selectedSetId)
-                    if (!row) return
-                    void onSetEnabledSet(row, row.kind, false)
+                    if (!selectedCollection) return
+                    if (selectedCollection.kind === 'map' || selectedCollection.kind === 'vmap') void onSetEnabledMap(selectedCollection, selectedCollection.kind, false)
+                    else void onSetEnabledSet(selectedCollection as FirewallSetItem & { kind: 'addr' | 'port' | 'iface' }, selectedCollection.kind, false)
                   }}
                 >
                   Disable
                 </Button>
                 <Button
                   size='sm'
-                  disabled={isBusy || !selectedSetId}
+                  disabled={isBusy || !selectedCollection}
                   onClick={() => {
-                    const row = allSetItems.find((x) => x.id === selectedSetId)
-                    if (!row) return
-                    void onSetEnabledSet(row, row.kind, true)
+                    if (!selectedCollection) return
+                    if (selectedCollection.kind === 'map' || selectedCollection.kind === 'vmap') void onSetEnabledMap(selectedCollection, selectedCollection.kind, true)
+                    else void onSetEnabledSet(selectedCollection as FirewallSetItem & { kind: 'addr' | 'port' | 'iface' }, selectedCollection.kind, true)
                   }}
                 >
                   Enable
@@ -879,22 +848,30 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
               </div>
               <div className='min-h-0 w-full flex-1 overflow-y-scroll rounded-xl border'>
                 <Table>
-                  <TableHeader><TableRow><TableHead>type</TableHead><TableHead>name</TableHead><TableHead>elements</TableHead><TableHead>comment</TableHead></TableRow></TableHeader>
+                  <TableHeader><TableRow><TableHead>type</TableHead><TableHead>name</TableHead><TableHead>values</TableHead><TableHead>comment</TableHead></TableRow></TableHeader>
                   <TableBody>
-                    {allSetItems.map((row) => (
+                    {allCollectionItems.map((row) => (
                       <TableRow
                         key={row.id}
-                        className={`h-7 cursor-pointer border-b ${selectedSetId === row.id ? 'bg-muted/50' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
-                        onClick={() => setSelectedSetId(row.id)}
-                        onDoubleClick={() => openEditSetWindow(row)}
+                        className={`h-7 cursor-pointer border-b ${((row.kind === 'map' || row.kind === 'vmap') ? selectedMapId : selectedSetId) === row.id ? 'bg-muted/50' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
+                        onClick={() => {
+                          if (row.kind === 'map' || row.kind === 'vmap') setSelectedMapId(row.id)
+                          else setSelectedSetId(row.id)
+                        }}
+                        onDoubleClick={() => {
+                          if (row.kind === 'map' || row.kind === 'vmap') openEditMapWindow(row as FirewallMapItem & { kind: 'map' | 'vmap' })
+                          else openEditSetWindow(row as FirewallSetItem & { kind: 'addr' | 'port' | 'iface' })
+                        }}
                       >
-                        <TableCell>{row.kind}</TableCell>
+                        <TableCell>{(row as { kind: string }).kind}</TableCell>
                         <TableCell>{row.name}</TableCell>
-                        <TableCell className='max-w-[700px] truncate'>{(row.elements || []).join(', ') || '—'}</TableCell>
+                        <TableCell className='max-w-[700px] truncate'>{(row.kind === 'map' || row.kind === 'vmap') ? (((row as FirewallMapItem).entries || []).join(', ') || '—') : (((row as FirewallSetItem).elements || []).join(', ') || '—')}</TableCell>
                         <TableCell className='max-w-[260px] truncate'>{row.comment || '—'}</TableCell>
                       </TableRow>
                     ))}
-                    {!allSetItems.length ? <TableRow><TableCell colSpan={4} className='py-6 text-center text-xs text-muted-foreground'>No sets yet.</TableCell></TableRow> : null}
+                    {!allCollectionItems.length
+                      ? <TableRow><TableCell colSpan={4} className='py-6 text-center text-xs text-muted-foreground'>No collections yet.</TableCell></TableRow>
+                      : null}
                   </TableBody>
                 </Table>
               </div>
@@ -927,33 +904,8 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                 </Table>
               </div>
             </div>
-          ) : (
-            <div className='flex min-h-0 flex-1 flex-col gap-2'>
-              <div className='flex gap-2'>
-                <Button size='sm' onClick={openCreateMapWindow} disabled={isBusy}><Plus />Add</Button>
-                <Button size='sm' variant='destructive' disabled={isBusy || !selectedMapId} onClick={() => { const row = allMapItems.find((x) => x.id === selectedMapId); if (!row) return; void onDeleteMap(row, row.kind) }}>Del</Button>
-                <Button size='sm' variant='outline' disabled={isBusy || !selectedMapId} onClick={() => { const row = allMapItems.find((x) => x.id === selectedMapId); if (!row) return; void onSetEnabledMap(row, row.kind, false) }}>Disable</Button>
-                <Button size='sm' disabled={isBusy || !selectedMapId} onClick={() => { const row = allMapItems.find((x) => x.id === selectedMapId); if (!row) return; void onSetEnabledMap(row, row.kind, true) }}>Enable</Button>
-              </div>
-              <div className='min-h-0 w-full flex-1 overflow-y-scroll rounded-xl border'>
-                <Table>
-                  <TableHeader><TableRow><TableHead>type</TableHead><TableHead>name</TableHead><TableHead>entries</TableHead><TableHead>comment</TableHead></TableRow></TableHeader>
-                  <TableBody>
-                    {allMapItems.map((row) => (
-                      <TableRow key={row.id} className={`h-7 cursor-pointer border-b ${selectedMapId === row.id ? 'bg-muted/50' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`} onClick={() => setSelectedMapId(row.id)} onDoubleClick={() => openEditMapWindow(row)}>
-                        <TableCell>{row.kind}</TableCell>
-                        <TableCell>{row.name}</TableCell>
-                        <TableCell className='max-w-[700px] truncate'>{(row.entries || []).join(', ') || '—'}</TableCell>
-                        <TableCell className='max-w-[260px] truncate'>{row.comment || '—'}</TableCell>
-                      </TableRow>
-                    ))}
-                    {!allMapItems.length ? <TableRow><TableCell colSpan={4} className='py-6 text-center text-xs text-muted-foreground'>No maps yet.</TableCell></TableRow> : null}
-                  </TableBody>
-                </Table>
-              </div>
-            </div>
-          )}
-          {!isSetTab && !isMapsTab && !isTablesTab ? <div className='min-h-0 w-full flex-1 overflow-y-scroll rounded-xl border'>
+          ) : null}
+          {!isCollectionsTab && !isTablesTab ? <div className='min-h-0 w-full flex-1 overflow-y-scroll rounded-xl border'>
             <Table>
               <TableHeader>
                 <TableRow>
@@ -1616,29 +1568,39 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
           <div className='absolute z-50 w-[560px] max-w-[calc(100vw-24px)] rounded-xl border bg-background shadow-2xl' style={{ left: winPos.x, top: winPos.y }}>
             <div className='cursor-move rounded-t-xl border-b bg-muted/70 px-3 py-2 text-xs font-medium select-none' onMouseDown={onDragStart}>
               <div className='flex items-center justify-between'>
-                <span>{editingSetId ? `Edit ${currentSetKind} set` : `Add ${currentSetKind} set`}</span>
+                <span>{editingSetId ? `Edit ${collectionKind}` : 'Add collection'}</span>
                 <button type='button' className='rounded p-1 hover:bg-background/70' onClick={() => setSetOpen(false)}><X className='size-3.5' /></button>
               </div>
             </div>
             <div className='flex max-h-[78vh] flex-col overflow-hidden rounded-b-xl bg-background text-xs'>
               <div className='flex-1 overflow-y-auto p-3 space-y-3'>
                 <div className='space-y-1.5'>
-                  <Label>Set type</Label>
-                  <select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={activeSetKind} onChange={(e) => setActiveSetKind(e.target.value as 'addr' | 'port' | 'iface')}>
+                  <Label>Type</Label>
+                  <select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={collectionKind} onChange={(e) => setCollectionKind(e.target.value as CollectionKind)}>
                     <option value='addr'>addr</option>
                     <option value='port'>port</option>
                     <option value='iface'>iface</option>
+                    <option value='map'>map</option>
+                    <option value='vmap'>vmap</option>
                   </select>
                 </div>
                 <div className='space-y-1.5'>
-                  <Label>Set name</Label>
-                  <Input className='h-7' placeholder='set_name' value={newSetName} onChange={(e) => setNewSetName(e.target.value)} />
+                  <Label>Name</Label>
+                  <Input className='h-7' placeholder={collectionKind === 'map' || collectionKind === 'vmap' ? 'map_name' : 'set_name'} value={newSetName} onChange={(e) => setNewSetName(e.target.value)} />
                 </div>
                 <div className='space-y-1.5'>
-                  <Label>Elements (comma-separated)</Label>
+                  <Label>{collectionKind === 'map' || collectionKind === 'vmap' ? 'Entries (comma-separated, key:value)' : 'Elements (comma-separated)'}</Label>
                   <Input
                     className='h-7'
-                    placeholder={currentSetKind === 'iface' ? 'eth0, awg1' : currentSetKind === 'port' ? '22, 443, 51820' : '10.0.0.0/24, 192.168.1.0/24'}
+                    placeholder={
+                      collectionKind === 'iface'
+                        ? 'eth0, awg1'
+                        : collectionKind === 'port'
+                          ? '22, 443, 51820'
+                          : collectionKind === 'map' || collectionKind === 'vmap'
+                            ? 'tcp:accept, udp:drop'
+                            : '10.0.0.0/24, 192.168.1.0/24'
+                    }
                     value={newSetElements}
                     onChange={(e) => setNewSetElements(e.target.value)}
                   />
@@ -1651,46 +1613,6 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
               <div className='flex justify-end gap-2 border-t bg-background px-3 py-2'>
                 <Button type='button' variant='outline' onClick={() => setSetOpen(false)}>Cancel</Button>
                 <Button type='button' disabled={isBusy || !newSetName.trim()} onClick={async () => { const ok = await onSaveSet(); if (ok) setSetOpen(false) }}><Plus />{editingSetId ? 'Save' : 'Add'}</Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {mapOpen ? (
-        <div className='fixed inset-0 z-40'>
-          <div className='absolute z-50 w-[560px] max-w-[calc(100vw-24px)] rounded-xl border bg-background shadow-2xl' style={{ left: winPos.x, top: winPos.y }}>
-            <div className='cursor-move rounded-t-xl border-b bg-muted/70 px-3 py-2 text-xs font-medium select-none' onMouseDown={onDragStart}>
-              <div className='flex items-center justify-between'>
-                <span>{editingMapId ? `Edit ${activeMapKind}` : `Add ${activeMapKind}`}</span>
-                <button type='button' className='rounded p-1 hover:bg-background/70' onClick={() => setMapOpen(false)}><X className='size-3.5' /></button>
-              </div>
-            </div>
-            <div className='flex max-h-[78vh] flex-col overflow-hidden rounded-b-xl bg-background text-xs'>
-              <div className='flex-1 overflow-y-auto p-3 space-y-3'>
-                <div className='space-y-1.5'>
-                  <Label>Type</Label>
-                  <select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={activeMapKind} onChange={(e) => setActiveMapKind(e.target.value as 'map' | 'vmap')}>
-                    <option value='map'>map</option>
-                    <option value='vmap'>vmap</option>
-                  </select>
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>Name</Label>
-                  <Input className='h-7' placeholder='map_name' value={newMapName} onChange={(e) => setNewMapName(e.target.value)} />
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>Entries (comma-separated, key:value)</Label>
-                  <Input className='h-7' placeholder='tcp:accept, udp:drop' value={newMapEntries} onChange={(e) => setNewMapEntries(e.target.value)} />
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>Comment</Label>
-                  <Input className='h-7' placeholder='Optional comment' value={newMapComment} onChange={(e) => setNewMapComment(e.target.value)} />
-                </div>
-              </div>
-              <div className='flex justify-end gap-2 border-t bg-background px-3 py-2'>
-                <Button type='button' variant='outline' onClick={() => setMapOpen(false)}>Cancel</Button>
-                <Button type='button' disabled={isBusy || !newMapName.trim()} onClick={async () => { const ok = await onSaveMap(); if (ok) setMapOpen(false) }}><Plus />{editingMapId ? 'Save' : 'Add'}</Button>
               </div>
             </div>
           </div>

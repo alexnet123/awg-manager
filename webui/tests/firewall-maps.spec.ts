@@ -22,13 +22,13 @@ async function listMapsViaApi(page: Page) {
 test('firewall maps: add map, disable/enable, delete', async ({ page }) => {
   await login(page)
   await openFirewall(page)
-  await page.getByRole('tab', { name: 'maps' }).click()
+  await page.getByRole('tab', { name: 'collections' }).click()
 
   const mapName = unique('pw_map')
   const mapsPanel = page.locator('div.rounded-xl.border').first()
 
   await mapsPanel.locator('button').filter({ hasText: 'Add' }).first().click()
-  await expect(page.getByText('Add map')).toBeVisible()
+  await expect(page.getByText('Add collection')).toBeVisible()
   const mapModal = page.locator('div.fixed.inset-0.z-40').last()
   await page.locator("label:has-text('Type')").locator('..').locator('select').selectOption('map')
   await page.getByPlaceholder('map_name').fill(mapName)
