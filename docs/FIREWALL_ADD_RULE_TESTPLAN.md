@@ -253,4 +253,43 @@ Expected outcome:
 - For low-RAM VPS test agents, run Playwright with:
   - `PLAYWRIGHT_LOW_MEM=1`
   - single worker (`--workers=1` if needed)
+- Keep suite timeout at `60s` (in `webui/playwright.config.ts`) for long firewall runs on small VPS.
 - This avoids false negatives from Chromium page-creation timeouts.
+
+## Update (2026-05-15)
+- During consolidated `46-test` run, two tests timed out at the old `30s` global limit while passing in isolated reruns.
+- This is tracked as infra timing under load (not functional regression).
+- Mitigation applied: Playwright global timeout increased to `60s`, expect timeout to `15s`.
+
+## Next Iteration (Planned Controls Activation)
+After baseline hardening completion, the next cycle focuses on fields currently marked `planned`.
+
+Execution order:
+1. Block A:
+- raw expression
+- nftrace
+- advanced notrack
+
+2. Block B:
+- tcp/icmp/icmpv6 detailed matchers
+- meta extended match subset
+- conntrack extended match subset
+
+3. Block C:
+- L2 matchers (vlan / ether src/dst/type)
+
+For each block:
+- implement UI wiring
+- add backend validation/schema mapping
+- add runtime nft renderer mapping
+- add strict E2E (positive + negative + toggle semantics + runtime equivalence)
+- update EN/RU guides with examples
+
+Current status:
+- Block A implemented and verified (`firewall-add-rule-block-a.spec.ts`, plus full add-rule consolidated run green).
+- Block B subset implemented and verified (`firewall-add-rule-block-b.spec.ts`):
+  - done: `tcp_flags`, `icmp_type`, `icmp_code`, `icmpv6_type`, `icmpv6_code`, `meta_length`, `ct_status`
+  - plus extended subset done:
+    - `meta_priority`, `meta_cpu`, `ct_direction`, `ct_expiration` (`firewall-add-rule-block-b2.spec.ts`)
+    - `meta_pkttype`, `meta_iifgroup`, `meta_oifgroup` (`firewall-add-rule-block-b3.spec.ts`)
+  - pending in Block B: remaining meta/conntrack extended fields (`iiftype/oiftype`, ct helper/label/event, etc.)
