@@ -155,6 +155,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [isBusy, setIsBusy] = React.useState(false)
   const [activeSection, setActiveSection] = React.useState<FirewallSectionTab>('policy')
   const [activePolicyTab, setActivePolicyTab] = React.useState<FirewallPolicyTab>('filter')
+  const [activeRuleTableName, setActiveRuleTableName] = React.useState<string>('filter')
   const [selectedRuleId, setSelectedRuleId] = React.useState<string | null>(null)
   const [addOpen, setAddOpen] = React.useState(false)
   const [editingRuleId, setEditingRuleId] = React.useState<string | null>(null)
@@ -219,22 +220,41 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     return `${(n / 1_000_000_000).toFixed(1)}G`
   }
 
-  const chainOptionsByTable: Record<string, FirewallRule['chain'][]> = {
+  const chainOptionsByTable: Record<string, string[]> = {
     filter: schema?.tables?.filter?.chains || ['input', 'forward', 'output'],
     nat: schema?.tables?.nat?.chains || ['prerouting', 'input', 'output', 'postrouting'],
     raw: schema?.tables?.raw?.chains || ['prerouting', 'output'],
     mangle: schema?.tables?.mangle?.chains || ['prerouting', 'input', 'forward', 'output', 'postrouting'],
   }
-  const tabToRuleTable = (tab: FirewallPolicyTab): 'filter' | 'nat' | 'raw' | 'mangle' => tab
-  const activeFormTable = (form.table || tabToRuleTable(activePolicyTab)) as 'filter' | 'nat' | 'raw' | 'mangle'
-  const tableSupports = new Set(schema?.tables?.[activeFormTable]?.supports || [])
+  const builtinRuleTables = new Set(['filter', 'nat', 'raw', 'mangle'])
+  const customChainRowsByTable = React.useMemo(() => {
+    const out: Record<string, FirewallTableItem[]> = {}
+    for (const row of tablesState.custom) {
+      const t = String(row.table_name || '').toLowerCase()
+      if (!t) continue
+      if (!out[t]) out[t] = []
+      out[t].push(row)
+    }
+    return out
+  }, [tablesState.custom])
+  const activeFormTable = String(form.table || activeRuleTableName || activePolicyTab).toLowerCase()
+  const defaultChainMode = builtinRuleTables.has(activeFormTable)
+    ? activeFormTable
+    : ((customChainRowsByTable[activeFormTable]?.find((row) => row.chain_name === form.chain)?.chain_type || customChainRowsByTable[activeFormTable]?.[0]?.chain_type || 'filter') === 'nat' ? 'nat' : 'filter')
+  const tableSupports = new Set(schema?.tables?.[(defaultChainMode as 'filter' | 'nat' | 'raw' | 'mangle')]?.supports || [])
   const hasSupport = (key: string) => tableSupports.has(key)
-  const effectiveChain = (form.chain || chainOptionsByTable[activeFormTable]?.[0] || 'input') as FirewallRule['chain']
-  const contextKey = `${activeFormTable}:${effectiveChain}`
-  const isFilterCtx = activeFormTable === 'filter'
-  const isNatCtx = activeFormTable === 'nat'
-  const isRawCtx = activeFormTable === 'raw'
-  const isMangleCtx = activeFormTable === 'mangle'
+  const activeChainOptions = builtinRuleTables.has(activeFormTable)
+    ? (chainOptionsByTable[activeFormTable] || ['input'])
+    : ((customChainRowsByTable[activeFormTable] || []).map((row) => row.chain_name).filter(Boolean))
+  const effectiveChain = (form.chain || activeChainOptions[0] || 'input') as string
+  const contextMode: 'filter' | 'nat' | 'raw' | 'mangle' = builtinRuleTables.has(activeFormTable)
+    ? (activeFormTable as 'filter' | 'nat' | 'raw' | 'mangle')
+    : (defaultChainMode as 'filter' | 'nat' | 'raw' | 'mangle')
+  const contextKey = `${contextMode}:${effectiveChain}`
+  const isFilterCtx = contextMode === 'filter'
+  const isNatCtx = contextMode === 'nat'
+  const isRawCtx = contextMode === 'raw'
+  const isMangleCtx = contextMode === 'mangle'
 
   function generalFieldState(field: 'in_interface' | 'out_interface' | 'ct_state'): FieldState {
     const states: Record<string, Record<typeof field, FieldState>> = {
@@ -264,6 +284,10 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     else if (isMangleCtx) setActionMode('mark')
     else setActionMode('verdict')
   }, [isNatCtx, isRawCtx, isMangleCtx])
+
+  React.useEffect(() => {
+    setActiveRuleTableName(activePolicyTab)
+  }, [activePolicyTab])
 
   const selectedAction = form.nat_type || form.action || 'accept'
   const isNatActionSelected = ['dnat', 'snat', 'masquerade', 'redirect'].includes(String(selectedAction))
@@ -308,11 +332,11 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
 
   React.useEffect(() => {
     if (addOpen && !editingRuleId) {
-      const ruleTable = tabToRuleTable(activePolicyTab)
-      setForm((p) => ({ ...p, table: ruleTable, chain: chainOptionsByTable[ruleTable][0] }))
+      const ruleTable = activeRuleTableName
+      setForm((p) => ({ ...p, table: ruleTable, chain: activeChainOptions[0] || 'input' }))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePolicyTab, addOpen, editingRuleId])
+  }, [activeRuleTableName, addOpen, editingRuleId])
 
   React.useEffect(() => {
     if (!editingRuleId) return
@@ -330,18 +354,18 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
 
   React.useEffect(() => {
     if (!addOpen) return
-    if ((form.table || activePolicyTab) !== 'nat' && form.nat_type) {
+    if (contextMode !== 'nat' && form.nat_type) {
       setForm((p) => ({ ...p, nat_type: null, to_addr: null, to_port: null }))
       return
     }
-    if ((form.table || activePolicyTab) === 'nat' && form.nat_type) {
+    if (contextMode === 'nat' && form.nat_type) {
       const chain = form.chain || 'prerouting'
       const allowedNat = schema?.tables?.nat?.nat_types_by_chain?.[chain] || ['dnat', 'redirect']
       if (!allowedNat.includes(form.nat_type)) {
         setForm((p) => ({ ...p, nat_type: null, to_addr: null, to_port: null }))
       }
     }
-  }, [addOpen, form.table, form.chain, form.nat_type, activePolicyTab, schema])
+  }, [addOpen, form.chain, form.nat_type, contextMode, schema])
 
   async function onSave(event: React.FormEvent) {
     event.preventDefault()
@@ -407,8 +431,8 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   function openCreateWindow() {
     setEditingRuleId(null)
     setRuleEditorTab('base')
-    const ruleTable = tabToRuleTable(activePolicyTab)
-    setForm({ ...defaultRule, table: ruleTable, chain: chainOptionsByTable[ruleTable][0] })
+    const ruleTable = activeRuleTableName
+    setForm({ ...defaultRule, table: ruleTable, chain: activeChainOptions[0] || 'input' })
     setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 760) / 2) - 60) })
     setAddOpen(true)
   }
@@ -502,7 +526,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     setAddOpen(true)
   }
 
-  const activeRuleTable = tabToRuleTable(activePolicyTab)
+  const activeRuleTable = activeRuleTableName
   const visibleRules = (state?.rules || []).filter((r) => r.table === activeRuleTable)
   const currentRulePackets = Number(form.runtime_packets || 0)
   const currentRuleBytes = Number(form.runtime_bytes || 0)
@@ -817,7 +841,8 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                       onClick={() => {
                         const row = tablesState.custom.find((x) => x.table_name === name)
                         if (row) setSelectedTableId(row.id)
-                        setActiveSection('table_builder')
+                        setActiveRuleTableName(name)
+                        setActiveSection('policy')
                       }}
                     >
                       {name}
@@ -825,6 +850,9 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                   ))}
                 </div>
               ) : null}
+              <div className='rounded-md border px-2 py-1 text-[11px] text-muted-foreground'>
+                table: <span className='font-medium text-foreground'>{activeRuleTable}</span>
+              </div>
             </div>
           ) : null}
           {!isCollectionsTab && !isTablesTab ? <div className='flex gap-2'>
@@ -1066,8 +1094,12 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                   <div className='text-[11px] font-semibold text-muted-foreground'>Base rule placement</div>
                   <div className='space-y-1.5'>
                     <Label>Chain</Label>
-                    <select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={form.chain || 'input'} onChange={(e) => setForm((p) => ({ ...p, chain: e.target.value as FirewallRule['chain'] }))}>
-                      {(chainOptionsByTable[form.table || 'filter'] || []).map((ch) => (<option key={ch} value={ch}>{ch}</option>))}
+                    <select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={form.chain || 'input'} onChange={(e) => setForm((p) => ({ ...p, chain: e.target.value }))}>
+                      {(
+                        builtinRuleTables.has(String(form.table || '').toLowerCase())
+                          ? (chainOptionsByTable[String(form.table || 'filter').toLowerCase()] || [])
+                          : ((customChainRowsByTable[String(form.table || '').toLowerCase()] || []).map((row) => row.chain_name).filter(Boolean))
+                      ).map((ch) => (<option key={ch} value={ch}>{ch}</option>))}
                     </select>
                   </div>
 

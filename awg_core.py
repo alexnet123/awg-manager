@@ -635,17 +635,34 @@ def _normalize_firewall_rule(payload):
 
     if family != FIREWALL_TABLE_FAMILY:
         raise ValueError(f'family must be {FIREWALL_TABLE_FAMILY}')
-    if nft_table not in ('filter', 'nat', 'raw', 'mangle'):
-        raise ValueError('table must be one of: filter, nat, raw, mangle')
-    allowed_chains_by_table = {
-        table: tuple(config['chains'])
-        for table, config in FIREWALL_SCHEMA['tables'].items()
-    }
-    if chain not in allowed_chains_by_table[nft_table]:
+
+    table_mode = None
+    chain_mode = None
+    allowed_chains = ()
+    if nft_table in ('filter', 'nat', 'raw', 'mangle'):
+        table_mode = nft_table
+        allowed_chains = tuple(FIREWALL_SCHEMA['tables'][nft_table]['chains'])
+    else:
+        if not re.fullmatch(r'[a-zA-Z0-9_.-]+', str(nft_table)):
+            raise ValueError('table name contains invalid characters')
+        custom_rows = _read_firewall_tables_file().get('tables', [])
+        table_rows = [row for row in custom_rows if isinstance(row, dict) and str(row.get('table_name', '')).lower() == nft_table]
+        if not table_rows:
+            raise ValueError(f'table "{nft_table}" is not found among built-in or custom tables')
+        allowed_chains = tuple(str(row.get('chain_name', '')).lower() for row in table_rows if row.get('chain_name'))
+        if chain not in allowed_chains:
+            raise ValueError(f'chain "{chain}" is not valid for custom table "{nft_table}"')
+        selected_chain = next((row for row in table_rows if str(row.get('chain_name', '')).lower() == chain), None)
+        chain_mode = str((selected_chain or {}).get('chain_type') or 'filter').lower()
+        if chain_mode not in ('filter', 'nat', 'route'):
+            chain_mode = 'filter'
+        table_mode = 'nat' if chain_mode == 'nat' else 'filter'
+
+    if chain not in allowed_chains:
         raise ValueError(f'chain "{chain}" is not valid for table "{nft_table}"')
     if action not in ('accept', 'drop', 'reject', 'jump', 'goto', 'return'):
         raise ValueError('action must be one of: accept, drop, reject, jump, goto, return')
-    if nft_table != 'filter' and action in ('jump', 'goto', 'return'):
+    if table_mode != 'filter' and action in ('jump', 'goto', 'return'):
         raise ValueError('jump/goto/return are currently supported only in filter table')
     if action in ('jump', 'goto'):
         if target_chain is None:
@@ -730,7 +747,7 @@ def _normalize_firewall_rule(payload):
         nat_type = str(nat_type).lower()
         if nat_type not in ('masquerade', 'snat', 'dnat', 'redirect'):
             raise ValueError('nat_type must be one of: masquerade, snat, dnat, redirect')
-    if nft_table != 'nat' and nat_type is not None:
+    if table_mode != 'nat' and nat_type is not None:
         raise ValueError('nat_type is only valid for nat table')
     if nat_type is not None:
         allowed_nat_types = FIREWALL_SCHEMA['tables']['nat']['nat_types_by_chain'].get(chain, [])
@@ -742,7 +759,7 @@ def _normalize_firewall_rule(payload):
         nat_fully_random = str(nat_fully_random).lower() in ('1', 'true', 'yes', 'on')
     if not isinstance(nat_persistent, bool):
         nat_persistent = str(nat_persistent).lower() in ('1', 'true', 'yes', 'on')
-    if nft_table != 'nat' and (nat_random or nat_fully_random or nat_persistent):
+    if table_mode != 'nat' and (nat_random or nat_fully_random or nat_persistent):
         raise ValueError('nat flags are only valid for nat table')
     if nat_fully_random and nat_type not in ('snat', 'dnat', 'masquerade', 'redirect'):
         raise ValueError('nat_fully_random requires a nat_type statement')
@@ -763,13 +780,13 @@ def _normalize_firewall_rule(payload):
         raise ValueError('to_port is only valid for nat statements')
     if not isinstance(notrack, bool):
         notrack = str(notrack).lower() in ('1', 'true', 'yes', 'on')
-    if notrack and nft_table != 'raw':
+    if notrack and table_mode != 'raw':
         raise ValueError('notrack is only valid for raw table')
     if not isinstance(nftrace, bool):
         nftrace = str(nftrace).lower() in ('1', 'true', 'yes', 'on')
-    if nftrace and nft_table != 'raw':
+    if nftrace and table_mode != 'raw':
         raise ValueError('nftrace is only valid for raw table')
-    if raw_expr is not None and nft_table != 'raw':
+    if raw_expr is not None and table_mode != 'raw':
         raise ValueError('raw_expr is only valid for raw table')
     if tcp_flags is not None and not re.fullmatch(r'[A-Za-z0-9_,/ ]+', str(tcp_flags)):
         raise ValueError('tcp_flags contains invalid characters')
@@ -1425,8 +1442,16 @@ def reorder_firewall_rules_service(table, ordered_ids, apply_now=True):
     if nft_table is None:
         raise ValueError('table is required')
     nft_table = nft_table.lower()
-    if nft_table not in ('filter', 'nat', 'raw', 'mangle'):
-        raise ValueError('table must be one of: filter, nat, raw, mangle')
+    allowed_tables = {'filter', 'nat', 'raw', 'mangle'}
+    custom_rows = _read_firewall_tables_file().get('tables', [])
+    for row in custom_rows:
+        if not isinstance(row, dict):
+            continue
+        tname = normalize_config_value(row.get('table_name'))
+        if tname:
+            allowed_tables.add(str(tname).lower())
+    if nft_table not in allowed_tables:
+        raise ValueError('table must be one of built-in or existing custom tables')
     if not isinstance(ordered_ids, list) or not all(isinstance(x, str) and x.strip() for x in ordered_ids):
         raise ValueError('ordered_ids must be a non-empty list of rule ids')
 
@@ -1458,16 +1483,25 @@ def reorder_firewall_rules_service(table, ordered_ids, apply_now=True):
 
 
 def reset_firewall_counters_service(table=None):
-    tables = ('filter', 'nat', 'raw', 'mangle')
+    tables = ['filter', 'nat', 'raw', 'mangle']
+    custom_rows = _read_firewall_tables_file().get('tables', [])
+    for row in custom_rows:
+        if not isinstance(row, dict):
+            continue
+        tname = normalize_config_value(row.get('table_name'))
+        if tname:
+            low = str(tname).lower()
+            if low not in tables:
+                tables.append(low)
     if table is None:
-        target_tables = tables
+        target_tables = tuple(tables)
     else:
         nft_table = normalize_config_value(table)
         if nft_table is None:
             raise ValueError('table is empty')
         nft_table = nft_table.lower()
-        if nft_table not in tables:
-            raise ValueError('table must be one of: filter, nat, raw, mangle')
+        if nft_table not in set(tables):
+            raise ValueError('table must be one of built-in or existing custom tables')
         target_tables = (nft_table,)
 
     reset_count = 0

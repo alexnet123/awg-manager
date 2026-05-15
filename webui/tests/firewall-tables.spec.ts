@@ -19,6 +19,15 @@ async function listTablesViaApi(page: Page) {
   })
 }
 
+async function listRulesViaApi(page: Page) {
+  return await page.evaluate(async () => {
+    const apiKey = JSON.parse(sessionStorage.getItem('awg_manager_auth_v1') || '{}')?.apiKey
+    const res = await fetch('/firewall', { headers: { 'X-API-Key': apiKey } })
+    const payload = await res.json()
+    return payload?.item?.rules || []
+  })
+}
+
 test('firewall tables: add and delete custom table chain', async ({ page }) => {
   await login(page)
   await openFirewall(page)
@@ -51,4 +60,37 @@ test('firewall tables: add and delete custom table chain', async ({ page }) => {
 
   const afterDelete = await listTablesViaApi(page)
   expect((afterDelete.custom || []).some((t: any) => t.table_name === tableName)).toBeFalsy()
+})
+
+test('firewall policy: click custom table and create rule in it', async ({ page }) => {
+  await login(page)
+  await openFirewall(page)
+  await page.getByRole('tab', { name: 'table builder' }).click()
+
+  const tableName = unique('pw_tblp')
+  const tablePanel = page.locator('div.rounded-xl.border').first()
+
+  await tablePanel.locator('button').filter({ hasText: 'Add' }).first().click()
+  await expect(page.getByText('Add Table Chain')).toBeVisible()
+  await page.getByPlaceholder('custom_table').fill(tableName)
+  await page.getByPlaceholder('input_custom').fill('input')
+  await page.locator("label:has-text('Priority')").locator('..').locator('input').fill('-21')
+  await page.locator('div.fixed.inset-0.z-40').last().getByRole('button', { name: 'Add' }).click({ force: true })
+  await expect(page.locator('tbody tr').filter({ hasText: tableName }).first()).toBeVisible()
+
+  await page.getByRole('tab', { name: 'policy' }).click()
+  await page.getByRole('button', { name: tableName }).click()
+  await expect(page.getByText(new RegExp(`table:\\s*${tableName}`))).toBeVisible()
+
+  const beforeRules = await listRulesViaApi(page)
+  const beforeCount = beforeRules.filter((r: any) => r.table === tableName && r.chain === 'input').length
+
+  const rulesPanel = page.locator('div.rounded-xl.border').first()
+  await rulesPanel.locator('button').filter({ hasText: 'Add' }).first().click()
+  await expect(page.getByText('Add Firewall Rule')).toBeVisible()
+  await page.locator('div.fixed.inset-0.z-40').last().getByRole('button', { name: 'Add' }).click({ force: true })
+
+  const rules = await listRulesViaApi(page)
+  const afterCount = rules.filter((r: any) => r.table === tableName && r.chain === 'input').length
+  expect(afterCount).toBeGreaterThan(beforeCount)
 })
