@@ -59,6 +59,39 @@
 - `vlan id`
 - `ether src` / `ether dst` / `ether type`
 
+### 3.1 Быстрый справочник по matcher-полям
+Рабочие примеры:
+- `tcp flags`: `syn,ack` (требует `proto=tcp`)
+- `icmp type/code`: `echo-request` + `0` (требует `proto=icmp`)
+- `icmpv6 type/code`: `echo-request` + `0` (требует `proto=icmpv6`)
+- `meta length`: `64-1500`
+- `meta priority`: `1:10`
+- `meta cpu`: `0`
+- `meta pkttype`: `host`
+- `meta iifgroup`: `10`
+- `meta oifgroup`: `20`
+- `ct status`: `assured,confirmed`
+- `ct direction`: `original`
+- `ct expiration`: `30s`
+- `ct helper`: `ftp`
+- `ct label`: `0x1`
+- `ct event`: `new,related`
+- `ct original/reply saddr`: `10.8.0.2` / `10.8.0.1`
+- `fib check`: `daddr . iif type`
+- `socket match`: `transparent 1`
+- `rt nexthop`: `10.0.0.1`
+- `ipv6 exthdrs`: `frag`
+- `vlan id`: `10`
+- `ether type`: `0x0800`
+
+Типовые ожидаемые ошибки:
+- `tcp_flags` при протоколе не `tcp`.
+- `icmp_type/icmp_code` при протоколе не `icmp`.
+- `icmpv6_type/icmpv6_code` при протоколе не `icmpv6`.
+- неверный `ct_direction` (должен быть `original` или `reply`).
+- неверный формат `ct_expiration` (только `30s`, `1m`, `2h`, `1d` и т.п.).
+- некорректные форматы mark/meta токенов.
+
 ## 4) Вкладка Action
 - `Action`: вердикт или управляющее действие.
 - `Target / to`: для jump/goto/nat параметров.
@@ -78,6 +111,7 @@
 ## 6) Валидации (важно)
 - Некорректные комбинации table/chain/action отклоняются.
 - Порты требуют контекст протокола tcp/udp.
+- Поля TCP/ICMP/ICMPv6 match требуют соответствующий протокол.
 - Неверные CIDR/port форматы отклоняются до apply.
 - Небезопасный `jump` в базовые цепочки блокируется.
 

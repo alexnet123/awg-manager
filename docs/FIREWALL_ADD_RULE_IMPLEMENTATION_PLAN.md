@@ -42,6 +42,18 @@ Work:
 2. Implement explicit unsupported-path errors for not-yet-wired fields.
 3. Add docs examples per matcher.
 
+Status update (May 17, 2026):
+- block-b strict suite (`b`, `b2`..`b12`) is green on test stand.
+- runtime renderer fixed for inet compatibility:
+  - `ct original/reply` now emits explicit `ip/ip6` family in ct tuple matches.
+  - `rt nexthop` now emits `rt ip|ip6 nexthop ...`.
+  - L2 (`vlan` + `ether_type`) render order/protocol mapping fixed.
+- orphaned rules pointing to missing custom tables are skipped during apply (resilience hardening).
+- Add Rule strict regression (`tests/firewall-add-rule-*.spec.ts`) is green on stand (with updated `firewall-tables` tests aligned to `Tabs + Select` policy UI).
+- Recovery checks passed:
+  - service restart recovery script (`scripts/test_firewall_add_rule_recovery.sh`)
+  - reboot recovery scenario (API + JSON + runtime nft parity).
+
 ## Phase 4 - Planned fields block C (L2)
 Scope:
 - vlan, ether src/dst/type
@@ -49,6 +61,11 @@ Scope:
 Work:
 1. Enable only where nft context supports it.
 2. Add strict validation and runtime mapping checks.
+
+Status update (May 18, 2026):
+- completed
+- strict L2 coverage is green (`block-b8` positive + negative)
+- renderer is nft-compatible for mixed L2 usage in `inet` context (`vlan` + `ether` order/protocol mapping)
 
 ## Documentation Workstream (parallel)
 1. EN guide: all current controls, examples, constraints, troubleshooting.

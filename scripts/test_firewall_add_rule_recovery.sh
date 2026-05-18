@@ -68,7 +68,8 @@ systemctl is-active "$SERVICE_NAME" >/dev/null
 
 echo "[5/6] verify rule after restart (API + nft + json)"
 api GET /firewall | python3 -c "import sys,json; p=json.load(sys.stdin); assert any((r.get('comment')=='$TEST_COMMENT') for r in p.get('item',{}).get('rules',[]))"
-nft list ruleset | grep -q "$TEST_COMMENT"
+RULESET_SNAPSHOT="$(nft list ruleset)"
+grep -q "$TEST_COMMENT" <<< "$RULESET_SNAPSHOT"
 python3 - <<PY
 import json
 with open("$RULES_JSON","r") as f:

@@ -998,11 +998,34 @@ def _normalize_firewall_rule(payload):
 
 
 def _render_firewall_rule(rule):
+    def _detect_ip_family(value):
+        raw = str(value or '').strip()
+        if not raw:
+            return 'ip'
+        candidate = raw.split('/', 1)[0]
+        try:
+            parsed = ipaddress.ip_address(candidate)
+            return 'ip6' if parsed.version == 6 else 'ip'
+        except ValueError:
+            return 'ip6' if ':' in raw else 'ip'
+
     def _render_port_value(raw):
         value = str(raw)
         if ':' in value:
             return value.replace(':', '-')
         return value
+
+    def _render_l3_proto_type(raw):
+        value = str(raw or '').strip().lower()
+        mapping = {
+            '0x0800': 'ip',
+            '2048': 'ip',
+            '0x86dd': 'ip6',
+            '34525': 'ip6',
+            '0x0806': 'arp',
+            '2054': 'arp',
+        }
+        return mapping.get(value, value)
 
     parts = []
     if rule['in_interface']:
@@ -1015,6 +1038,17 @@ def _render_firewall_rule(rule):
     if rule['dst']:
         prefix = 'ip6' if ':' in str(rule['dst']) else 'ip'
         parts.append(f'{prefix} daddr {rule["dst"]}')
+    if rule.get('ether_src'):
+        parts.append(f'ether saddr {rule["ether_src"]}')
+    if rule.get('ether_dst'):
+        parts.append(f'ether daddr {rule["ether_dst"]}')
+    if rule.get('vlan_id'):
+        parts.append(f'vlan id {rule["vlan_id"]}')
+    if rule.get('ether_type'):
+        if rule.get('vlan_id'):
+            parts.append(f'vlan type {_render_l3_proto_type(rule["ether_type"])}')
+        else:
+            parts.append(f'ether type {rule["ether_type"]}')
     if rule['proto']:
         parts.append(f'meta l4proto {rule["proto"]}')
     if rule.get('ct_state'):
@@ -1088,29 +1122,26 @@ def _render_firewall_rule(rule):
     if rule.get('ct_event'):
         parts.append(f'ct event set {rule["ct_event"]}')
     if rule.get('ct_original_saddr'):
-        parts.append(f'ct original saddr {rule["ct_original_saddr"]}')
+        family = _detect_ip_family(rule['ct_original_saddr'])
+        parts.append(f'ct original {family} saddr {rule["ct_original_saddr"]}')
     if rule.get('ct_original_daddr'):
-        parts.append(f'ct original daddr {rule["ct_original_daddr"]}')
+        family = _detect_ip_family(rule['ct_original_daddr'])
+        parts.append(f'ct original {family} daddr {rule["ct_original_daddr"]}')
     if rule.get('ct_reply_saddr'):
-        parts.append(f'ct reply saddr {rule["ct_reply_saddr"]}')
+        family = _detect_ip_family(rule['ct_reply_saddr'])
+        parts.append(f'ct reply {family} saddr {rule["ct_reply_saddr"]}')
     if rule.get('ct_reply_daddr'):
-        parts.append(f'ct reply daddr {rule["ct_reply_daddr"]}')
+        family = _detect_ip_family(rule['ct_reply_daddr'])
+        parts.append(f'ct reply {family} daddr {rule["ct_reply_daddr"]}')
     if rule.get('fib_check'):
         parts.append(f'fib {rule["fib_check"]}')
     if rule.get('socket_match'):
         parts.append(f'socket {rule["socket_match"]}')
     if rule.get('rt_nexthop'):
-        parts.append(f'rt nexthop {rule["rt_nexthop"]}')
+        family = _detect_ip_family(rule['rt_nexthop'])
+        parts.append(f'rt {family} nexthop {rule["rt_nexthop"]}')
     if rule.get('ipv6_exthdrs'):
         parts.append(f'exthdr {rule["ipv6_exthdrs"]}')
-    if rule.get('vlan_id'):
-        parts.append(f'vlan id {rule["vlan_id"]}')
-    if rule.get('ether_src'):
-        parts.append(f'ether saddr {rule["ether_src"]}')
-    if rule.get('ether_dst'):
-        parts.append(f'ether daddr {rule["ether_dst"]}')
-    if rule.get('ether_type'):
-        parts.append(f'ether type {rule["ether_type"]}')
     if rule.get('log_prefix') or rule.get('log_level'):
         log_parts = ['log']
         if rule.get('log_prefix'):
@@ -1252,6 +1283,11 @@ def apply_firewall_rules():
     table_defs = dict(FIREWALL_DEFAULT_TABLE_DEFS)
     custom_tables = _read_firewall_tables_file().get('tables', [])
     for row in custom_tables:
+        enabled = row.get('enabled', True)
+        if not isinstance(enabled, bool):
+            enabled = str(enabled).lower() in ('1', 'true', 'yes', 'on')
+        if not enabled:
+            continue
         table_name = normalize_config_value(row.get('table_name'))
         chain_name = normalize_config_value(row.get('chain_name'))
         chain_type = normalize_config_value(row.get('chain_type'))
@@ -1350,6 +1386,11 @@ def apply_firewall_rules():
                 script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
     for rule in rules:
         if not rule.get('enabled', True):
+            continue
+        rule_table = str(rule.get('table') or '').lower()
+        if rule_table not in active_table_names:
+            # Skip orphaned rule rows that reference missing/disabled custom tables.
+            # This keeps apply resilient after table cleanup or toggle operations.
             continue
         rendered = _render_firewall_rule(rule)
         table_name = f'{FIREWALL_TABLE_PREFIX}{rule["table"]}'
@@ -1826,6 +1867,7 @@ def _normalize_firewall_table_item(payload):
     hook_name = (normalize_config_value(payload.get('hook')) or 'input').lower()
     device = normalize_config_value(payload.get('device'))
     policy = (normalize_config_value(payload.get('policy')) or 'accept').lower()
+    enabled = payload.get('enabled', True)
     try:
         priority = int(payload.get('priority'))
     except Exception:
@@ -1842,6 +1884,8 @@ def _normalize_firewall_table_item(payload):
         raise ValueError('policy must be accept|drop')
     if priority in FIREWALL_RESERVED_PRIORITIES:
         raise ValueError('priority is reserved by built-in tables')
+    if not isinstance(enabled, bool):
+        enabled = str(enabled).lower() in ('1', 'true', 'yes', 'on')
     return {
         'id': str(payload.get('id') or uuid.uuid4().hex),
         'family': family,
@@ -1852,7 +1896,7 @@ def _normalize_firewall_table_item(payload):
         'device': (str(device) if device else None),
         'priority': priority,
         'policy': policy,
-        'enabled': True,
+        'enabled': enabled,
     }
 
 

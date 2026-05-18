@@ -44,7 +44,7 @@ test('block B12: fib/socket/rt/exthdr fields map to runtime', async ({ request }
   const line = getRuleLineByComment(state?.item?.ruleset || '', comment)
   expect(line).toContain('fib daddr type local')
   expect(line).toContain('socket transparent 1')
-  expect(line).toContain('rt nexthop 192.0.2.1')
+  expect(line).toContain('rt ip nexthop 192.0.2.1')
   expect(line).toContain('exthdr frag missing')
 
   await deleteRule(request, created.id)

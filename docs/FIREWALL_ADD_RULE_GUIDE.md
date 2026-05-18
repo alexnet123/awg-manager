@@ -59,6 +59,39 @@ Currently active:
 - `vlan id`
 - `ether src` / `ether dst` / `ether type`
 
+### 3.1 Advanced matcher quick cookbook
+Working examples:
+- `tcp flags`: `syn,ack` (requires `proto=tcp`)
+- `icmp type/code`: `echo-request` + `0` (requires `proto=icmp`)
+- `icmpv6 type/code`: `echo-request` + `0` (requires `proto=icmpv6`)
+- `meta length`: `64-1500`
+- `meta priority`: `1:10`
+- `meta cpu`: `0`
+- `meta pkttype`: `host`
+- `meta iifgroup`: `10`
+- `meta oifgroup`: `20`
+- `ct status`: `assured,confirmed`
+- `ct direction`: `original`
+- `ct expiration`: `30s`
+- `ct helper`: `ftp`
+- `ct label`: `0x1`
+- `ct event`: `new,related`
+- `ct original/reply saddr`: `10.8.0.2` / `10.8.0.1`
+- `fib check`: `daddr . iif type`
+- `socket match`: `transparent 1`
+- `rt nexthop`: `10.0.0.1`
+- `ipv6 exthdrs`: `frag`
+- `vlan id`: `10`
+- `ether type`: `0x0800`
+
+Common rejects (expected):
+- `tcp_flags` with non-tcp protocol.
+- `icmp_type/icmp_code` with non-icmp protocol.
+- `icmpv6_type/icmpv6_code` with non-icmpv6 protocol.
+- invalid `ct_direction` (must be `original` or `reply`).
+- invalid `ct_expiration` format (must be like `30s`, `1m`, `2h`, `1d`).
+- invalid mark/meta token formats.
+
 ## 4) Action tab
 - `Action`: verdict or control action.
 - `Target / to`: for jump/goto/nat target fields.
@@ -78,6 +111,7 @@ Note:
 ## 6) Validation rules (important)
 - Invalid table/chain/action combinations are rejected.
 - Ports require tcp/udp protocol context.
+- TCP/ICMP/ICMPv6 matcher fields require matching protocol context.
 - Invalid CIDR/port formats are rejected before apply.
 - Unsafe jump target usage is blocked (base hook chains are not valid jump targets).
 

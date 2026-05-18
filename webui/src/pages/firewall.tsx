@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import type { AuthState, FirewallMapItem, FirewallMapsState, FirewallRule, FirewallSchema, FirewallSetItem, FirewallSetsState, FirewallState, FirewallTableItem, FirewallTablesState } from './api'
@@ -196,6 +197,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [editingSetId, setEditingSetId] = React.useState<string | null>(null)
   const [selectedTableId, setSelectedTableId] = React.useState<string | null>(null)
   const [tableOpen, setTableOpen] = React.useState(false)
+  const [editingTableId, setEditingTableId] = React.useState<string | null>(null)
   const [newTableFamily, setNewTableFamily] = React.useState('inet')
   const [newTableName, setNewTableName] = React.useState('')
   const [newChainName, setNewChainName] = React.useState('')
@@ -580,7 +582,16 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
 
   const isCollectionsTab = activeSection === 'collections'
   const isTablesTab = activeSection === 'table_builder'
-  const customTableNames = Array.from(new Set(tablesState.custom.map((x) => x.table_name))).sort((a, b) => a.localeCompare(b))
+  const isCustomRuleTableActive = !['filter', 'nat', 'raw', 'mangle'].includes(activeRuleTableName)
+  const customTableNames = Array.from(new Set(tablesState.custom.filter((x) => x.enabled !== false).map((x) => x.table_name))).sort((a, b) => a.localeCompare(b))
+  const tableRows = React.useMemo(() => [...tablesState.custom, ...tablesState.builtin], [tablesState.builtin, tablesState.custom])
+
+  React.useEffect(() => {
+    if (['filter', 'nat', 'raw', 'mangle'].includes(activeRuleTableName)) return
+    const existsEnabled = tablesState.custom.some((x) => x.table_name === activeRuleTableName && x.enabled !== false)
+    if (!existsEnabled) setActiveRuleTableName('filter')
+  }, [activeRuleTableName, tablesState.custom])
+
   const allSetItems: Array<FirewallSetItem & { kind: 'addr' | 'port' | 'iface' }> = [
     ...setsState.addr.map((x) => ({ ...x, kind: 'addr' as const })),
     ...setsState.port.map((x) => ({ ...x, kind: 'port' as const })),
@@ -709,6 +720,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   }
 
   function openCreateTableWindow() {
+    setEditingTableId(null)
     setNewTableFamily('inet')
     setNewTableName('')
     setNewChainName('')
@@ -717,6 +729,21 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     setNewDevice('')
     setNewPriority('-10')
     setNewPolicy('accept')
+    setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 420) / 2) - 40) })
+    setTableOpen(true)
+  }
+
+  function openEditTableWindow(item: FirewallTableItem) {
+    if (item.builtin) return
+    setEditingTableId(item.id)
+    setNewTableFamily(item.family || 'inet')
+    setNewTableName(item.table_name || '')
+    setNewChainName(item.chain_name || '')
+    setNewChainType((item.chain_type || 'filter') as 'filter' | 'nat' | 'route')
+    setNewHook((item.hook || 'input') as 'prerouting' | 'input' | 'forward' | 'output' | 'postrouting' | 'ingress')
+    setNewDevice(item.device || '')
+    setNewPriority(String(item.priority ?? -10))
+    setNewPolicy((item.policy || 'accept') as 'accept' | 'drop')
     setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 420) / 2) - 40) })
     setTableOpen(true)
   }
@@ -750,7 +777,8 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
 
     const allRows = [...tablesState.builtin, ...tablesState.custom]
     const duplicateChainInTable = allRows.find((row) =>
-      row.family.toLowerCase() === family
+      row.id !== editingTableId
+      && row.family.toLowerCase() === family
       && row.table_name === tableName
       && row.chain_name === chainName
     )
@@ -760,7 +788,8 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     }
 
     const hookPriorityConflict = allRows.find((row) =>
-      row.family.toLowerCase() === family
+      row.id !== editingTableId
+      && row.family.toLowerCase() === family
       && String(row.hook || '').toLowerCase() === hook
       && Number(row.priority) === priorityNum
     )
@@ -773,6 +802,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     setIsBusy(true)
     try {
       await upsertFirewallTable(props.auth, {
+        id: editingTableId || undefined,
         family,
         table_name: tableName,
         chain_name: chainName,
@@ -781,7 +811,9 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
         device,
         priority: priorityNum,
         policy: newPolicy,
+        enabled: editingTableId ? (tablesState.custom.find((x) => x.id === editingTableId)?.enabled ?? true) : true,
       })
+      setEditingTableId(null)
       await refresh()
       return true
     } catch (exc) {
@@ -808,12 +840,37 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     }
   }
 
+  async function onSetEnabledTable(item: FirewallTableItem, enabled: boolean) {
+    if (item.builtin) return
+    setError(null)
+    setIsBusy(true)
+    try {
+      await upsertFirewallTable(props.auth, {
+        id: item.id,
+        family: item.family,
+        table_name: item.table_name,
+        chain_name: item.chain_name,
+        chain_type: item.chain_type,
+        hook: item.hook,
+        device: item.device || null,
+        priority: Number(item.priority),
+        policy: item.policy,
+        enabled,
+      })
+      await refresh()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
   return (
-    <div className='flex h-[calc(100svh-7.5rem)] min-h-[640px] w-full flex-col gap-2'>
+    <div className='flex h-[calc(100svh-7.5rem)] min-h-[640px] w-full flex-col gap-2 overflow-x-hidden'>
       <div><h2 className='text-lg font-semibold tracking-tight'>Firewall</h2></div>
       {error ? <div className='rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive'>{error}</div> : null}
-      <Card className='flex min-h-0 w-full flex-1 flex-col text-xs'>
-        <CardContent className='flex min-h-0 flex-1 flex-col gap-2 px-4 pt-0'>
+      <Card className='flex min-h-0 w-full flex-1 flex-col overflow-x-hidden text-xs'>
+        <CardContent className='flex min-h-0 min-w-0 flex-1 flex-col gap-2 px-4 pt-0'>
           <Tabs value={activeSection} onValueChange={(v) => setActiveSection(v as FirewallSectionTab)}>
             <TabsList className='h-9'>
               <TabsTrigger className='px-4 text-sm' value='policy'>policy</TabsTrigger>
@@ -822,37 +879,51 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
             </TabsList>
           </Tabs>
           {!isCollectionsTab && !isTablesTab ? (
-            <div className='flex flex-wrap items-center gap-2'>
-              <Tabs value={activePolicyTab} onValueChange={(v) => setActivePolicyTab(v as FirewallPolicyTab)}>
-                <TabsList className='h-9'>
-                  <TabsTrigger className='px-4 text-sm' value='filter'>filter</TabsTrigger>
-                  <TabsTrigger className='px-4 text-sm' value='nat'>nat</TabsTrigger>
-                  <TabsTrigger className='px-4 text-sm' value='raw'>raw</TabsTrigger>
-                  <TabsTrigger className='px-4 text-sm' value='mangle'>mangle</TabsTrigger>
-                </TabsList>
-              </Tabs>
+            <div className='flex min-w-0 w-full items-center gap-2 overflow-hidden'>
+              <div className='shrink-0'>
+                <Tabs
+                  value={isCustomRuleTableActive ? '__custom__' : activePolicyTab}
+                  onValueChange={(v) => {
+                    const next = v as FirewallPolicyTab
+                    setActivePolicyTab(next)
+                    setActiveRuleTableName(next)
+                  }}
+                >
+                  <TabsList className='h-9'>
+                    <TabsTrigger className='px-4 text-sm' value='filter'>filter</TabsTrigger>
+                    <TabsTrigger className='px-4 text-sm' value='nat'>nat</TabsTrigger>
+                    <TabsTrigger className='px-4 text-sm' value='raw'>raw</TabsTrigger>
+                    <TabsTrigger className='px-4 text-sm' value='mangle'>mangle</TabsTrigger>
+                  </TabsList>
+                </Tabs>
+              </div>
               {customTableNames.length ? (
-                <div className='flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-2 py-1'>
-                  {customTableNames.map((name) => (
-                    <button
-                      key={name}
-                      type='button'
-                      className='rounded-md border border-amber-400 bg-amber-100 px-2 py-1 text-[11px] font-medium text-amber-900 hover:bg-amber-200'
-                      onClick={() => {
-                        const row = tablesState.custom.find((x) => x.table_name === name)
-                        if (row) setSelectedTableId(row.id)
-                        setActiveRuleTableName(name)
-                        setActiveSection('policy')
-                      }}
-                    >
-                      {name}
-                    </button>
-                  ))}
+                <div className='min-w-0 max-w-full basis-0 flex-1'>
+                  <Select
+                    value={isCustomRuleTableActive ? activeRuleTableName : '__none__'}
+                    onValueChange={(v) => {
+                      if (v === '__none__') {
+                        setActiveRuleTableName(activePolicyTab)
+                        return
+                      }
+                      const row = tablesState.custom.find((x) => x.table_name === v)
+                      if (row) setSelectedTableId(row.id)
+                      setActiveRuleTableName(v)
+                      setActiveSection('policy')
+                    }}
+                  >
+                    <SelectTrigger className='h-9 w-full border-amber-300 bg-amber-50 text-sm'>
+                      <SelectValue placeholder='Custom table (optional)' />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value='__none__'>System table only</SelectItem>
+                      {customTableNames.map((name) => (
+                        <SelectItem key={name} value={name}>{name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               ) : null}
-              <div className='rounded-md border px-2 py-1 text-[11px] text-muted-foreground'>
-                table: <span className='font-medium text-foreground'>{activeRuleTable}</span>
-              </div>
             </div>
           ) : null}
           {!isCollectionsTab && !isTablesTab ? <div className='flex gap-2'>
@@ -951,7 +1022,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                   Enable
                 </Button>
               </div>
-              <div className='min-h-0 w-full flex-1 overflow-y-scroll rounded-xl border'>
+              <div className='min-h-0 min-w-0 w-full flex-1 overflow-auto rounded-xl border'>
                 <Table>
                   <TableHeader><TableRow><TableHead>type</TableHead><TableHead>name</TableHead><TableHead>values</TableHead><TableHead>comment</TableHead></TableRow></TableHeader>
                   <TableBody>
@@ -986,13 +1057,44 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
               <div className='flex gap-2'>
                 <Button size='sm' onClick={openCreateTableWindow} disabled={isBusy}><Plus />Add</Button>
                 <Button size='sm' variant='destructive' disabled={isBusy || !selectedTableId || selectedTableId.startsWith('builtin:')} onClick={() => { const row = tablesState.custom.find((x) => x.id === selectedTableId); if (!row) return; void onDeleteTable(row) }}>Del</Button>
+                <Button
+                  size='sm'
+                  variant='outline'
+                  disabled={isBusy || !selectedTableId || selectedTableId.startsWith('builtin:')}
+                  onClick={() => {
+                    const row = tablesState.custom.find((x) => x.id === selectedTableId)
+                    if (!row) return
+                    void onSetEnabledTable(row, false)
+                  }}
+                >
+                  Disable
+                </Button>
+                <Button
+                  size='sm'
+                  disabled={isBusy || !selectedTableId || selectedTableId.startsWith('builtin:')}
+                  onClick={() => {
+                    const row = tablesState.custom.find((x) => x.id === selectedTableId)
+                    if (!row) return
+                    void onSetEnabledTable(row, true)
+                  }}
+                >
+                  Enable
+                </Button>
               </div>
-              <div className='min-h-0 w-full flex-1 overflow-y-scroll rounded-xl border'>
+              <div className='min-h-0 min-w-0 w-full flex-1 overflow-auto rounded-xl border'>
                 <Table>
-                  <TableHeader><TableRow><TableHead>family</TableHead><TableHead>table</TableHead><TableHead>chain</TableHead><TableHead>type</TableHead><TableHead>hook</TableHead><TableHead>device</TableHead><TableHead>priority</TableHead><TableHead>policy</TableHead><TableHead>origin</TableHead></TableRow></TableHeader>
+                  <TableHeader><TableRow><TableHead>family</TableHead><TableHead>table</TableHead><TableHead>chain</TableHead><TableHead>type</TableHead><TableHead>hook</TableHead><TableHead>device</TableHead><TableHead>priority</TableHead><TableHead>policy</TableHead><TableHead>origin</TableHead><TableHead>status</TableHead></TableRow></TableHeader>
                   <TableBody>
-                    {[...tablesState.builtin, ...tablesState.custom].map((row) => (
-                      <TableRow key={row.id} className={`h-7 cursor-pointer border-b ${selectedTableId === row.id ? 'bg-muted/50' : ''}`} onClick={() => setSelectedTableId(row.id)}>
+                    {tableRows.map((row) => (
+                      <TableRow
+                        key={row.id}
+                        className={`h-7 cursor-pointer border-b ${selectedTableId === row.id ? 'bg-muted/50' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
+                        onClick={() => setSelectedTableId(row.id)}
+                        onDoubleClick={() => {
+                          if (row.builtin) return
+                          openEditTableWindow(row)
+                        }}
+                      >
                         <TableCell>{row.family}</TableCell>
                         <TableCell>{row.table_name}</TableCell>
                         <TableCell>{row.chain_name}</TableCell>
@@ -1002,15 +1104,16 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                         <TableCell>{row.priority}</TableCell>
                         <TableCell>{row.policy}</TableCell>
                         <TableCell>{row.builtin ? 'built-in' : 'custom'}</TableCell>
+                        <TableCell>{row.enabled === false ? 'disabled' : 'enabled'}</TableCell>
                       </TableRow>
                     ))}
-                    {(!tablesState.builtin.length && !tablesState.custom.length) ? <TableRow><TableCell colSpan={9} className='py-6 text-center text-xs text-muted-foreground'>No table chains yet.</TableCell></TableRow> : null}
+                    {(!tablesState.builtin.length && !tablesState.custom.length) ? <TableRow><TableCell colSpan={10} className='py-6 text-center text-xs text-muted-foreground'>No table chains yet.</TableCell></TableRow> : null}
                   </TableBody>
                 </Table>
               </div>
             </div>
           ) : null}
-          {!isCollectionsTab && !isTablesTab ? <div className='min-h-0 w-full flex-1 overflow-y-scroll rounded-xl border'>
+          {!isCollectionsTab && !isTablesTab ? <div className='min-h-0 min-w-0 w-full flex-1 overflow-auto rounded-xl border'>
             <Table>
               <TableHeader>
                 <TableRow>
@@ -1733,7 +1836,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
           <div className='absolute z-50 w-[560px] max-w-[calc(100vw-24px)] rounded-xl border bg-background shadow-2xl' style={{ left: winPos.x, top: winPos.y }}>
             <div className='cursor-move rounded-t-xl border-b bg-muted/70 px-3 py-2 text-xs font-medium select-none' onMouseDown={onDragStart}>
               <div className='flex items-center justify-between'>
-                <span>Add Table Chain</span>
+                <span>{editingTableId ? 'Edit Table Chain' : 'Add Table Chain'}</span>
                 <button type='button' className='rounded p-1 hover:bg-background/70' onClick={() => setTableOpen(false)}><X className='size-3.5' /></button>
               </div>
             </div>
@@ -1757,7 +1860,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
               </div>
               <div className='flex justify-end gap-2 border-t bg-background px-3 py-2'>
                 <Button type='button' variant='outline' onClick={() => setTableOpen(false)}>Cancel</Button>
-                <Button type='button' disabled={isBusy || !newTableName.trim() || !newChainName.trim()} onClick={async () => { const ok = await onSaveTable(); if (ok) setTableOpen(false) }}><Plus />Add</Button>
+                <Button type='button' disabled={isBusy || !newTableName.trim() || !newChainName.trim()} onClick={async () => { const ok = await onSaveTable(); if (ok) setTableOpen(false) }}><Plus />{editingTableId ? 'Save' : 'Add'}</Button>
               </div>
             </div>
           </div>
