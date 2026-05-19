@@ -157,11 +157,13 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [activeSection, setActiveSection] = React.useState<FirewallSectionTab>('policy')
   const [activePolicyTab, setActivePolicyTab] = React.useState<FirewallPolicyTab>('filter')
   const [activeRuleTableName, setActiveRuleTableName] = React.useState<string>('filter')
-  const [selectedRuleId, setSelectedRuleId] = React.useState<string | null>(null)
+  const [selectedRuleIds, setSelectedRuleIds] = React.useState<string[]>([])
+  const [ruleAnchorId, setRuleAnchorId] = React.useState<string | null>(null)
   const [addOpen, setAddOpen] = React.useState(false)
   const [editingRuleId, setEditingRuleId] = React.useState<string | null>(null)
   const [ruleEditorTab, setRuleEditorTab] = React.useState<EditorTab>('base')
   const [dragRuleId, setDragRuleId] = React.useState<string | null>(null)
+  const [dragRuleTableName, setDragRuleTableName] = React.useState<string | null>(null)
   const [winPos, setWinPos] = React.useState({ x: 120, y: 120 })
   const [columnsOpen, setColumnsOpen] = React.useState(false)
   const [visibleColumns, setVisibleColumns] = React.useState<Record<string, boolean>>({
@@ -188,14 +190,15 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [mapsState, setMapsState] = React.useState<FirewallMapsState>({ map: [], vmap: [] })
   const [tablesState, setTablesState] = React.useState<FirewallTablesState>({ builtin: [], custom: [] })
   const [collectionKind, setCollectionKind] = React.useState<CollectionKind>('addr')
-  const [selectedSetId, setSelectedSetId] = React.useState<string | null>(null)
-  const [selectedMapId, setSelectedMapId] = React.useState<string | null>(null)
+  const [selectedCollectionIds, setSelectedCollectionIds] = React.useState<string[]>([])
+  const [collectionAnchorId, setCollectionAnchorId] = React.useState<string | null>(null)
   const [newSetName, setNewSetName] = React.useState('')
   const [newSetElements, setNewSetElements] = React.useState('')
   const [newSetComment, setNewSetComment] = React.useState('')
   const [setOpen, setSetOpen] = React.useState(false)
   const [editingSetId, setEditingSetId] = React.useState<string | null>(null)
-  const [selectedTableId, setSelectedTableId] = React.useState<string | null>(null)
+  const [selectedTableIds, setSelectedTableIds] = React.useState<string[]>([])
+  const [tableAnchorId, setTableAnchorId] = React.useState<string | null>(null)
   const [tableOpen, setTableOpen] = React.useState(false)
   const [editingTableId, setEditingTableId] = React.useState<string | null>(null)
   const [newTableFamily, setNewTableFamily] = React.useState('inet')
@@ -220,6 +223,39 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     if (n < 1_000_000) return `${(n / 1000).toFixed(1)}K`
     if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(1)}M`
     return `${(n / 1_000_000_000).toFixed(1)}G`
+  }
+
+  function computeSelection(
+    orderedIds: string[],
+    prevSelected: string[],
+    anchorId: string | null,
+    clickedId: string,
+    event: React.MouseEvent
+  ): { selected: string[]; anchor: string } {
+    const prev = Array.from(new Set(prevSelected))
+    const isToggle = event.metaKey || event.ctrlKey
+    const isRange = event.shiftKey
+    const fallbackAnchor = prev.length ? prev[prev.length - 1] : clickedId
+    const nextAnchor = clickedId
+
+    if (isRange) {
+      const startId = anchorId || fallbackAnchor
+      const a = orderedIds.indexOf(startId)
+      const b = orderedIds.indexOf(clickedId)
+      if (a >= 0 && b >= 0) {
+        const [start, end] = a < b ? [a, b] : [b, a]
+        const range = orderedIds.slice(start, end + 1)
+        if (isToggle) return { selected: Array.from(new Set([...prev, ...range])), anchor: nextAnchor }
+        return { selected: range, anchor: nextAnchor }
+      }
+    }
+
+    if (isToggle) {
+      const selected = prev.includes(clickedId) ? prev.filter((id) => id !== clickedId) : [...prev, clickedId]
+      return { selected, anchor: nextAnchor }
+    }
+
+    return { selected: [clickedId], anchor: nextAnchor }
   }
 
   const chainOptionsByTable: Record<string, string[]> = {
@@ -557,10 +593,13 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     return { points }
   }, [liveChartPoints])
 
-  async function onReorderDrop(targetRuleId: string) {
-    if (!dragRuleId || dragRuleId === targetRuleId) return
+  async function onReorderDrop(targetRuleId: string, targetTableName: string, droppedRuleId?: string, droppedRuleTableName?: string) {
+    const fromRuleId = droppedRuleId || dragRuleId
+    const fromTableName = (droppedRuleTableName || dragRuleTableName || activeRuleTable).toLowerCase()
+    if (!fromRuleId || fromRuleId === targetRuleId) return
+    if (fromTableName !== String(targetTableName || '').toLowerCase()) return
     const ids = visibleRules.map((r) => r.id)
-    const from = ids.indexOf(dragRuleId)
+    const from = ids.indexOf(fromRuleId)
     const to = ids.indexOf(targetRuleId)
     if (from < 0 || to < 0 || from === to) return
     const next = [...ids]
@@ -571,11 +610,13 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     try {
       await reorderFirewallRules(props.auth, activeRuleTable, next)
       await refresh()
-      setSelectedRuleId(dragRuleId)
+      setSelectedRuleIds([fromRuleId])
+      setRuleAnchorId(fromRuleId)
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
     } finally {
       setDragRuleId(null)
+      setDragRuleTableName(null)
       setIsBusy(false)
     }
   }
@@ -602,7 +643,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     ...mapsState.vmap.map((x) => ({ ...x, kind: 'vmap' as const })),
   ]
   const allCollectionItems: Array<(FirewallSetItem & { kind: 'addr' | 'port' | 'iface' }) | (FirewallMapItem & { kind: 'map' | 'vmap' })> = [...allSetItems, ...allMapItems]
-  const selectedCollection = allCollectionItems.find((x) => (x.kind === 'map' || x.kind === 'vmap') ? x.id === selectedMapId : x.id === selectedSetId) || null
+  const selectedCollection = allCollectionItems.find((x) => x.id === selectedCollectionIds[0]) || null
 
   function openCreateSetWindow() {
     setEditingSetId(null)
@@ -654,7 +695,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     setIsBusy(true)
     try {
       await deleteFirewallSet(props.auth, kind, item.id)
-      if (selectedSetId === item.id) setSelectedSetId(null)
+      setSelectedCollectionIds((prev) => prev.filter((id) => id !== item.id))
       await refresh()
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
@@ -692,6 +733,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     setIsBusy(true)
     try {
       await deleteFirewallMap(props.auth, kind, item.id)
+      setSelectedCollectionIds((prev) => prev.filter((id) => id !== item.id))
       await refresh()
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
@@ -832,7 +874,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     try {
       await deleteFirewallTable(props.auth, item.id)
       await refresh()
-      if (selectedTableId === item.id) setSelectedTableId(null)
+      setSelectedTableIds((prev) => prev.filter((id) => id !== item.id))
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
     } finally {
@@ -857,6 +899,139 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
         policy: item.policy,
         enabled,
       })
+      await refresh()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  const selectedRules = visibleRules.filter((r) => selectedRuleIds.includes(r.id))
+  const selectedCollections = allCollectionItems.filter((r) => selectedCollectionIds.includes(r.id))
+  const selectedCustomTables = tableRows.filter((r) => selectedTableIds.includes(r.id) && !r.builtin)
+
+  async function onDeleteSelectedRules() {
+    if (!selectedRules.length) return
+    if (!confirm(`Delete ${selectedRules.length} selected rule(s)?`)) return
+    setError(null)
+    setIsBusy(true)
+    try {
+      for (const rule of selectedRules) await deleteFirewallRule(props.auth, rule.id)
+      setSelectedRuleIds([])
+      setRuleAnchorId(null)
+      await refresh()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function onSetEnabledSelectedRules(enabled: boolean) {
+    if (!selectedRules.length) return
+    setError(null)
+    setIsBusy(true)
+    try {
+      for (const rule of selectedRules) await updateFirewallRule(props.auth, rule.id, { enabled })
+      await refresh()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function onDeleteSelectedCollections() {
+    if (!selectedCollections.length) return
+    if (!confirm(`Delete ${selectedCollections.length} selected collection item(s)?`)) return
+    setError(null)
+    setIsBusy(true)
+    try {
+      for (const item of selectedCollections) {
+        if (item.kind === 'map' || item.kind === 'vmap') await deleteFirewallMap(props.auth, item.kind, item.id)
+        else await deleteFirewallSet(props.auth, item.kind, item.id)
+      }
+      setSelectedCollectionIds([])
+      setCollectionAnchorId(null)
+      await refresh()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function onSetEnabledSelectedCollections(enabled: boolean) {
+    if (!selectedCollections.length) return
+    setError(null)
+    setIsBusy(true)
+    try {
+      for (const item of selectedCollections) {
+        if (item.kind === 'map' || item.kind === 'vmap') {
+          const mapItem = item as FirewallMapItem & { kind: 'map' | 'vmap' }
+          await upsertFirewallMap(props.auth, mapItem.kind, {
+            id: mapItem.id,
+            name: mapItem.name,
+            entries: mapItem.entries || [],
+            comment: mapItem.comment || null,
+            enabled,
+          })
+        } else {
+          const setItem = item as FirewallSetItem & { kind: 'addr' | 'port' | 'iface' }
+          await upsertFirewallSet(props.auth, setItem.kind, {
+            id: setItem.id,
+            name: setItem.name,
+            elements: setItem.elements || [],
+            enabled,
+            comment: setItem.comment || null,
+          })
+        }
+      }
+      await refresh()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function onDeleteSelectedTables() {
+    if (!selectedCustomTables.length) return
+    if (!confirm(`Delete ${selectedCustomTables.length} selected custom table chain(s)?`)) return
+    setError(null)
+    setIsBusy(true)
+    try {
+      for (const row of selectedCustomTables) await deleteFirewallTable(props.auth, row.id)
+      setSelectedTableIds([])
+      setTableAnchorId(null)
+      await refresh()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function onSetEnabledSelectedTables(enabled: boolean) {
+    if (!selectedCustomTables.length) return
+    setError(null)
+    setIsBusy(true)
+    try {
+      for (const item of selectedCustomTables) {
+        await upsertFirewallTable(props.auth, {
+          id: item.id,
+          family: item.family,
+          table_name: item.table_name,
+          chain_name: item.chain_name,
+          chain_type: item.chain_type,
+          hook: item.hook,
+          device: item.device || null,
+          priority: Number(item.priority),
+          policy: item.policy,
+          enabled,
+        })
+      }
       await refresh()
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
@@ -907,7 +1082,10 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                         return
                       }
                       const row = tablesState.custom.find((x) => x.table_name === v)
-                      if (row) setSelectedTableId(row.id)
+                      if (row) {
+                        setSelectedTableIds([row.id])
+                        setTableAnchorId(row.id)
+                      }
                       setActiveRuleTableName(v)
                       setActiveSection('policy')
                     }}
@@ -928,9 +1106,9 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
           ) : null}
           {!isCollectionsTab && !isTablesTab ? <div className='flex gap-2'>
             <Button size='sm' onClick={openCreateWindow} disabled={isBusy}><Plus />Add</Button>
-            <Button size='sm' variant='destructive' disabled={isBusy || !selectedRuleId} onClick={() => { const rule = visibleRules.find((r) => r.id === selectedRuleId); if (!rule) return; void onDelete(rule) }}>Del</Button>
-            <Button size='sm' variant='outline' disabled={isBusy || !selectedRuleId} onClick={() => { const rule = visibleRules.find((r) => r.id === selectedRuleId); if (!rule) return; void onSetEnabled(rule, false) }}>Disable</Button>
-            <Button size='sm' disabled={isBusy || !selectedRuleId} onClick={() => { const rule = visibleRules.find((r) => r.id === selectedRuleId); if (!rule) return; void onSetEnabled(rule, true) }}>Enable</Button>
+            <Button size='sm' variant='destructive' disabled={isBusy || !selectedRuleIds.length} onClick={() => void onDeleteSelectedRules()}>Del</Button>
+            <Button size='sm' variant='outline' disabled={isBusy || !selectedRuleIds.length} onClick={() => void onSetEnabledSelectedRules(false)}>Disable</Button>
+            <Button size='sm' disabled={isBusy || !selectedRuleIds.length} onClick={() => void onSetEnabledSelectedRules(true)}>Enable</Button>
             <Button
               size='sm'
               variant='outline'
@@ -989,11 +1167,9 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                 <Button
                   size='sm'
                   variant='destructive'
-                  disabled={isBusy || !selectedCollection}
+                  disabled={isBusy || !selectedCollectionIds.length}
                   onClick={() => {
-                    if (!selectedCollection) return
-                    if (selectedCollection.kind === 'map' || selectedCollection.kind === 'vmap') void onDeleteMap(selectedCollection, selectedCollection.kind)
-                    else void onDeleteSet(selectedCollection as FirewallSetItem & { kind: 'addr' | 'port' | 'iface' }, selectedCollection.kind)
+                    void onDeleteSelectedCollections()
                   }}
                 >
                   Del
@@ -1001,22 +1177,18 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                 <Button
                   size='sm'
                   variant='outline'
-                  disabled={isBusy || !selectedCollection}
+                  disabled={isBusy || !selectedCollectionIds.length}
                   onClick={() => {
-                    if (!selectedCollection) return
-                    if (selectedCollection.kind === 'map' || selectedCollection.kind === 'vmap') void onSetEnabledMap(selectedCollection, selectedCollection.kind, false)
-                    else void onSetEnabledSet(selectedCollection as FirewallSetItem & { kind: 'addr' | 'port' | 'iface' }, selectedCollection.kind, false)
+                    void onSetEnabledSelectedCollections(false)
                   }}
                 >
                   Disable
                 </Button>
                 <Button
                   size='sm'
-                  disabled={isBusy || !selectedCollection}
+                  disabled={isBusy || !selectedCollectionIds.length}
                   onClick={() => {
-                    if (!selectedCollection) return
-                    if (selectedCollection.kind === 'map' || selectedCollection.kind === 'vmap') void onSetEnabledMap(selectedCollection, selectedCollection.kind, true)
-                    else void onSetEnabledSet(selectedCollection as FirewallSetItem & { kind: 'addr' | 'port' | 'iface' }, selectedCollection.kind, true)
+                    void onSetEnabledSelectedCollections(true)
                   }}
                 >
                   Enable
@@ -1029,10 +1201,12 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                     {allCollectionItems.map((row) => (
                       <TableRow
                         key={row.id}
-                        className={`h-7 cursor-pointer border-b ${((row.kind === 'map' || row.kind === 'vmap') ? selectedMapId : selectedSetId) === row.id ? 'bg-muted/50' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
-                        onClick={() => {
-                          if (row.kind === 'map' || row.kind === 'vmap') setSelectedMapId(row.id)
-                          else setSelectedSetId(row.id)
+                        className={`h-7 cursor-pointer border-b ${selectedCollectionIds.includes(row.id) ? 'bg-muted/50' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
+                        onClick={(e) => {
+                          const ordered = allCollectionItems.map((x) => x.id)
+                          const next = computeSelection(ordered, selectedCollectionIds, collectionAnchorId, row.id, e)
+                          setSelectedCollectionIds(next.selected)
+                          setCollectionAnchorId(next.anchor)
                         }}
                         onDoubleClick={() => {
                           if (row.kind === 'map' || row.kind === 'vmap') openEditMapWindow(row as FirewallMapItem & { kind: 'map' | 'vmap' })
@@ -1056,27 +1230,19 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
             <div className='flex min-h-0 flex-1 flex-col gap-2'>
               <div className='flex gap-2'>
                 <Button size='sm' onClick={openCreateTableWindow} disabled={isBusy}><Plus />Add</Button>
-                <Button size='sm' variant='destructive' disabled={isBusy || !selectedTableId || selectedTableId.startsWith('builtin:')} onClick={() => { const row = tablesState.custom.find((x) => x.id === selectedTableId); if (!row) return; void onDeleteTable(row) }}>Del</Button>
+                <Button size='sm' variant='destructive' disabled={isBusy || !selectedCustomTables.length} onClick={() => void onDeleteSelectedTables()}>Del</Button>
                 <Button
                   size='sm'
                   variant='outline'
-                  disabled={isBusy || !selectedTableId || selectedTableId.startsWith('builtin:')}
-                  onClick={() => {
-                    const row = tablesState.custom.find((x) => x.id === selectedTableId)
-                    if (!row) return
-                    void onSetEnabledTable(row, false)
-                  }}
+                  disabled={isBusy || !selectedCustomTables.length}
+                  onClick={() => void onSetEnabledSelectedTables(false)}
                 >
                   Disable
                 </Button>
                 <Button
                   size='sm'
-                  disabled={isBusy || !selectedTableId || selectedTableId.startsWith('builtin:')}
-                  onClick={() => {
-                    const row = tablesState.custom.find((x) => x.id === selectedTableId)
-                    if (!row) return
-                    void onSetEnabledTable(row, true)
-                  }}
+                  disabled={isBusy || !selectedCustomTables.length}
+                  onClick={() => void onSetEnabledSelectedTables(true)}
                 >
                   Enable
                 </Button>
@@ -1088,8 +1254,13 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                     {tableRows.map((row) => (
                       <TableRow
                         key={row.id}
-                        className={`h-7 cursor-pointer border-b ${selectedTableId === row.id ? 'bg-muted/50' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
-                        onClick={() => setSelectedTableId(row.id)}
+                        className={`h-7 cursor-pointer border-b ${selectedTableIds.includes(row.id) ? 'bg-muted/50' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
+                        onClick={(e) => {
+                          const ordered = tableRows.map((x) => x.id)
+                          const next = computeSelection(ordered, selectedTableIds, tableAnchorId, row.id, e)
+                          setSelectedTableIds(next.selected)
+                          setTableAnchorId(next.anchor)
+                        }}
                         onDoubleClick={() => {
                           if (row.builtin) return
                           openEditTableWindow(row)
@@ -1137,14 +1308,41 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                   <TableRow
                     key={r.id}
                     draggable
-                    onDragStart={() => setDragRuleId(r.id)}
+                    onDragStart={(e) => {
+                      setDragRuleId(r.id)
+                      setDragRuleTableName(String(r.table || activeRuleTable))
+                      try {
+                        e.dataTransfer.setData('text/plain', r.id)
+                        e.dataTransfer.setData('application/x-awg-rule-table', String(r.table || activeRuleTable))
+                        e.dataTransfer.effectAllowed = 'move'
+                      } catch {
+                        // Ignore dataTransfer write issues; local state still supports DnD.
+                      }
+                    }}
+                    onDragEnd={() => {
+                      setDragRuleId(null)
+                      setDragRuleTableName(null)
+                    }}
                     onDragOver={(e) => e.preventDefault()}
                     onDrop={(e) => {
                       e.preventDefault()
-                      void onReorderDrop(r.id)
+                      let droppedId = ''
+                      let droppedTable = ''
+                      try {
+                        droppedId = e.dataTransfer.getData('text/plain') || ''
+                        droppedTable = e.dataTransfer.getData('application/x-awg-rule-table') || ''
+                      } catch {
+                        // fall back to state-managed drag data
+                      }
+                      void onReorderDrop(r.id, String(r.table || activeRuleTable), droppedId || undefined, droppedTable || undefined)
                     }}
-                    className={`h-7 cursor-move border-b ${selectedRuleId === r.id ? 'bg-muted/50' : ''} ${dragRuleId === r.id ? 'opacity-60' : ''} ${!r.enabled ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
-                    onClick={() => setSelectedRuleId(r.id)}
+                    className={`h-7 cursor-move border-b ${selectedRuleIds.includes(r.id) ? 'bg-muted/50' : ''} ${dragRuleId === r.id ? 'opacity-60' : ''} ${!r.enabled ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
+                    onClick={(e) => {
+                      const ordered = visibleRules.map((x) => x.id)
+                      const next = computeSelection(ordered, selectedRuleIds, ruleAnchorId, r.id, e)
+                      setSelectedRuleIds(next.selected)
+                      setRuleAnchorId(next.anchor)
+                    }}
                     onDoubleClick={() => openEditWindow(r)}
                   >
                     {visibleColumns.chain ? <TableCell>{r.chain}</TableCell> : null}

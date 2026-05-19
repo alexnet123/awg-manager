@@ -33,6 +33,7 @@ npx playwright test \
   tests/firewall-rules.spec.ts \
   tests/firewall-maps.spec.ts \
   tests/firewall-tables.spec.ts \
+  tests/firewall-policy-dnd.spec.ts \
   tests/interfaces-form.spec.ts \
   tests/interfaces-edge.spec.ts \
   tests/clients-edge.spec.ts \

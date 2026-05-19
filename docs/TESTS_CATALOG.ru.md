@@ -58,6 +58,7 @@ bash scripts/test_firewall_add_rule_recovery.sh
 - `firewall-rules.spec.ts` — smoke по правилам firewall.
 - `firewall-maps.spec.ts` — CRUD/enable/disable для maps.
 - `firewall-tables.spec.ts` — CRUD таблиц/цепочек firewall.
+- `firewall-policy-dnd.spec.ts` — drag&drop reorder правил в `filter`/`nat`/`raw`/`mangle` с проверкой фактического порядка через API.
 
 ### 3.4 Firewall Add Rule — strict suite
 
@@ -119,7 +120,8 @@ npx playwright test \
   tests/firewall-add-rule-*.spec.ts \
   tests/firewall-rules.spec.ts \
   tests/firewall-maps.spec.ts \
-  tests/firewall-tables.spec.ts
+  tests/firewall-tables.spec.ts \
+  tests/firewall-policy-dnd.spec.ts
 ```
 
 ## 5) Интерпретация результатов
