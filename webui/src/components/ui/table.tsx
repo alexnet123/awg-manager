@@ -5,11 +5,11 @@ function Table({ className, ...props }: React.ComponentProps<'table'>) {
   return (
     <div
       data-slot='table-container'
-      className='relative w-full overflow-x-auto'
+      className='relative w-full'
     >
       <table
         data-slot='table'
-        className={cn('w-full caption-bottom text-sm', className)}
+        className={cn('w-full caption-bottom text-[13px] leading-5', className)}
         {...props}
       />
     </div>
@@ -20,7 +20,7 @@ function TableHeader({ className, ...props }: React.ComponentProps<'thead'>) {
   return (
     <thead
       data-slot='table-header'
-      className={cn('[&_tr]:border-b', className)}
+      className={cn('[&_tr]:border-b [&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:bg-card', className)}
       {...props}
     />
   )
@@ -67,7 +67,7 @@ function TableHead({ className, ...props }: React.ComponentProps<'th'>) {
     <th
       data-slot='table-head'
       className={cn(
-        'h-10 px-2 text-start align-middle font-medium whitespace-nowrap text-foreground *:[[role=checkbox]]:translate-y-0.5',
+        'h-9 px-2 text-start align-middle whitespace-nowrap text-[12px] font-semibold tracking-[0.01em] text-muted-foreground *:[[role=checkbox]]:translate-y-0.5',
         className
       )}
       {...props}
@@ -80,7 +80,7 @@ function TableCell({ className, ...props }: React.ComponentProps<'td'>) {
     <td
       data-slot='table-cell'
       className={cn(
-        'p-2 align-middle whitespace-nowrap *:[[role=checkbox]]:translate-y-0.5',
+        'p-2 align-middle whitespace-nowrap text-[13px] *:[[role=checkbox]]:translate-y-0.5',
         className
       )}
       {...props}

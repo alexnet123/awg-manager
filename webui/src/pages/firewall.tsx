@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -147,6 +148,42 @@ function PlannedField(props: { label: string; placeholder: string }) {
 type FirewallPolicyTab = 'filter' | 'nat' | 'raw' | 'mangle'
 type FirewallSectionTab = 'policy' | 'collections' | 'table_builder'
 type CollectionKind = 'addr' | 'port' | 'iface' | 'map' | 'vmap'
+type SortDirection = 'asc' | 'desc'
+type CollectionSortKey = 'kind' | 'name' | 'values' | 'comment' | 'status'
+type TableSortKey = 'family' | 'table_name' | 'chain_name' | 'chain_type' | 'hook' | 'device' | 'priority' | 'policy' | 'origin' | 'status'
+type PolicySortKey = 'chain' | 'action' | 'proto' | 'src' | 'dst' | 'sport' | 'dport' | 'in_interface' | 'out_interface' | 'ct_state' | 'comment' | 'packets' | 'bytes'
+
+const POLICY_COLUMN_LABELS: Record<PolicySortKey, string> = {
+  chain: 'Chain',
+  action: 'Action',
+  proto: 'Protocol',
+  src: 'Source address',
+  dst: 'Destination address',
+  sport: 'Source port',
+  dport: 'Destination port',
+  in_interface: 'Input interface',
+  out_interface: 'Output interface',
+  ct_state: 'Connection state',
+  comment: 'Comment',
+  packets: 'Packets',
+  bytes: 'Bytes',
+}
+
+const POLICY_COLUMN_ORDER: PolicySortKey[] = [
+  'chain',
+  'action',
+  'proto',
+  'src',
+  'dst',
+  'sport',
+  'dport',
+  'in_interface',
+  'out_interface',
+  'ct_state',
+  'comment',
+  'packets',
+  'bytes',
+]
 
 export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [state, setState] = React.useState<FirewallState | null>(null)
@@ -181,6 +218,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     packets: true,
     bytes: true,
   })
+  const [policySort, setPolicySort] = React.useState<{ key: PolicySortKey | null; dir: SortDirection }>({ key: null, dir: 'asc' })
   const dragRef = React.useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null)
   const [actionMode, setActionMode] = React.useState<string>('verdict')
   const [statsSeries, setStatsSeries] = React.useState<'packets' | 'bytes'>('packets')
@@ -192,6 +230,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [collectionKind, setCollectionKind] = React.useState<CollectionKind>('addr')
   const [selectedCollectionIds, setSelectedCollectionIds] = React.useState<string[]>([])
   const [collectionAnchorId, setCollectionAnchorId] = React.useState<string | null>(null)
+  const [collectionSort, setCollectionSort] = React.useState<{ key: CollectionSortKey | null; dir: SortDirection }>({ key: null, dir: 'asc' })
   const [newSetName, setNewSetName] = React.useState('')
   const [newSetElements, setNewSetElements] = React.useState('')
   const [newSetComment, setNewSetComment] = React.useState('')
@@ -199,6 +238,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [editingSetId, setEditingSetId] = React.useState<string | null>(null)
   const [selectedTableIds, setSelectedTableIds] = React.useState<string[]>([])
   const [tableAnchorId, setTableAnchorId] = React.useState<string | null>(null)
+  const [tableSort, setTableSort] = React.useState<{ key: TableSortKey | null; dir: SortDirection }>({ key: null, dir: 'asc' })
   const [tableOpen, setTableOpen] = React.useState(false)
   const [editingTableId, setEditingTableId] = React.useState<string | null>(null)
   const [newTableFamily, setNewTableFamily] = React.useState('inet')
@@ -256,6 +296,15 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     }
 
     return { selected: [clickedId], anchor: nextAnchor }
+  }
+
+  function sortIndicator(active: boolean, dir: SortDirection): string {
+    if (!active) return '↕'
+    return dir === 'asc' ? '▲' : '▼'
+  }
+
+  function compareStr(a: string, b: string): number {
+    return a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true })
   }
 
   const chainOptionsByTable: Record<string, string[]> = {
@@ -566,6 +615,32 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
 
   const activeRuleTable = activeRuleTableName
   const visibleRules = (state?.rules || []).filter((r) => r.table === activeRuleTable)
+  const sortedVisibleRules = React.useMemo(() => {
+    const key = policySort.key
+    if (!key) return visibleRules
+    const rows = [...visibleRules]
+    const dir = policySort.dir === 'asc' ? 1 : -1
+    rows.sort((a, b) => {
+      if (key === 'packets') return dir * (Number(a.runtime_packets || 0) - Number(b.runtime_packets || 0))
+      if (key === 'bytes') return dir * (Number(a.runtime_bytes || 0) - Number(b.runtime_bytes || 0))
+      const value = (row: FirewallRule): string => {
+        if (key === 'proto') return String(row.proto || 'any')
+        if (key === 'src') return String(row.src || '')
+        if (key === 'dst') return String(row.dst || '')
+        if (key === 'sport') return String(row.sport || '')
+        if (key === 'dport') return String(row.dport || '')
+        if (key === 'in_interface') return String(row.in_interface || '')
+        if (key === 'out_interface') return String(row.out_interface || '')
+        if (key === 'ct_state') return String(row.ct_state || '')
+        if (key === 'comment') return String(row.comment || '')
+        if (key === 'action') return String(row.action || '')
+        if (key === 'chain') return String(row.chain || '')
+        return ''
+      }
+      return dir * compareStr(value(a), value(b))
+    })
+    return rows
+  }, [visibleRules, policySort])
   const currentRulePackets = Number(form.runtime_packets || 0)
   const currentRuleBytes = Number(form.runtime_bytes || 0)
   const currentRulePps = Number(form.runtime_pps || 0)
@@ -643,7 +718,69 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     ...mapsState.vmap.map((x) => ({ ...x, kind: 'vmap' as const })),
   ]
   const allCollectionItems: Array<(FirewallSetItem & { kind: 'addr' | 'port' | 'iface' }) | (FirewallMapItem & { kind: 'map' | 'vmap' })> = [...allSetItems, ...allMapItems]
-  const selectedCollection = allCollectionItems.find((x) => x.id === selectedCollectionIds[0]) || null
+  const sortedCollectionItems = React.useMemo(() => {
+    if (!collectionSort.key) return allCollectionItems
+    const rows = [...allCollectionItems]
+    const dir = collectionSort.dir === 'asc' ? 1 : -1
+    rows.sort((a, b) => {
+      if (collectionSort.key === 'kind') return dir * compareStr(a.kind, b.kind)
+      if (collectionSort.key === 'name') return dir * compareStr(String(a.name || ''), String(b.name || ''))
+      if (collectionSort.key === 'comment') return dir * compareStr(String(a.comment || ''), String(b.comment || ''))
+      if (collectionSort.key === 'status') {
+        const av = a.enabled === false ? 'disabled' : 'enabled'
+        const bv = b.enabled === false ? 'disabled' : 'enabled'
+        return dir * compareStr(av, bv)
+      }
+      const av = a.kind === 'map' || a.kind === 'vmap'
+        ? ((a as FirewallMapItem).entries || []).join(', ')
+        : ((a as FirewallSetItem).elements || []).join(', ')
+      const bv = b.kind === 'map' || b.kind === 'vmap'
+        ? ((b as FirewallMapItem).entries || []).join(', ')
+        : ((b as FirewallSetItem).elements || []).join(', ')
+      return dir * compareStr(av, bv)
+    })
+    return rows
+  }, [allCollectionItems, collectionSort])
+  const sortedTableRows = React.useMemo(() => {
+    const key = tableSort.key
+    if (!key) return tableRows
+    const rows = [...tableRows]
+    const dir = tableSort.dir === 'asc' ? 1 : -1
+    rows.sort((a, b) => {
+      if (key === 'priority') return dir * (Number(a.priority || 0) - Number(b.priority || 0))
+      if (key === 'origin') return dir * compareStr(a.builtin ? 'built-in' : 'custom', b.builtin ? 'built-in' : 'custom')
+      if (key === 'status') return dir * compareStr(a.enabled === false ? 'disabled' : 'enabled', b.enabled === false ? 'disabled' : 'enabled')
+      const av = key === 'device' ? String(a.device || '') : String((a as Record<string, unknown>)[key] || '')
+      const bv = key === 'device' ? String(b.device || '') : String((b as Record<string, unknown>)[key] || '')
+      return dir * compareStr(av, bv)
+    })
+    return rows
+  }, [tableRows, tableSort])
+  const selectedCollection = sortedCollectionItems.find((x) => x.id === selectedCollectionIds[0]) || null
+
+  function toggleCollectionSort(key: CollectionSortKey) {
+    setCollectionSort((prev) => {
+      if (prev.key !== key) return { key, dir: 'asc' }
+      if (prev.dir === 'asc') return { key, dir: 'desc' }
+      return { key: null, dir: 'asc' }
+    })
+  }
+
+  function toggleTableSort(key: TableSortKey) {
+    setTableSort((prev) => {
+      if (prev.key !== key) return { key, dir: 'asc' }
+      if (prev.dir === 'asc') return { key, dir: 'desc' }
+      return { key: null, dir: 'asc' }
+    })
+  }
+
+  function togglePolicySort(key: PolicySortKey) {
+    setPolicySort((prev) => {
+      if (prev.key !== key) return { key, dir: 'asc' }
+      if (prev.dir === 'asc') return { key, dir: 'desc' }
+      return { key: null, dir: 'asc' }
+    })
+  }
 
   function openCreateSetWindow() {
     setEditingSetId(null)
@@ -1041,7 +1178,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   }
 
   return (
-    <div className='flex h-[calc(100svh-7.5rem)] min-h-[640px] w-full flex-col gap-2 overflow-x-hidden'>
+    <div className='flex h-full min-h-0 w-full flex-col gap-2 overflow-x-hidden'>
       <div><h2 className='text-lg font-semibold tracking-tight'>Firewall</h2></div>
       {error ? <div className='rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive'>{error}</div> : null}
       <Card className='flex min-h-0 w-full flex-1 flex-col overflow-x-hidden text-xs'>
@@ -1128,38 +1265,31 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
             >
               Reset counters
             </Button>
-            <div className='relative'>
-              <Button size='sm' variant='outline' onClick={() => setColumnsOpen((p) => !p)}>Columns</Button>
-              {columnsOpen ? (
-                <div className='absolute left-0 top-9 z-20 min-w-56 rounded-md border bg-background p-2 shadow-xl'>
-                  {[
-                    ['chain', 'Chain'],
-                    ['action', 'Action'],
-                    ['proto', 'Proto'],
-                    ['src', 'src ip'],
-                    ['dst', 'dst ip'],
-                    ['sport', 'src port'],
-                    ['dport', 'dst port'],
-                    ['in_interface', 'In Interface'],
-                    ['out_interface', 'Out Interface'],
-                    ['ct_state', 'Connection State'],
-                    ['comment', 'Comment'],
-                    ['packets', 'Packets'],
-                    ['bytes', 'Bytes'],
-                  ].map(([key, label]) => (
-                    <label key={key} className='flex items-center gap-2 px-1 py-1 text-xs'>
-                      <input
-                        type='checkbox'
-                        className='h-3.5 w-3.5'
-                        checked={!!visibleColumns[key]}
-                        onChange={(e) => setVisibleColumns((prev) => ({ ...prev, [key]: e.target.checked }))}
-                      />
-                      {label}
-                    </label>
-                  ))}
-                </div>
-              ) : null}
-            </div>
+            <DropdownMenu open={columnsOpen} onOpenChange={setColumnsOpen}>
+              <DropdownMenuTrigger asChild>
+                <Button size='sm' variant='outline'>Columns</Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align='start'
+                side='bottom'
+                sideOffset={6}
+                className='z-[120] min-w-56 p-1.5'
+              >
+                {POLICY_COLUMN_ORDER.map((key) => (
+                  <DropdownMenuCheckboxItem
+                    key={key}
+                    className='text-xs'
+                    checked={!!visibleColumns[key]}
+                    onCheckedChange={(checked) => {
+                      setVisibleColumns((prev) => ({ ...prev, [key]: !!checked }))
+                    }}
+                    onSelect={(e) => e.preventDefault()}
+                  >
+                    {POLICY_COLUMN_LABELS[key]}
+                  </DropdownMenuCheckboxItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div> : isCollectionsTab ? (
             <div className='flex min-h-0 flex-1 flex-col gap-2'>
               <div className='flex gap-2'>
@@ -1196,14 +1326,25 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
               </div>
               <div className='min-h-0 min-w-0 w-full flex-1 overflow-auto rounded-xl border'>
                 <Table>
-                  <TableHeader><TableRow><TableHead>type</TableHead><TableHead>name</TableHead><TableHead>values</TableHead><TableHead>comment</TableHead></TableRow></TableHeader>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleCollectionSort('kind')}>Type <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(collectionSort.key === 'kind', collectionSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleCollectionSort('name')}>Name <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(collectionSort.key === 'name', collectionSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleCollectionSort('values')}>Values <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(collectionSort.key === 'values', collectionSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleCollectionSort('comment')}>Comment <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(collectionSort.key === 'comment', collectionSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleCollectionSort('status')}>Status <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(collectionSort.key === 'status', collectionSort.dir)}</span></button></TableHead>
+                    </TableRow>
+                  </TableHeader>
                   <TableBody>
-                    {allCollectionItems.map((row) => (
+                    {sortedCollectionItems.map((row) => (
                       <TableRow
                         key={row.id}
-                        className={`h-7 cursor-pointer border-b ${selectedCollectionIds.includes(row.id) ? 'bg-muted/50' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
+                        className={`h-7 cursor-pointer select-none border-b ${selectedCollectionIds.includes(row.id) ? 'bg-muted/50' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
+                        onMouseDown={(e) => {
+                          if (e.shiftKey) e.preventDefault()
+                        }}
                         onClick={(e) => {
-                          const ordered = allCollectionItems.map((x) => x.id)
+                          const ordered = sortedCollectionItems.map((x) => x.id)
                           const next = computeSelection(ordered, selectedCollectionIds, collectionAnchorId, row.id, e)
                           setSelectedCollectionIds(next.selected)
                           setCollectionAnchorId(next.anchor)
@@ -1217,10 +1358,11 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                         <TableCell>{row.name}</TableCell>
                         <TableCell className='max-w-[700px] truncate'>{(row.kind === 'map' || row.kind === 'vmap') ? (((row as FirewallMapItem).entries || []).join(', ') || '—') : (((row as FirewallSetItem).elements || []).join(', ') || '—')}</TableCell>
                         <TableCell className='max-w-[260px] truncate'>{row.comment || '—'}</TableCell>
+                        <TableCell>{row.enabled === false ? 'disabled' : 'enabled'}</TableCell>
                       </TableRow>
                     ))}
                     {!allCollectionItems.length
-                      ? <TableRow><TableCell colSpan={4} className='py-6 text-center text-xs text-muted-foreground'>No collections yet.</TableCell></TableRow>
+                      ? <TableRow><TableCell colSpan={5} className='py-6 text-center text-xs text-muted-foreground'>No collections yet.</TableCell></TableRow>
                       : null}
                   </TableBody>
                 </Table>
@@ -1249,14 +1391,30 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
               </div>
               <div className='min-h-0 min-w-0 w-full flex-1 overflow-auto rounded-xl border'>
                 <Table>
-                  <TableHeader><TableRow><TableHead>family</TableHead><TableHead>table</TableHead><TableHead>chain</TableHead><TableHead>type</TableHead><TableHead>hook</TableHead><TableHead>device</TableHead><TableHead>priority</TableHead><TableHead>policy</TableHead><TableHead>origin</TableHead><TableHead>status</TableHead></TableRow></TableHeader>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleTableSort('family')}>Family <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(tableSort.key === 'family', tableSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleTableSort('table_name')}>Table name <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(tableSort.key === 'table_name', tableSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleTableSort('chain_name')}>Chain name <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(tableSort.key === 'chain_name', tableSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleTableSort('chain_type')}>Chain type <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(tableSort.key === 'chain_type', tableSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleTableSort('hook')}>Hook <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(tableSort.key === 'hook', tableSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleTableSort('device')}>Device <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(tableSort.key === 'device', tableSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleTableSort('priority')}>Priority <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(tableSort.key === 'priority', tableSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleTableSort('policy')}>Policy <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(tableSort.key === 'policy', tableSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleTableSort('origin')}>Origin <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(tableSort.key === 'origin', tableSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleTableSort('status')}>Status <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(tableSort.key === 'status', tableSort.dir)}</span></button></TableHead>
+                    </TableRow>
+                  </TableHeader>
                   <TableBody>
-                    {tableRows.map((row) => (
+                    {sortedTableRows.map((row) => (
                       <TableRow
                         key={row.id}
-                        className={`h-7 cursor-pointer border-b ${selectedTableIds.includes(row.id) ? 'bg-muted/50' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
+                        className={`h-7 cursor-pointer select-none border-b ${selectedTableIds.includes(row.id) ? 'bg-muted/50' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
+                        onMouseDown={(e) => {
+                          if (e.shiftKey) e.preventDefault()
+                        }}
                         onClick={(e) => {
-                          const ordered = tableRows.map((x) => x.id)
+                          const ordered = sortedTableRows.map((x) => x.id)
                           const next = computeSelection(ordered, selectedTableIds, tableAnchorId, row.id, e)
                           setSelectedTableIds(next.selected)
                           setTableAnchorId(next.anchor)
@@ -1288,27 +1446,28 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
             <Table>
               <TableHeader>
                 <TableRow>
-                  {visibleColumns.chain ? <TableHead>Chain</TableHead> : null}
-                  {visibleColumns.action ? <TableHead>Action</TableHead> : null}
-                  {visibleColumns.proto ? <TableHead>Proto</TableHead> : null}
-                  {visibleColumns.src ? <TableHead>src ip</TableHead> : null}
-                  {visibleColumns.dst ? <TableHead>dst ip</TableHead> : null}
-                  {visibleColumns.sport ? <TableHead>src port</TableHead> : null}
-                  {visibleColumns.dport ? <TableHead>dst port</TableHead> : null}
-                  {visibleColumns.in_interface ? <TableHead>In Interface</TableHead> : null}
-                  {visibleColumns.out_interface ? <TableHead>Out Interface</TableHead> : null}
-                  {visibleColumns.ct_state ? <TableHead>Connection State</TableHead> : null}
-                  {visibleColumns.comment ? <TableHead>Comment</TableHead> : null}
-                  {visibleColumns.packets ? <TableHead>Packets</TableHead> : null}
-                  {visibleColumns.bytes ? <TableHead>Bytes</TableHead> : null}
+                  {visibleColumns.chain ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('chain')}>{POLICY_COLUMN_LABELS.chain} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'chain', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.action ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('action')}>{POLICY_COLUMN_LABELS.action} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'action', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.proto ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('proto')}>{POLICY_COLUMN_LABELS.proto} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'proto', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.src ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('src')}>{POLICY_COLUMN_LABELS.src} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'src', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.dst ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('dst')}>{POLICY_COLUMN_LABELS.dst} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'dst', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.sport ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('sport')}>{POLICY_COLUMN_LABELS.sport} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'sport', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.dport ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('dport')}>{POLICY_COLUMN_LABELS.dport} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'dport', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.in_interface ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('in_interface')}>{POLICY_COLUMN_LABELS.in_interface} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'in_interface', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.out_interface ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('out_interface')}>{POLICY_COLUMN_LABELS.out_interface} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'out_interface', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.ct_state ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('ct_state')}>{POLICY_COLUMN_LABELS.ct_state} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'ct_state', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.comment ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('comment')}>{POLICY_COLUMN_LABELS.comment} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'comment', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.packets ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('packets')}>{POLICY_COLUMN_LABELS.packets} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'packets', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.bytes ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('bytes')}>{POLICY_COLUMN_LABELS.bytes} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'bytes', policySort.dir)}</span></button></TableHead> : null}
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {visibleRules.map((r) => (
+                {sortedVisibleRules.map((r) => (
                   <TableRow
                     key={r.id}
-                    draggable
+                    draggable={!policySort.key}
                     onDragStart={(e) => {
+                      if (policySort.key) return
                       setDragRuleId(r.id)
                       setDragRuleTableName(String(r.table || activeRuleTable))
                       try {
@@ -1323,8 +1482,11 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                       setDragRuleId(null)
                       setDragRuleTableName(null)
                     }}
-                    onDragOver={(e) => e.preventDefault()}
+                    onDragOver={(e) => {
+                      if (!policySort.key) e.preventDefault()
+                    }}
                     onDrop={(e) => {
+                      if (policySort.key) return
                       e.preventDefault()
                       let droppedId = ''
                       let droppedTable = ''
@@ -1336,9 +1498,12 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                       }
                       void onReorderDrop(r.id, String(r.table || activeRuleTable), droppedId || undefined, droppedTable || undefined)
                     }}
-                    className={`h-7 cursor-move border-b ${selectedRuleIds.includes(r.id) ? 'bg-muted/50' : ''} ${dragRuleId === r.id ? 'opacity-60' : ''} ${!r.enabled ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
+                    className={`h-7 ${policySort.key ? 'cursor-pointer' : 'cursor-move'} select-none border-b ${selectedRuleIds.includes(r.id) ? 'bg-muted/50' : ''} ${dragRuleId === r.id ? 'opacity-60' : ''} ${!r.enabled ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
+                    onMouseDown={(e) => {
+                      if (e.shiftKey) e.preventDefault()
+                    }}
                     onClick={(e) => {
-                      const ordered = visibleRules.map((x) => x.id)
+                      const ordered = sortedVisibleRules.map((x) => x.id)
                       const next = computeSelection(ordered, selectedRuleIds, ruleAnchorId, r.id, e)
                       setSelectedRuleIds(next.selected)
                       setRuleAnchorId(next.anchor)
