@@ -149,9 +149,9 @@ type FirewallPolicyTab = 'filter' | 'nat' | 'raw' | 'mangle'
 type FirewallSectionTab = 'policy' | 'collections' | 'table_builder'
 type CollectionKind = 'addr' | 'port' | 'iface' | 'map' | 'vmap'
 type SortDirection = 'asc' | 'desc'
-type CollectionSortKey = 'kind' | 'name' | 'values' | 'comment' | 'status'
+type CollectionSortKey = 'kind' | 'name' | 'values' | 'status'
 type TableSortKey = 'family' | 'table_name' | 'chain_name' | 'chain_type' | 'hook' | 'device' | 'priority' | 'policy' | 'origin' | 'status'
-type PolicySortKey = 'chain' | 'action' | 'proto' | 'src' | 'dst' | 'sport' | 'dport' | 'in_interface' | 'out_interface' | 'ct_state' | 'comment' | 'packets' | 'bytes'
+type PolicySortKey = 'chain' | 'action' | 'proto' | 'src' | 'dst' | 'sport' | 'dport' | 'in_interface' | 'out_interface' | 'ct_state' | 'packets' | 'bytes'
 
 const POLICY_COLUMN_LABELS: Record<PolicySortKey, string> = {
   chain: 'Chain',
@@ -164,7 +164,6 @@ const POLICY_COLUMN_LABELS: Record<PolicySortKey, string> = {
   in_interface: 'Input interface',
   out_interface: 'Output interface',
   ct_state: 'Connection state',
-  comment: 'Comment',
   packets: 'Packets',
   bytes: 'Bytes',
 }
@@ -180,10 +179,36 @@ const POLICY_COLUMN_ORDER: PolicySortKey[] = [
   'in_interface',
   'out_interface',
   'ct_state',
-  'comment',
   'packets',
   'bytes',
 ]
+
+const LIVE_CHART_WINDOW = 90
+
+type LiveChartPoint = {
+  slot: number
+  pps: number
+  bps: number
+  ts: number
+}
+
+const ADVANCED_SECTIONS_CLOSED = {
+  l4: false,
+  meta: false,
+  ct: false,
+  fib: false,
+  raw: false,
+}
+
+function buildEmptyLiveChart(): LiveChartPoint[] {
+  const now = Date.now()
+  return Array.from({ length: LIVE_CHART_WINDOW }, (_, idx) => ({
+    slot: idx,
+    pps: 0,
+    bps: 0,
+    ts: now - (LIVE_CHART_WINDOW - idx) * 1000,
+  }))
+}
 
 export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [state, setState] = React.useState<FirewallState | null>(null)
@@ -200,6 +225,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [editingRuleId, setEditingRuleId] = React.useState<string | null>(null)
   const [ruleEditorTab, setRuleEditorTab] = React.useState<EditorTab>('base')
   const [dragRuleId, setDragRuleId] = React.useState<string | null>(null)
+  const [dragOverRuleId, setDragOverRuleId] = React.useState<string | null>(null)
   const [dragRuleTableName, setDragRuleTableName] = React.useState<string | null>(null)
   const [winPos, setWinPos] = React.useState({ x: 120, y: 120 })
   const [columnsOpen, setColumnsOpen] = React.useState(false)
@@ -214,7 +240,6 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     in_interface: false,
     out_interface: false,
     ct_state: true,
-    comment: true,
     packets: true,
     bytes: true,
   })
@@ -222,8 +247,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const dragRef = React.useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null)
   const [actionMode, setActionMode] = React.useState<string>('verdict')
   const [statsSeries, setStatsSeries] = React.useState<'packets' | 'bytes'>('packets')
-  const [liveChartPoints, setLiveChartPoints] = React.useState<Array<{ idx: number; pps: number; bps: number }>>([])
-  const [chartTick, setChartTick] = React.useState(0)
+  const [liveChartPoints, setLiveChartPoints] = React.useState<LiveChartPoint[]>(buildEmptyLiveChart)
   const [setsState, setSetsState] = React.useState<FirewallSetsState>({ addr: [], port: [], iface: [] })
   const [mapsState, setMapsState] = React.useState<FirewallMapsState>({ map: [], vmap: [] })
   const [tablesState, setTablesState] = React.useState<FirewallTablesState>({ builtin: [], custom: [] })
@@ -249,13 +273,8 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [newDevice, setNewDevice] = React.useState('')
   const [newPriority, setNewPriority] = React.useState('-10')
   const [newPolicy, setNewPolicy] = React.useState<'accept' | 'drop'>('accept')
-  const [advOpen, setAdvOpen] = React.useState<Record<string, boolean>>({
-    l4: true,
-    meta: false,
-    ct: false,
-    fib: false,
-    raw: true,
-  })
+  const liveRateRef = React.useRef<{ pps: number; bps: number }>({ pps: 0, bps: 0 })
+  const [advOpen, setAdvOpen] = React.useState<Record<string, boolean>>({ ...ADVANCED_SECTIONS_CLOSED })
 
   function formatCounter(value?: number) {
     const n = Number(value || 0)
@@ -263,6 +282,29 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     if (n < 1_000_000) return `${(n / 1000).toFixed(1)}K`
     if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(1)}M`
     return `${(n / 1_000_000_000).toFixed(1)}G`
+  }
+
+  function formatBytesIEC(bytes?: number) {
+    const n = Math.max(0, Number(bytes || 0))
+    if (n < 1024) return `${n.toFixed(0)} B`
+    if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KiB`
+    if (n < 1024 ** 3) return `${(n / (1024 ** 2)).toFixed(1)} MiB`
+    return `${(n / (1024 ** 3)).toFixed(2)} GiB`
+  }
+
+  function formatBitrate(bitsPerSec?: number) {
+    const n = Math.max(0, Number(bitsPerSec || 0))
+    if (n < 1000) return `${n.toFixed(0)} bps`
+    if (n < 1_000_000) return `${(n / 1000).toFixed(1)} kbps`
+    if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(2)} Mbps`
+    return `${(n / 1_000_000_000).toFixed(2)} Gbps`
+  }
+
+  function formatPacketRate(packetsPerSec?: number) {
+    const n = Math.max(0, Number(packetsPerSec || 0))
+    if (n < 10) return `${n.toFixed(1)} p/s`
+    if (n < 1000) return `${Math.round(n)} p/s`
+    return `${(n / 1000).toFixed(1)} Kp/s`
   }
 
   function computeSelection(
@@ -378,7 +420,6 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
 
   const selectedAction = form.nat_type || form.action || 'accept'
   const isNatActionSelected = ['dnat', 'snat', 'masquerade', 'redirect'].includes(String(selectedAction))
-  const logEnabled = !!(form.log_prefix || form.log_level)
 
   async function refresh() {
     setError(null)
@@ -518,6 +559,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   function openCreateWindow() {
     setEditingRuleId(null)
     setRuleEditorTab('base')
+    setAdvOpen({ ...ADVANCED_SECTIONS_CLOSED })
     const ruleTable = activeRuleTableName
     setForm({ ...defaultRule, table: ruleTable, chain: activeChainOptions[0] || 'input' })
     setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 760) / 2) - 60) })
@@ -527,6 +569,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   function openEditWindow(rule: FirewallRule) {
     setEditingRuleId(rule.id)
     setRuleEditorTab('base')
+    setAdvOpen({ ...ADVANCED_SECTIONS_CLOSED })
     setForm({
       table: rule.table,
       family: rule.family,
@@ -609,7 +652,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
       enabled: rule.enabled,
     })
     setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 760) / 2) - 60) })
-    setLiveChartPoints([])
+    setLiveChartPoints(buildEmptyLiveChart())
     setAddOpen(true)
   }
 
@@ -632,7 +675,6 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
         if (key === 'in_interface') return String(row.in_interface || '')
         if (key === 'out_interface') return String(row.out_interface || '')
         if (key === 'ct_state') return String(row.ct_state || '')
-        if (key === 'comment') return String(row.comment || '')
         if (key === 'action') return String(row.action || '')
         if (key === 'chain') return String(row.chain || '')
         return ''
@@ -641,31 +683,67 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     })
     return rows
   }, [visibleRules, policySort])
+  const visiblePolicyColSpan = React.useMemo(
+    () => Math.max(1, POLICY_COLUMN_ORDER.reduce((acc, key) => acc + (visibleColumns[key] ? 1 : 0), 0)),
+    [visibleColumns],
+  )
+  const firstVisiblePolicyColumn = React.useMemo<PolicySortKey>(
+    () => POLICY_COLUMN_ORDER.find((key) => !!visibleColumns[key]) || 'chain',
+    [visibleColumns],
+  )
   const currentRulePackets = Number(form.runtime_packets || 0)
   const currentRuleBytes = Number(form.runtime_bytes || 0)
-  const currentRulePps = Number(form.runtime_pps || 0)
-  const currentRuleBps = Number(form.runtime_bps || 0)
+  const currentRulePps = Math.max(0, Number(form.runtime_pps || 0))
+  const currentRuleBytesPerSec = Math.max(0, Number(form.runtime_bps || 0))
+  const currentRuleBitrate = currentRuleBytesPerSec * 8
 
   React.useEffect(() => {
-    if (!addOpen || !editingRuleId) return
-    setChartTick((x) => x + 1)
-  }, [state, addOpen, editingRuleId])
+    liveRateRef.current = {
+      pps: currentRulePps,
+      bps: currentRuleBytesPerSec,
+    }
+  }, [currentRulePps, currentRuleBytesPerSec])
 
   React.useEffect(() => {
-    if (!addOpen || !editingRuleId) return
-    const liveRule = (state?.rules || []).find((r) => r.id === editingRuleId)
-    const pps = Number(liveRule?.runtime_pps || currentRulePps || 0)
-    const bps = Number(liveRule?.runtime_bps || currentRuleBps || 0)
-    setLiveChartPoints((prev) => {
-      const last = prev[prev.length - 1]
-      const next = [...prev, { idx: (last?.idx || 0) + 1, pps, bps }]
-      return next.slice(-54)
-    })
-  }, [chartTick, addOpen, editingRuleId, state, currentRulePps, currentRuleBps])
+    if (!addOpen || !editingRuleId) {
+      setLiveChartPoints(buildEmptyLiveChart())
+      return
+    }
+    const history = Array.isArray(form.runtime_history) ? form.runtime_history : []
+    const normalized = history
+      .slice(-LIVE_CHART_WINDOW)
+      .map((item) => ({
+        pps: Math.max(0, Number(item?.pps || 0)),
+        bps: Math.max(0, Number(item?.bps || 0)),
+        ts: Number(item?.t || 0) * 1000,
+      }))
+    const padded = [
+      ...Array.from({ length: Math.max(0, LIVE_CHART_WINDOW - normalized.length) }, () => ({ pps: 0, bps: 0, ts: Date.now() })),
+      ...normalized,
+    ].slice(-LIVE_CHART_WINDOW)
+    setLiveChartPoints(padded.map((point, idx) => ({ slot: idx, ...point })))
+  }, [addOpen, editingRuleId])
+
+  React.useEffect(() => {
+    if (!addOpen || !editingRuleId || ruleEditorTab !== 'stats') return
+    const timer = window.setInterval(() => {
+      const samplePps = Math.max(0, Number(liveRateRef.current.pps || 0))
+      const sampleBps = Math.max(0, Number(liveRateRef.current.bps || 0))
+      setLiveChartPoints((prev) => {
+        const base = prev.length ? prev : buildEmptyLiveChart()
+        const shifted = base.slice(1).map((point, idx) => ({ ...point, slot: idx }))
+        shifted.push({ slot: LIVE_CHART_WINDOW - 1, pps: samplePps, bps: sampleBps, ts: Date.now() })
+        return shifted
+      })
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [addOpen, editingRuleId, ruleEditorTab])
 
   const statsChart = React.useMemo(() => {
-    const points = liveChartPoints.length ? liveChartPoints : [{ idx: 1, pps: 0, bps: 0 }]
-    return { points }
+    const points = liveChartPoints.length ? liveChartPoints : buildEmptyLiveChart()
+    const maxPps = Math.max(1, ...points.map((p) => p.pps))
+    const maxBitsPerSec = Math.max(1, ...points.map((p) => p.bps * 8))
+    return { points, maxPps, maxBitsPerSec }
   }, [liveChartPoints])
 
   async function onReorderDrop(targetRuleId: string, targetTableName: string, droppedRuleId?: string, droppedRuleTableName?: string) {
@@ -691,6 +769,36 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
       setError(exc instanceof Error ? exc.message : String(exc))
     } finally {
       setDragRuleId(null)
+      setDragOverRuleId(null)
+      setDragRuleTableName(null)
+      setIsBusy(false)
+    }
+  }
+
+  async function onReorderDropToEnd(targetTableName: string, droppedRuleId?: string, droppedRuleTableName?: string) {
+    const fromRuleId = droppedRuleId || dragRuleId
+    const fromTableName = (droppedRuleTableName || dragRuleTableName || activeRuleTable).toLowerCase()
+    if (!fromRuleId) return
+    if (fromTableName !== String(targetTableName || '').toLowerCase()) return
+    const ids = visibleRules.map((r) => r.id)
+    const from = ids.indexOf(fromRuleId)
+    if (from < 0) return
+    if (from === ids.length - 1) return
+    const next = [...ids]
+    const [moved] = next.splice(from, 1)
+    next.push(moved)
+    setError(null)
+    setIsBusy(true)
+    try {
+      await reorderFirewallRules(props.auth, activeRuleTable, next)
+      await refresh()
+      setSelectedRuleIds([fromRuleId])
+      setRuleAnchorId(fromRuleId)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setDragRuleId(null)
+      setDragOverRuleId(null)
       setDragRuleTableName(null)
       setIsBusy(false)
     }
@@ -725,7 +833,6 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     rows.sort((a, b) => {
       if (collectionSort.key === 'kind') return dir * compareStr(a.kind, b.kind)
       if (collectionSort.key === 'name') return dir * compareStr(String(a.name || ''), String(b.name || ''))
-      if (collectionSort.key === 'comment') return dir * compareStr(String(a.comment || ''), String(b.comment || ''))
       if (collectionSort.key === 'status') {
         const av = a.enabled === false ? 'disabled' : 'enabled'
         const bv = b.enabled === false ? 'disabled' : 'enabled'
@@ -1255,6 +1362,17 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                 setIsBusy(true)
                 try {
                   await resetFirewallCounters(props.auth, activeRuleTable)
+                  if (addOpen && editingRuleId) {
+                    setLiveChartPoints(buildEmptyLiveChart())
+                    setForm((prev) => ({
+                      ...prev,
+                      runtime_packets: 0,
+                      runtime_bytes: 0,
+                      runtime_pps: 0,
+                      runtime_bps: 0,
+                      runtime_history: [],
+                    }))
+                  }
                   await refresh()
                 } catch (exc) {
                   setError(exc instanceof Error ? exc.message : String(exc))
@@ -1331,7 +1449,6 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                       <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleCollectionSort('kind')}>Type <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(collectionSort.key === 'kind', collectionSort.dir)}</span></button></TableHead>
                       <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleCollectionSort('name')}>Name <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(collectionSort.key === 'name', collectionSort.dir)}</span></button></TableHead>
                       <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleCollectionSort('values')}>Values <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(collectionSort.key === 'values', collectionSort.dir)}</span></button></TableHead>
-                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleCollectionSort('comment')}>Comment <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(collectionSort.key === 'comment', collectionSort.dir)}</span></button></TableHead>
                       <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleCollectionSort('status')}>Status <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(collectionSort.key === 'status', collectionSort.dir)}</span></button></TableHead>
                     </TableRow>
                   </TableHeader>
@@ -1339,7 +1456,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                     {sortedCollectionItems.map((row) => (
                       <TableRow
                         key={row.id}
-                        className={`h-7 cursor-pointer select-none border-b ${selectedCollectionIds.includes(row.id) ? 'bg-muted/50' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
+                        className={`${row.comment ? 'h-9' : 'h-7'} cursor-default select-none border-b hover:bg-blue-100/80 dark:hover:bg-blue-900/35 ${selectedCollectionIds.includes(row.id) ? 'bg-blue-100/80 dark:bg-blue-900/35' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
                         onMouseDown={(e) => {
                           if (e.shiftKey) e.preventDefault()
                         }}
@@ -1354,15 +1471,23 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                           else openEditSetWindow(row as FirewallSetItem & { kind: 'addr' | 'port' | 'iface' })
                         }}
                       >
-                        <TableCell>{(row as { kind: string }).kind}</TableCell>
-                        <TableCell>{row.name}</TableCell>
-                        <TableCell className='max-w-[700px] truncate'>{(row.kind === 'map' || row.kind === 'vmap') ? (((row as FirewallMapItem).entries || []).join(', ') || '—') : (((row as FirewallSetItem).elements || []).join(', ') || '—')}</TableCell>
-                        <TableCell className='max-w-[260px] truncate'>{row.comment || '—'}</TableCell>
-                        <TableCell>{row.enabled === false ? 'disabled' : 'enabled'}</TableCell>
+                        <TableCell className={row.comment ? 'relative align-bottom pb-0.5 pt-2' : undefined}>
+                          {row.comment ? (
+                            <div className='pointer-events-none absolute left-2 top-0.5 z-10 whitespace-nowrap text-[10px] font-bold leading-none text-black'>
+                              # {row.comment}
+                            </div>
+                          ) : null}
+                          <span className={row.comment ? 'block pt-1' : ''}>{(row as { kind: string }).kind}</span>
+                        </TableCell>
+                        <TableCell className={row.comment ? 'align-bottom pb-0.5 pt-2' : undefined}><span className={row.comment ? 'block pt-1' : ''}>{row.name}</span></TableCell>
+                        <TableCell className={`max-w-[700px] truncate ${row.comment ? 'align-bottom pb-0.5 pt-2' : ''}`}>
+                          <span className={row.comment ? 'block pt-1' : ''}>{(row.kind === 'map' || row.kind === 'vmap') ? (((row as FirewallMapItem).entries || []).join(', ') || '—') : (((row as FirewallSetItem).elements || []).join(', ') || '—')}</span>
+                        </TableCell>
+                        <TableCell className={row.comment ? 'align-bottom pb-0.5 pt-2' : undefined}><span className={row.comment ? 'block pt-1' : ''}>{row.enabled === false ? 'disabled' : 'enabled'}</span></TableCell>
                       </TableRow>
                     ))}
                     {!allCollectionItems.length
-                      ? <TableRow><TableCell colSpan={5} className='py-6 text-center text-xs text-muted-foreground'>No collections yet.</TableCell></TableRow>
+                      ? <TableRow><TableCell colSpan={4} className='py-6 text-center text-xs text-muted-foreground'>No collections yet.</TableCell></TableRow>
                       : null}
                   </TableBody>
                 </Table>
@@ -1409,7 +1534,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                     {sortedTableRows.map((row) => (
                       <TableRow
                         key={row.id}
-                        className={`h-7 cursor-pointer select-none border-b ${selectedTableIds.includes(row.id) ? 'bg-muted/50' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
+                        className={`h-7 cursor-default select-none border-b hover:bg-blue-100/80 dark:hover:bg-blue-900/35 ${selectedTableIds.includes(row.id) ? 'bg-blue-100/80 dark:bg-blue-900/35' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
                         onMouseDown={(e) => {
                           if (e.shiftKey) e.preventDefault()
                         }}
@@ -1456,37 +1581,107 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                   {visibleColumns.in_interface ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('in_interface')}>{POLICY_COLUMN_LABELS.in_interface} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'in_interface', policySort.dir)}</span></button></TableHead> : null}
                   {visibleColumns.out_interface ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('out_interface')}>{POLICY_COLUMN_LABELS.out_interface} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'out_interface', policySort.dir)}</span></button></TableHead> : null}
                   {visibleColumns.ct_state ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('ct_state')}>{POLICY_COLUMN_LABELS.ct_state} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'ct_state', policySort.dir)}</span></button></TableHead> : null}
-                  {visibleColumns.comment ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('comment')}>{POLICY_COLUMN_LABELS.comment} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'comment', policySort.dir)}</span></button></TableHead> : null}
                   {visibleColumns.packets ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('packets')}>{POLICY_COLUMN_LABELS.packets} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'packets', policySort.dir)}</span></button></TableHead> : null}
                   {visibleColumns.bytes ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('bytes')}>{POLICY_COLUMN_LABELS.bytes} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'bytes', policySort.dir)}</span></button></TableHead> : null}
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {sortedVisibleRules.map((r) => (
+                {sortedVisibleRules.map((r) => {
+                  const renderPolicyCell = (key: PolicySortKey, value: React.ReactNode, nowrap = false) => {
+                    if (!visibleColumns[key]) return null
+                    const commentHost = !!r.comment && firstVisiblePolicyColumn === key
+                    return (
+                      <TableCell className={`${r.comment ? 'relative align-bottom pb-0.5 pt-2' : ''} ${nowrap ? 'whitespace-nowrap' : ''}`}>
+                        {commentHost ? (
+                          <div className='pointer-events-none absolute left-2 top-0.5 z-10 whitespace-nowrap text-[10px] font-bold leading-none text-black'>
+                            # {r.comment}
+                          </div>
+                        ) : null}
+                        <span className={r.comment ? 'block pt-1' : ''}>{value}</span>
+                      </TableCell>
+                    )
+                  }
+                  return (
+                    <TableRow
+                      key={r.id}
+                      draggable={!policySort.key}
+                      onDragStart={(e) => {
+                        if (policySort.key) return
+                        setDragRuleId(r.id)
+                        setDragRuleTableName(String(r.table || activeRuleTable))
+                        try {
+                          e.dataTransfer.setData('text/plain', r.id)
+                          e.dataTransfer.setData('application/x-awg-rule-table', String(r.table || activeRuleTable))
+                          e.dataTransfer.effectAllowed = 'move'
+                        } catch {
+                          // Ignore dataTransfer write issues; local state still supports DnD.
+                        }
+                      }}
+                      onDragEnd={() => {
+                        setDragRuleId(null)
+                        setDragOverRuleId(null)
+                        setDragRuleTableName(null)
+                      }}
+                      onDragOver={(e) => {
+                        if (policySort.key) return
+                        e.preventDefault()
+                        if (dragRuleId !== r.id) setDragOverRuleId(r.id)
+                      }}
+                      onDragLeave={() => {
+                        if (dragOverRuleId === r.id) setDragOverRuleId(null)
+                      }}
+                      onDrop={(e) => {
+                        if (policySort.key) return
+                        e.preventDefault()
+                        let droppedId = ''
+                        let droppedTable = ''
+                        try {
+                          droppedId = e.dataTransfer.getData('text/plain') || ''
+                          droppedTable = e.dataTransfer.getData('application/x-awg-rule-table') || ''
+                        } catch {
+                          // fall back to state-managed drag data
+                        }
+                        setDragOverRuleId(null)
+                        void onReorderDrop(r.id, String(r.table || activeRuleTable), droppedId || undefined, droppedTable || undefined)
+                      }}
+                      className={`${r.comment ? 'h-9' : 'h-7'} cursor-default select-none border-b hover:bg-blue-100/80 dark:hover:bg-blue-900/35 ${selectedRuleIds.includes(r.id) ? 'bg-blue-100/80 dark:bg-blue-900/35' : ''} ${dragRuleId === r.id ? 'opacity-60' : ''} ${dragOverRuleId === r.id && dragRuleId !== r.id ? 'border-t-2 border-t-blue-500 bg-blue-50/50 dark:bg-blue-950/20' : ''} ${!r.enabled ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
+                      onMouseDown={(e) => {
+                        if (e.shiftKey) e.preventDefault()
+                      }}
+                      onClick={(e) => {
+                        const ordered = sortedVisibleRules.map((x) => x.id)
+                        const next = computeSelection(ordered, selectedRuleIds, ruleAnchorId, r.id, e)
+                        setSelectedRuleIds(next.selected)
+                        setRuleAnchorId(next.anchor)
+                      }}
+                      onDoubleClick={() => openEditWindow(r)}
+                    >
+                      {renderPolicyCell('chain', r.chain)}
+                      {renderPolicyCell('action', r.action)}
+                      {renderPolicyCell('proto', r.proto || 'any')}
+                      {renderPolicyCell('src', r.src || '—')}
+                      {renderPolicyCell('dst', r.dst || '—')}
+                      {renderPolicyCell('sport', r.sport || '—')}
+                      {renderPolicyCell('dport', r.dport || '—')}
+                      {renderPolicyCell('in_interface', r.in_interface || '—')}
+                      {renderPolicyCell('out_interface', r.out_interface || '—')}
+                      {renderPolicyCell('ct_state', r.ct_state || '—')}
+                      {renderPolicyCell('packets', formatCounter(r.runtime_packets), true)}
+                      {renderPolicyCell('bytes', formatCounter(r.runtime_bytes), true)}
+                    </TableRow>
+                  )
+                })}
+                {visibleRules.length && !policySort.key && !!dragRuleId ? (
                   <TableRow
-                    key={r.id}
-                    draggable={!policySort.key}
-                    onDragStart={(e) => {
-                      if (policySort.key) return
-                      setDragRuleId(r.id)
-                      setDragRuleTableName(String(r.table || activeRuleTable))
-                      try {
-                        e.dataTransfer.setData('text/plain', r.id)
-                        e.dataTransfer.setData('application/x-awg-rule-table', String(r.table || activeRuleTable))
-                        e.dataTransfer.effectAllowed = 'move'
-                      } catch {
-                        // Ignore dataTransfer write issues; local state still supports DnD.
-                      }
-                    }}
-                    onDragEnd={() => {
-                      setDragRuleId(null)
-                      setDragRuleTableName(null)
-                    }}
+                    className={`h-5 border-b ${dragOverRuleId === '__end__' ? 'bg-blue-50/50 dark:bg-blue-950/20 border-t-2 border-t-blue-500' : 'bg-muted/10'}`}
                     onDragOver={(e) => {
-                      if (!policySort.key) e.preventDefault()
+                      e.preventDefault()
+                      setDragOverRuleId('__end__')
+                    }}
+                    onDragLeave={() => {
+                      if (dragOverRuleId === '__end__') setDragOverRuleId(null)
                     }}
                     onDrop={(e) => {
-                      if (policySort.key) return
                       e.preventDefault()
                       let droppedId = ''
                       let droppedTable = ''
@@ -1496,36 +1691,16 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                       } catch {
                         // fall back to state-managed drag data
                       }
-                      void onReorderDrop(r.id, String(r.table || activeRuleTable), droppedId || undefined, droppedTable || undefined)
+                      setDragOverRuleId(null)
+                      void onReorderDropToEnd(String(activeRuleTable), droppedId || undefined, droppedTable || undefined)
                     }}
-                    className={`h-7 ${policySort.key ? 'cursor-pointer' : 'cursor-move'} select-none border-b ${selectedRuleIds.includes(r.id) ? 'bg-muted/50' : ''} ${dragRuleId === r.id ? 'opacity-60' : ''} ${!r.enabled ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
-                    onMouseDown={(e) => {
-                      if (e.shiftKey) e.preventDefault()
-                    }}
-                    onClick={(e) => {
-                      const ordered = sortedVisibleRules.map((x) => x.id)
-                      const next = computeSelection(ordered, selectedRuleIds, ruleAnchorId, r.id, e)
-                      setSelectedRuleIds(next.selected)
-                      setRuleAnchorId(next.anchor)
-                    }}
-                    onDoubleClick={() => openEditWindow(r)}
                   >
-                    {visibleColumns.chain ? <TableCell>{r.chain}</TableCell> : null}
-                    {visibleColumns.action ? <TableCell>{r.action}</TableCell> : null}
-                    {visibleColumns.proto ? <TableCell>{r.proto || 'any'}</TableCell> : null}
-                    {visibleColumns.src ? <TableCell>{r.src || '—'}</TableCell> : null}
-                    {visibleColumns.dst ? <TableCell>{r.dst || '—'}</TableCell> : null}
-                    {visibleColumns.sport ? <TableCell>{r.sport || '—'}</TableCell> : null}
-                    {visibleColumns.dport ? <TableCell>{r.dport || '—'}</TableCell> : null}
-                    {visibleColumns.in_interface ? <TableCell>{r.in_interface || '—'}</TableCell> : null}
-                    {visibleColumns.out_interface ? <TableCell>{r.out_interface || '—'}</TableCell> : null}
-                    {visibleColumns.ct_state ? <TableCell>{r.ct_state || '—'}</TableCell> : null}
-                    {visibleColumns.comment ? <TableCell>{r.comment || '—'}</TableCell> : null}
-                    {visibleColumns.packets ? <TableCell className='whitespace-nowrap'>{formatCounter(r.runtime_packets)}</TableCell> : null}
-                    {visibleColumns.bytes ? <TableCell className='whitespace-nowrap'>{formatCounter(r.runtime_bytes)}</TableCell> : null}
+                    <TableCell colSpan={visiblePolicyColSpan} className='py-0 text-[1px] leading-none text-transparent select-none'>
+                      .
+                    </TableCell>
                   </TableRow>
-                ))}
-                {!visibleRules.length ? <TableRow><TableCell colSpan={13} className='py-6 text-center text-xs text-muted-foreground'>No rules in {activeRuleTable} table.</TableCell></TableRow> : null}
+                ) : null}
+                {!visibleRules.length ? <TableRow><TableCell colSpan={visiblePolicyColSpan} className='py-6 text-center text-xs text-muted-foreground'>No rules in {activeRuleTable} table.</TableCell></TableRow> : null}
               </TableBody>
             </Table>
           </div> : null}
@@ -1556,6 +1731,10 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                 <TabsContent value='base' className='mt-2 space-y-2.5'>
                   <div className='text-[11px] font-semibold text-muted-foreground'>Rule state</div>
                   <label className='flex items-center gap-2 text-xs rounded-md border p-2'><input type='checkbox' className='h-4 w-4' checked={!!form.enabled} onChange={(e) => setForm((p) => ({ ...p, enabled: e.target.checked }))} />enabled</label>
+                  <div className='space-y-1.5'>
+                    <Label>Comment</Label>
+                    <Input className='h-7' placeholder='Rule comment (optional)' value={form.comment || ''} onChange={(e) => setForm((p) => ({ ...p, comment: e.target.value || null }))} />
+                  </div>
 
                   <div className='text-[11px] font-semibold text-muted-foreground'>Base rule placement</div>
                   <div className='space-y-1.5'>
@@ -2017,27 +2196,9 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                   </div>
 
                   <div className='space-y-1.5 border-t pt-2'>
-                    <Label>Logging</Label>
-                    <label className='flex items-center gap-2 text-xs'>
-                      <input type='checkbox' className='h-4 w-4' checked={logEnabled} onChange={(e) => setForm((p) => e.target.checked ? ({ ...p, log_level: p.log_level || 'info' }) : ({ ...p, log_prefix: null, log_level: null }))} />
-                      log
-                    </label>
-                    <ToggleLine
-                      label='Log prefix'
-                      enabled={logEnabled && !!form.log_prefix}
-                      inactiveHint='FW input:'
-                      onToggle={() => setForm((p) => ({ ...p, log_prefix: p.log_prefix ? null : 'FW input:' }))}
-                    >
-                      <Input
-                        className='h-7'
-                        placeholder='FW input:'
-                        value={form.log_prefix || ''}
-                        onChange={(e) => setForm((p) => ({ ...p, log_prefix: e.target.value || null }))}
-                      />
-                    </ToggleLine>
                     <ToggleLine
                       label='Log level'
-                      enabled={logEnabled && !!form.log_level}
+                      enabled={!!form.log_level}
                       inactiveHint='info'
                       onToggle={() => setForm((p) => ({ ...p, log_level: p.log_level ? null : 'info' }))}
                     >
@@ -2056,6 +2217,19 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                         <option value='debug'>debug</option>
                       </select>
                     </ToggleLine>
+                    <ToggleLine
+                      label='Log prefix'
+                      enabled={!!form.log_prefix}
+                      inactiveHint='FW input:'
+                      onToggle={() => setForm((p) => ({ ...p, log_prefix: p.log_prefix ? null : 'FW input:' }))}
+                    >
+                      <Input
+                        className='h-7'
+                        placeholder='FW input:'
+                        value={form.log_prefix || ''}
+                        onChange={(e) => setForm((p) => ({ ...p, log_prefix: e.target.value || null }))}
+                      />
+                    </ToggleLine>
                   </div>
 
                 </TabsContent>
@@ -2065,44 +2239,61 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                   <div className='grid grid-cols-2 gap-2'>
                     <div className='space-y-1'>
                       <Label className='text-[11px]'>packets</Label>
-                      <Input className='h-7' disabled value='runtime value after save' />
+                      <Input className='h-7 text-[12px]' disabled value={formatCounter(currentRulePackets)} />
                     </div>
                     <div className='space-y-1'>
                       <Label className='text-[11px]'>bytes</Label>
-                      <Input className='h-7' disabled value='runtime value after save' />
+                      <Input className='h-7 text-[12px]' disabled value={formatBytesIEC(currentRuleBytes)} />
                     </div>
                   </div>
                   <div className='grid grid-cols-2 gap-2'>
                     <div className='space-y-1'>
-                      <Label className='text-[11px]'>handle</Label>
-                      <Input className='h-7' disabled value='planned' />
+                      <Label className='text-[11px]'>bit rate</Label>
+                      <Input className='h-7 text-[12px]' disabled value={formatBitrate(currentRuleBitrate)} />
                     </div>
                     <div className='space-y-1'>
-                      <Label className='text-[11px]'>counter status</Label>
-                      <Input className='h-7' disabled value={form.counter ? 'enabled' : 'disabled'} />
+                      <Label className='text-[11px]'>packet rate</Label>
+                      <Input className='h-7 text-[12px]' disabled value={formatPacketRate(currentRulePps)} />
                     </div>
                   </div>
                   <div className='rounded-md border p-2'>
                     <div className='mb-2 flex items-center gap-2 text-[11px] font-semibold text-muted-foreground'>
                       <span>Current rule traffic</span>
-                      <span className='rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700'>beta</span>
+                      <span className='rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700'>live</span>
                     </div>
                     <div className='rounded-md border bg-muted/20 p-2'>
                       <div className='h-28 w-full'>
                         <ResponsiveContainer width='100%' height='100%'>
                           <LineChart data={statsChart.points} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
                             <CartesianGrid strokeDasharray='3 3' vertical={false} stroke='hsl(var(--border))' />
-                            <XAxis dataKey='idx' tickLine={false} axisLine={false} tick={{ fontSize: 10 }} />
-                            <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 10 }} width={28} />
+                            <XAxis dataKey='slot' tickLine={false} axisLine={false} tick={false} />
+                            <YAxis
+                              tickLine={false}
+                              axisLine={false}
+                              tick={{ fontSize: 10 }}
+                              width={60}
+                              orientation='right'
+                              domain={[0, statsSeries === 'packets' ? statsChart.maxPps : statsChart.maxBitsPerSec]}
+                              tickFormatter={(v) => (
+                                statsSeries === 'packets'
+                                  ? formatPacketRate(Number(v || 0))
+                                  : formatBitrate(Number(v || 0))
+                              )}
+                            />
                             <Tooltip
                               contentStyle={{ borderRadius: 8, border: '1px solid hsl(var(--border))', background: 'hsl(var(--background))' }}
-                              labelFormatter={(v) => `Sample ${v}`}
+                              labelFormatter={(_, payload) => {
+                                const row = payload?.[0]?.payload as LiveChartPoint | undefined
+                                return row?.ts ? new Date(row.ts).toLocaleTimeString() : ''
+                              }}
                               formatter={(value, name) => [
-                                name === 'pps' ? Number(value || 0).toFixed(2) : formatCounter(Number(value || 0)),
-                                name === 'pps' ? 'packets/sec' : 'bytes/sec',
+                                name === 'pps'
+                                  ? formatPacketRate(Number(value || 0))
+                                  : formatBitrate(Number(value || 0)),
+                                name === 'pps' ? 'packet rate' : 'bit rate',
                               ]}
                             />
-                            {statsSeries === 'bytes' ? <Line type='linear' dataKey='bps' stroke='#60a5fa' strokeWidth={2} dot={false} isAnimationActive={false} /> : null}
+                            {statsSeries === 'bytes' ? <Line type='linear' dataKey={(x: LiveChartPoint) => x.bps * 8} stroke='#2563eb' strokeWidth={2} dot={false} isAnimationActive={false} /> : null}
                             {statsSeries === 'packets' ? <Line type='linear' dataKey='pps' stroke='#2563eb' strokeWidth={2} dot={false} isAnimationActive={false} /> : null}
                           </LineChart>
                         </ResponsiveContainer>
@@ -2112,18 +2303,18 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                           Counter disabled: enable `nft counter` to collect live chart data.
                         </div>
                       ) : null}
-                      <div className='mt-1 flex items-center justify-between text-[11px]'>
-                        <span className='text-muted-foreground'>Packets/sec: <span className='font-medium text-foreground'>{currentRulePps.toFixed(2)}</span></span>
-                        <span className='text-muted-foreground'>Bytes/sec: <span className='font-medium text-foreground'>{formatCounter(currentRuleBps)}</span></span>
-                      </div>
-                      <div className='mt-2 flex items-center gap-2 text-[10px]'>
-                        <button type='button' className={`rounded border px-2 py-1 ${statsSeries === 'packets' ? 'border-blue-600 bg-blue-600 text-white' : 'border-border bg-background text-muted-foreground'}`} onClick={() => setStatsSeries('packets')}>Packets/sec</button>
-                        <button type='button' className={`rounded border px-2 py-1 ${statsSeries === 'bytes' ? 'border-blue-400 bg-blue-400 text-white' : 'border-border bg-background text-muted-foreground'}`} onClick={() => setStatsSeries('bytes')}>Bytes/sec</button>
+                      <div className='mt-2 flex items-center justify-between text-[10px]'>
+                        <div className='flex items-center gap-2'>
+                          <button type='button' className={`rounded border px-2 py-1 ${statsSeries === 'packets' ? 'border-blue-600 bg-blue-600 text-white' : 'border-border bg-background text-muted-foreground'}`} onClick={() => setStatsSeries('packets')}>Packet rate</button>
+                          <button type='button' className={`rounded border px-2 py-1 ${statsSeries === 'bytes' ? 'border-blue-600 bg-blue-600 text-white' : 'border-border bg-background text-muted-foreground'}`} onClick={() => setStatsSeries('bytes')}>Bit rate</button>
+                        </div>
+                        <div className='text-[11px] text-muted-foreground'>
+                          {statsSeries === 'bytes'
+                            ? <>Bit rate: <span className='font-medium text-foreground'>{formatBitrate(currentRuleBitrate)}</span></>
+                            : <>Packet Rate: <span className='font-medium text-foreground'>{formatPacketRate(currentRulePps)}</span></>}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  <div className='rounded-md border border-dashed px-2 py-1.5 text-[10px] text-muted-foreground'>
-                    Live chart uses current runtime counters of this rule.
                   </div>
                 </TabsContent>
                 </div>

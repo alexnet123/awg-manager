@@ -247,7 +247,7 @@ export function ClientsPage(props: { auth: AuthState; refreshNonce: number }) {
                   {pagedClients.map((it) => (
                     <TableRow
                       key={it.id}
-                      className='cursor-pointer'
+                      className={`h-7 cursor-default select-none border-b hover:bg-blue-100/80 dark:hover:bg-blue-900/35 ${selected?.id === it.id ? 'bg-blue-100/80 dark:bg-blue-900/35' : ''}`}
                       onClick={() => {
                         setSelected(it)
                         setEditForm({
