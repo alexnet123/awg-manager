@@ -50,7 +50,7 @@ test('block B8: l2 fields map to runtime', async ({ request }) => {
   expect(line).toContain('vlan id 10')
   expect(line).toContain('ether saddr aa:bb:cc:dd:ee:ff')
   expect(line).toContain('ether daddr 11:22:33:44:55:66')
-  expect(line).toContain('ether type 0x0800')
+  expect(line).toContain('vlan type ip')
 
   await deleteRule(request, created.id)
 })

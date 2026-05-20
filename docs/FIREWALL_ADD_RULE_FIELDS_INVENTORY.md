@@ -22,26 +22,26 @@ Last updated from UI source: `webui/src/pages/firewall.tsx`
 - Connection mark match: `implemented+tested`
 - Packet mark match: `implemented+tested`
 - Rate limit (`limit_rate`): `implemented+tested`
-- User ID: `implemented+partially-tested`
-- Hour: `implemented+partially-tested`
-- DSCP: `implemented+partially-tested`
+- User ID: `implemented+tested`
+- Hour: `implemented+tested`
+- DSCP: `implemented+tested`
 
 ## Advanced Tab
 - fib expression (`fib_expr`): `implemented+tested`
 - socket expression (`socket_expr`): `implemented+tested`
 - rt expression (`rt_expr`): `implemented+tested`
 - exthdr expression (`exthdr_expr`): `implemented+tested`
-- fib check (`fib_check`): `implemented+partially-tested`
-- socket match (`socket_match`): `implemented+partially-tested`
-- rt nexthop (`rt_nexthop`): `implemented+partially-tested`
-- ipv6 extension headers (`ipv6_exthdrs`): `implemented+partially-tested`
+- fib check (`fib_check`): `implemented+tested`
+- socket match (`socket_match`): `implemented+tested`
+- rt nexthop (`rt_nexthop`): `implemented+tested`
+- ipv6 extension headers (`ipv6_exthdrs`): `implemented+tested`
 - raw expression (free-form): `implemented+tested (raw table only)`
 - nftrace checkbox: `implemented+tested (raw table only)`
 - notrack advanced checkbox: `implemented+tested (raw table only)`
-- tcp flags / icmp / icmpv6 detailed matchers: `implemented+partially-tested` (`tcp_flags`, `icmp_type`, `icmp_code`, `icmpv6_type`, `icmpv6_code` done)
-- meta extended block (`meta length/priority/pkttype/cpu/...`): `implemented+partially-tested` (`meta_length`, `meta_priority`, `meta_cpu`, `meta_pkttype`, `meta_iiftype`, `meta_oiftype`, `meta_iifgroup`, `meta_oifgroup` done)
-- conntrack extended block (`ct direction/status/labels/...`): `implemented+partially-tested` (`ct_status`, `ct_direction`, `ct_expiration`, `ct_helper_match`, `ct_label`, `ct_event`, `ct original/reply saddr/daddr` done)
-- l2 fields (`vlan`, `ether src/dst/type`): `implemented+partially-tested`
+- tcp flags / icmp / icmpv6 detailed matchers: `implemented+tested`
+- meta extended block (`meta length/priority/pkttype/cpu/...`): `implemented+tested`
+- conntrack extended block (`ct direction/status/labels/...`): `implemented+tested`
+- l2 fields (`vlan`, `ether src/dst/type`): `implemented+tested`
 
 ## Action Tab
 - Action verdict selector: `implemented+tested`
@@ -91,5 +91,5 @@ Last updated from UI source: `webui/src/pages/firewall.tsx`
 ## Next Mandatory Coverage
 1. Full Add Rule field toggle semantics (`+`/`-`) for all wired fields (not only `src/sport/dport`). ✅
 2. Runtime nft equivalence checks per field (`target/to`, `reject_type`, `mark_set`, `ct_mark_set`, `log_*`, `ct_*_set`, `fib/socket/rt/exthdr`). ✅ (implemented for core supported runtime fields; `ct_*_set` remains graceful-reject by design)
-3. `negative-fuzz` suite: randomized invalid/valid payload batches.
-4. `recovery` suite: restart/reboot persistence parity (`UI/API/JSON/nft`).
+3. `negative-fuzz` suite: randomized invalid/valid payload batches. ✅
+4. `recovery` suite: restart/reboot persistence parity (`UI/API/JSON/nft`). ✅ (service restart script + reboot parity verified on stand)

@@ -27,9 +27,9 @@ export type ClientItem = {
 
 export type FirewallRule = {
   id: string
-  table: 'filter' | 'nat' | 'raw' | 'mangle'
+  table: string
   family: 'inet' | 'ip' | 'ip6'
-  chain: 'prerouting' | 'input' | 'forward' | 'output' | 'postrouting'
+  chain: string
   action: 'accept' | 'drop' | 'reject' | 'jump' | 'goto' | 'return'
   proto?: 'tcp' | 'udp' | 'icmp' | 'icmpv6' | null
   src?: string | null
@@ -379,7 +379,7 @@ export async function applyFirewallRules(auth: AuthState): Promise<void> {
   if (!res.ok) throw new Error(await parseError(res))
 }
 
-export async function reorderFirewallRules(auth: AuthState, table: FirewallRule['table'], orderedIds: string[]): Promise<FirewallRule[]> {
+export async function reorderFirewallRules(auth: AuthState, table: string, orderedIds: string[]): Promise<FirewallRule[]> {
   const res = await fetch('/firewall/rules/reorder', {
     method: 'POST',
     headers: headers(auth, { 'Content-Type': 'application/json' }),
@@ -390,7 +390,7 @@ export async function reorderFirewallRules(auth: AuthState, table: FirewallRule[
   return payload.items || []
 }
 
-export async function resetFirewallCounters(auth: AuthState, table?: FirewallRule['table']): Promise<void> {
+export async function resetFirewallCounters(auth: AuthState, table?: string): Promise<void> {
   const res = await fetch('/firewall/counters/reset', {
     method: 'POST',
     headers: headers(auth, { 'Content-Type': 'application/json' }),

@@ -47,10 +47,10 @@ test('block B9: ct original/reply addr fields map to runtime', async ({ request 
 
   const state = await getFirewallState(request)
   const line = getRuleLineByComment(state?.item?.ruleset || '', comment)
-  expect(line).toContain('ct original saddr 192.168.10.10')
-  expect(line).toContain('ct original daddr 203.0.113.10')
-  expect(line).toContain('ct reply saddr 203.0.113.10')
-  expect(line).toContain('ct reply daddr 192.168.10.10')
+  expect(line).toContain('ct original ip saddr 192.168.10.10')
+  expect(line).toContain('ct original ip daddr 203.0.113.10')
+  expect(line).toContain('ct reply ip saddr 203.0.113.10')
+  expect(line).toContain('ct reply ip daddr 192.168.10.10')
 
   await deleteRule(request, created.id)
 })

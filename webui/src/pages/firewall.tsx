@@ -5,6 +5,8 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import type { AuthState, FirewallMapItem, FirewallMapsState, FirewallRule, FirewallSchema, FirewallSetItem, FirewallSetsState, FirewallState, FirewallTableItem, FirewallTablesState } from './api'
@@ -143,7 +145,45 @@ function PlannedField(props: { label: string; placeholder: string }) {
   )
 }
 
-type FirewallMainTab = 'filter' | 'nat' | 'raw' | 'mangle' | 'sets' | 'tables' | 'maps'
+type FirewallPolicyTab = 'filter' | 'nat' | 'raw' | 'mangle'
+type FirewallSectionTab = 'policy' | 'collections' | 'table_builder'
+type CollectionKind = 'addr' | 'port' | 'iface' | 'map' | 'vmap'
+type SortDirection = 'asc' | 'desc'
+type CollectionSortKey = 'kind' | 'name' | 'values' | 'comment' | 'status'
+type TableSortKey = 'family' | 'table_name' | 'chain_name' | 'chain_type' | 'hook' | 'device' | 'priority' | 'policy' | 'origin' | 'status'
+type PolicySortKey = 'chain' | 'action' | 'proto' | 'src' | 'dst' | 'sport' | 'dport' | 'in_interface' | 'out_interface' | 'ct_state' | 'comment' | 'packets' | 'bytes'
+
+const POLICY_COLUMN_LABELS: Record<PolicySortKey, string> = {
+  chain: 'Chain',
+  action: 'Action',
+  proto: 'Protocol',
+  src: 'Source address',
+  dst: 'Destination address',
+  sport: 'Source port',
+  dport: 'Destination port',
+  in_interface: 'Input interface',
+  out_interface: 'Output interface',
+  ct_state: 'Connection state',
+  comment: 'Comment',
+  packets: 'Packets',
+  bytes: 'Bytes',
+}
+
+const POLICY_COLUMN_ORDER: PolicySortKey[] = [
+  'chain',
+  'action',
+  'proto',
+  'src',
+  'dst',
+  'sport',
+  'dport',
+  'in_interface',
+  'out_interface',
+  'ct_state',
+  'comment',
+  'packets',
+  'bytes',
+]
 
 export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [state, setState] = React.useState<FirewallState | null>(null)
@@ -151,12 +191,16 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [error, setError] = React.useState<string | null>(null)
   const [form, setForm] = React.useState<Partial<FirewallRule>>(defaultRule)
   const [isBusy, setIsBusy] = React.useState(false)
-  const [activeTable, setActiveTable] = React.useState<FirewallMainTab>('filter')
-  const [selectedRuleId, setSelectedRuleId] = React.useState<string | null>(null)
+  const [activeSection, setActiveSection] = React.useState<FirewallSectionTab>('policy')
+  const [activePolicyTab, setActivePolicyTab] = React.useState<FirewallPolicyTab>('filter')
+  const [activeRuleTableName, setActiveRuleTableName] = React.useState<string>('filter')
+  const [selectedRuleIds, setSelectedRuleIds] = React.useState<string[]>([])
+  const [ruleAnchorId, setRuleAnchorId] = React.useState<string | null>(null)
   const [addOpen, setAddOpen] = React.useState(false)
   const [editingRuleId, setEditingRuleId] = React.useState<string | null>(null)
   const [ruleEditorTab, setRuleEditorTab] = React.useState<EditorTab>('base')
   const [dragRuleId, setDragRuleId] = React.useState<string | null>(null)
+  const [dragRuleTableName, setDragRuleTableName] = React.useState<string | null>(null)
   const [winPos, setWinPos] = React.useState({ x: 120, y: 120 })
   const [columnsOpen, setColumnsOpen] = React.useState(false)
   const [visibleColumns, setVisibleColumns] = React.useState<Record<string, boolean>>({
@@ -174,6 +218,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     packets: true,
     bytes: true,
   })
+  const [policySort, setPolicySort] = React.useState<{ key: PolicySortKey | null; dir: SortDirection }>({ key: null, dir: 'asc' })
   const dragRef = React.useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null)
   const [actionMode, setActionMode] = React.useState<string>('verdict')
   const [statsSeries, setStatsSeries] = React.useState<'packets' | 'bytes'>('packets')
@@ -182,22 +227,20 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [setsState, setSetsState] = React.useState<FirewallSetsState>({ addr: [], port: [], iface: [] })
   const [mapsState, setMapsState] = React.useState<FirewallMapsState>({ map: [], vmap: [] })
   const [tablesState, setTablesState] = React.useState<FirewallTablesState>({ builtin: [], custom: [] })
-  const [activeSetKind, setActiveSetKind] = React.useState<'addr' | 'port' | 'iface'>('addr')
-  const [selectedSetId, setSelectedSetId] = React.useState<string | null>(null)
-  const [selectedMapId, setSelectedMapId] = React.useState<string | null>(null)
+  const [collectionKind, setCollectionKind] = React.useState<CollectionKind>('addr')
+  const [selectedCollectionIds, setSelectedCollectionIds] = React.useState<string[]>([])
+  const [collectionAnchorId, setCollectionAnchorId] = React.useState<string | null>(null)
+  const [collectionSort, setCollectionSort] = React.useState<{ key: CollectionSortKey | null; dir: SortDirection }>({ key: null, dir: 'asc' })
   const [newSetName, setNewSetName] = React.useState('')
   const [newSetElements, setNewSetElements] = React.useState('')
   const [newSetComment, setNewSetComment] = React.useState('')
   const [setOpen, setSetOpen] = React.useState(false)
   const [editingSetId, setEditingSetId] = React.useState<string | null>(null)
-  const [mapOpen, setMapOpen] = React.useState(false)
-  const [editingMapId, setEditingMapId] = React.useState<string | null>(null)
-  const [activeMapKind, setActiveMapKind] = React.useState<'map' | 'vmap'>('map')
-  const [newMapName, setNewMapName] = React.useState('')
-  const [newMapEntries, setNewMapEntries] = React.useState('')
-  const [newMapComment, setNewMapComment] = React.useState('')
-  const [selectedTableId, setSelectedTableId] = React.useState<string | null>(null)
+  const [selectedTableIds, setSelectedTableIds] = React.useState<string[]>([])
+  const [tableAnchorId, setTableAnchorId] = React.useState<string | null>(null)
+  const [tableSort, setTableSort] = React.useState<{ key: TableSortKey | null; dir: SortDirection }>({ key: null, dir: 'asc' })
   const [tableOpen, setTableOpen] = React.useState(false)
+  const [editingTableId, setEditingTableId] = React.useState<string | null>(null)
   const [newTableFamily, setNewTableFamily] = React.useState('inet')
   const [newTableName, setNewTableName] = React.useState('')
   const [newChainName, setNewChainName] = React.useState('')
@@ -222,22 +265,83 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     return `${(n / 1_000_000_000).toFixed(1)}G`
   }
 
-  const chainOptionsByTable: Record<string, FirewallRule['chain'][]> = {
+  function computeSelection(
+    orderedIds: string[],
+    prevSelected: string[],
+    anchorId: string | null,
+    clickedId: string,
+    event: React.MouseEvent
+  ): { selected: string[]; anchor: string } {
+    const prev = Array.from(new Set(prevSelected))
+    const isToggle = event.metaKey || event.ctrlKey
+    const isRange = event.shiftKey
+    const fallbackAnchor = prev.length ? prev[prev.length - 1] : clickedId
+    const nextAnchor = clickedId
+
+    if (isRange) {
+      const startId = anchorId || fallbackAnchor
+      const a = orderedIds.indexOf(startId)
+      const b = orderedIds.indexOf(clickedId)
+      if (a >= 0 && b >= 0) {
+        const [start, end] = a < b ? [a, b] : [b, a]
+        const range = orderedIds.slice(start, end + 1)
+        if (isToggle) return { selected: Array.from(new Set([...prev, ...range])), anchor: nextAnchor }
+        return { selected: range, anchor: nextAnchor }
+      }
+    }
+
+    if (isToggle) {
+      const selected = prev.includes(clickedId) ? prev.filter((id) => id !== clickedId) : [...prev, clickedId]
+      return { selected, anchor: nextAnchor }
+    }
+
+    return { selected: [clickedId], anchor: nextAnchor }
+  }
+
+  function sortIndicator(active: boolean, dir: SortDirection): string {
+    if (!active) return '↕'
+    return dir === 'asc' ? '▲' : '▼'
+  }
+
+  function compareStr(a: string, b: string): number {
+    return a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true })
+  }
+
+  const chainOptionsByTable: Record<string, string[]> = {
     filter: schema?.tables?.filter?.chains || ['input', 'forward', 'output'],
     nat: schema?.tables?.nat?.chains || ['prerouting', 'input', 'output', 'postrouting'],
     raw: schema?.tables?.raw?.chains || ['prerouting', 'output'],
     mangle: schema?.tables?.mangle?.chains || ['prerouting', 'input', 'forward', 'output', 'postrouting'],
   }
-  const tabToRuleTable = (tab: FirewallMainTab): 'filter' | 'nat' | 'raw' | 'mangle' => (tab === 'sets' || tab === 'maps' || tab === 'tables') ? 'filter' : tab
-  const activeFormTable = (form.table || tabToRuleTable(activeTable)) as 'filter' | 'nat' | 'raw' | 'mangle'
-  const tableSupports = new Set(schema?.tables?.[activeFormTable]?.supports || [])
+  const builtinRuleTables = new Set(['filter', 'nat', 'raw', 'mangle'])
+  const customChainRowsByTable = React.useMemo(() => {
+    const out: Record<string, FirewallTableItem[]> = {}
+    for (const row of tablesState.custom) {
+      const t = String(row.table_name || '').toLowerCase()
+      if (!t) continue
+      if (!out[t]) out[t] = []
+      out[t].push(row)
+    }
+    return out
+  }, [tablesState.custom])
+  const activeFormTable = String(form.table || activeRuleTableName || activePolicyTab).toLowerCase()
+  const defaultChainMode = builtinRuleTables.has(activeFormTable)
+    ? activeFormTable
+    : ((customChainRowsByTable[activeFormTable]?.find((row) => row.chain_name === form.chain)?.chain_type || customChainRowsByTable[activeFormTable]?.[0]?.chain_type || 'filter') === 'nat' ? 'nat' : 'filter')
+  const tableSupports = new Set(schema?.tables?.[(defaultChainMode as 'filter' | 'nat' | 'raw' | 'mangle')]?.supports || [])
   const hasSupport = (key: string) => tableSupports.has(key)
-  const effectiveChain = (form.chain || chainOptionsByTable[activeFormTable]?.[0] || 'input') as FirewallRule['chain']
-  const contextKey = `${activeFormTable}:${effectiveChain}`
-  const isFilterCtx = activeFormTable === 'filter'
-  const isNatCtx = activeFormTable === 'nat'
-  const isRawCtx = activeFormTable === 'raw'
-  const isMangleCtx = activeFormTable === 'mangle'
+  const activeChainOptions = builtinRuleTables.has(activeFormTable)
+    ? (chainOptionsByTable[activeFormTable] || ['input'])
+    : ((customChainRowsByTable[activeFormTable] || []).map((row) => row.chain_name).filter(Boolean))
+  const effectiveChain = (form.chain || activeChainOptions[0] || 'input') as string
+  const contextMode: 'filter' | 'nat' | 'raw' | 'mangle' = builtinRuleTables.has(activeFormTable)
+    ? (activeFormTable as 'filter' | 'nat' | 'raw' | 'mangle')
+    : (defaultChainMode as 'filter' | 'nat' | 'raw' | 'mangle')
+  const contextKey = `${contextMode}:${effectiveChain}`
+  const isFilterCtx = contextMode === 'filter'
+  const isNatCtx = contextMode === 'nat'
+  const isRawCtx = contextMode === 'raw'
+  const isMangleCtx = contextMode === 'mangle'
 
   function generalFieldState(field: 'in_interface' | 'out_interface' | 'ct_state'): FieldState {
     const states: Record<string, Record<typeof field, FieldState>> = {
@@ -267,6 +371,10 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     else if (isMangleCtx) setActionMode('mark')
     else setActionMode('verdict')
   }, [isNatCtx, isRawCtx, isMangleCtx])
+
+  React.useEffect(() => {
+    setActiveRuleTableName(activePolicyTab)
+  }, [activePolicyTab])
 
   const selectedAction = form.nat_type || form.action || 'accept'
   const isNatActionSelected = ['dnat', 'snat', 'masquerade', 'redirect'].includes(String(selectedAction))
@@ -311,11 +419,11 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
 
   React.useEffect(() => {
     if (addOpen && !editingRuleId) {
-      const ruleTable = tabToRuleTable(activeTable)
-      setForm((p) => ({ ...p, table: ruleTable, chain: chainOptionsByTable[ruleTable][0] }))
+      const ruleTable = activeRuleTableName
+      setForm((p) => ({ ...p, table: ruleTable, chain: activeChainOptions[0] || 'input' }))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTable, addOpen, editingRuleId])
+  }, [activeRuleTableName, addOpen, editingRuleId])
 
   React.useEffect(() => {
     if (!editingRuleId) return
@@ -333,18 +441,18 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
 
   React.useEffect(() => {
     if (!addOpen) return
-    if ((form.table || activeTable) !== 'nat' && form.nat_type) {
+    if (contextMode !== 'nat' && form.nat_type) {
       setForm((p) => ({ ...p, nat_type: null, to_addr: null, to_port: null }))
       return
     }
-    if ((form.table || activeTable) === 'nat' && form.nat_type) {
+    if (contextMode === 'nat' && form.nat_type) {
       const chain = form.chain || 'prerouting'
       const allowedNat = schema?.tables?.nat?.nat_types_by_chain?.[chain] || ['dnat', 'redirect']
       if (!allowedNat.includes(form.nat_type)) {
         setForm((p) => ({ ...p, nat_type: null, to_addr: null, to_port: null }))
       }
     }
-  }, [addOpen, form.table, form.chain, form.nat_type, activeTable, schema])
+  }, [addOpen, form.chain, form.nat_type, contextMode, schema])
 
   async function onSave(event: React.FormEvent) {
     event.preventDefault()
@@ -410,8 +518,8 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   function openCreateWindow() {
     setEditingRuleId(null)
     setRuleEditorTab('base')
-    const ruleTable = tabToRuleTable(activeTable)
-    setForm({ ...defaultRule, table: ruleTable, chain: chainOptionsByTable[ruleTable][0] })
+    const ruleTable = activeRuleTableName
+    setForm({ ...defaultRule, table: ruleTable, chain: activeChainOptions[0] || 'input' })
     setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 760) / 2) - 60) })
     setAddOpen(true)
   }
@@ -505,8 +613,34 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     setAddOpen(true)
   }
 
-  const activeRuleTable = tabToRuleTable(activeTable)
+  const activeRuleTable = activeRuleTableName
   const visibleRules = (state?.rules || []).filter((r) => r.table === activeRuleTable)
+  const sortedVisibleRules = React.useMemo(() => {
+    const key = policySort.key
+    if (!key) return visibleRules
+    const rows = [...visibleRules]
+    const dir = policySort.dir === 'asc' ? 1 : -1
+    rows.sort((a, b) => {
+      if (key === 'packets') return dir * (Number(a.runtime_packets || 0) - Number(b.runtime_packets || 0))
+      if (key === 'bytes') return dir * (Number(a.runtime_bytes || 0) - Number(b.runtime_bytes || 0))
+      const value = (row: FirewallRule): string => {
+        if (key === 'proto') return String(row.proto || 'any')
+        if (key === 'src') return String(row.src || '')
+        if (key === 'dst') return String(row.dst || '')
+        if (key === 'sport') return String(row.sport || '')
+        if (key === 'dport') return String(row.dport || '')
+        if (key === 'in_interface') return String(row.in_interface || '')
+        if (key === 'out_interface') return String(row.out_interface || '')
+        if (key === 'ct_state') return String(row.ct_state || '')
+        if (key === 'comment') return String(row.comment || '')
+        if (key === 'action') return String(row.action || '')
+        if (key === 'chain') return String(row.chain || '')
+        return ''
+      }
+      return dir * compareStr(value(a), value(b))
+    })
+    return rows
+  }, [visibleRules, policySort])
   const currentRulePackets = Number(form.runtime_packets || 0)
   const currentRuleBytes = Number(form.runtime_bytes || 0)
   const currentRulePps = Number(form.runtime_pps || 0)
@@ -534,10 +668,13 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     return { points }
   }, [liveChartPoints])
 
-  async function onReorderDrop(targetRuleId: string) {
-    if (!dragRuleId || dragRuleId === targetRuleId) return
+  async function onReorderDrop(targetRuleId: string, targetTableName: string, droppedRuleId?: string, droppedRuleTableName?: string) {
+    const fromRuleId = droppedRuleId || dragRuleId
+    const fromTableName = (droppedRuleTableName || dragRuleTableName || activeRuleTable).toLowerCase()
+    if (!fromRuleId || fromRuleId === targetRuleId) return
+    if (fromTableName !== String(targetTableName || '').toLowerCase()) return
     const ids = visibleRules.map((r) => r.id)
-    const from = ids.indexOf(dragRuleId)
+    const from = ids.indexOf(fromRuleId)
     const to = ids.indexOf(targetRuleId)
     if (from < 0 || to < 0 || from === to) return
     const next = [...ids]
@@ -548,20 +685,29 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     try {
       await reorderFirewallRules(props.auth, activeRuleTable, next)
       await refresh()
-      setSelectedRuleId(dragRuleId)
+      setSelectedRuleIds([fromRuleId])
+      setRuleAnchorId(fromRuleId)
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
     } finally {
       setDragRuleId(null)
+      setDragRuleTableName(null)
       setIsBusy(false)
     }
   }
 
-  const isSetTab = activeTable === 'sets'
-  const isTablesTab = activeTable === 'tables'
-  const isMapsTab = activeTable === 'maps'
-  const currentSetKind: 'addr' | 'port' | 'iface' = activeSetKind
-  const currentSetItems = currentSetKind === 'addr' ? setsState.addr : currentSetKind === 'port' ? setsState.port : setsState.iface
+  const isCollectionsTab = activeSection === 'collections'
+  const isTablesTab = activeSection === 'table_builder'
+  const isCustomRuleTableActive = !['filter', 'nat', 'raw', 'mangle'].includes(activeRuleTableName)
+  const customTableNames = Array.from(new Set(tablesState.custom.filter((x) => x.enabled !== false).map((x) => x.table_name))).sort((a, b) => a.localeCompare(b))
+  const tableRows = React.useMemo(() => [...tablesState.custom, ...tablesState.builtin], [tablesState.builtin, tablesState.custom])
+
+  React.useEffect(() => {
+    if (['filter', 'nat', 'raw', 'mangle'].includes(activeRuleTableName)) return
+    const existsEnabled = tablesState.custom.some((x) => x.table_name === activeRuleTableName && x.enabled !== false)
+    if (!existsEnabled) setActiveRuleTableName('filter')
+  }, [activeRuleTableName, tablesState.custom])
+
   const allSetItems: Array<FirewallSetItem & { kind: 'addr' | 'port' | 'iface' }> = [
     ...setsState.addr.map((x) => ({ ...x, kind: 'addr' as const })),
     ...setsState.port.map((x) => ({ ...x, kind: 'port' as const })),
@@ -571,22 +717,87 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     ...mapsState.map.map((x) => ({ ...x, kind: 'map' as const })),
     ...mapsState.vmap.map((x) => ({ ...x, kind: 'vmap' as const })),
   ]
+  const allCollectionItems: Array<(FirewallSetItem & { kind: 'addr' | 'port' | 'iface' }) | (FirewallMapItem & { kind: 'map' | 'vmap' })> = [...allSetItems, ...allMapItems]
+  const sortedCollectionItems = React.useMemo(() => {
+    if (!collectionSort.key) return allCollectionItems
+    const rows = [...allCollectionItems]
+    const dir = collectionSort.dir === 'asc' ? 1 : -1
+    rows.sort((a, b) => {
+      if (collectionSort.key === 'kind') return dir * compareStr(a.kind, b.kind)
+      if (collectionSort.key === 'name') return dir * compareStr(String(a.name || ''), String(b.name || ''))
+      if (collectionSort.key === 'comment') return dir * compareStr(String(a.comment || ''), String(b.comment || ''))
+      if (collectionSort.key === 'status') {
+        const av = a.enabled === false ? 'disabled' : 'enabled'
+        const bv = b.enabled === false ? 'disabled' : 'enabled'
+        return dir * compareStr(av, bv)
+      }
+      const av = a.kind === 'map' || a.kind === 'vmap'
+        ? ((a as FirewallMapItem).entries || []).join(', ')
+        : ((a as FirewallSetItem).elements || []).join(', ')
+      const bv = b.kind === 'map' || b.kind === 'vmap'
+        ? ((b as FirewallMapItem).entries || []).join(', ')
+        : ((b as FirewallSetItem).elements || []).join(', ')
+      return dir * compareStr(av, bv)
+    })
+    return rows
+  }, [allCollectionItems, collectionSort])
+  const sortedTableRows = React.useMemo(() => {
+    const key = tableSort.key
+    if (!key) return tableRows
+    const rows = [...tableRows]
+    const dir = tableSort.dir === 'asc' ? 1 : -1
+    rows.sort((a, b) => {
+      if (key === 'priority') return dir * (Number(a.priority || 0) - Number(b.priority || 0))
+      if (key === 'origin') return dir * compareStr(a.builtin ? 'built-in' : 'custom', b.builtin ? 'built-in' : 'custom')
+      if (key === 'status') return dir * compareStr(a.enabled === false ? 'disabled' : 'enabled', b.enabled === false ? 'disabled' : 'enabled')
+      const av = key === 'device' ? String(a.device || '') : String((a as Record<string, unknown>)[key] || '')
+      const bv = key === 'device' ? String(b.device || '') : String((b as Record<string, unknown>)[key] || '')
+      return dir * compareStr(av, bv)
+    })
+    return rows
+  }, [tableRows, tableSort])
+  const selectedCollection = sortedCollectionItems.find((x) => x.id === selectedCollectionIds[0]) || null
+
+  function toggleCollectionSort(key: CollectionSortKey) {
+    setCollectionSort((prev) => {
+      if (prev.key !== key) return { key, dir: 'asc' }
+      if (prev.dir === 'asc') return { key, dir: 'desc' }
+      return { key: null, dir: 'asc' }
+    })
+  }
+
+  function toggleTableSort(key: TableSortKey) {
+    setTableSort((prev) => {
+      if (prev.key !== key) return { key, dir: 'asc' }
+      if (prev.dir === 'asc') return { key, dir: 'desc' }
+      return { key: null, dir: 'asc' }
+    })
+  }
+
+  function togglePolicySort(key: PolicySortKey) {
+    setPolicySort((prev) => {
+      if (prev.key !== key) return { key, dir: 'asc' }
+      if (prev.dir === 'asc') return { key, dir: 'desc' }
+      return { key: null, dir: 'asc' }
+    })
+  }
 
   function openCreateSetWindow() {
     setEditingSetId(null)
     setNewSetName('')
     setNewSetElements('')
     setNewSetComment('')
+    setCollectionKind('addr')
     setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 360) / 2) - 40) })
     setSetOpen(true)
   }
 
   function openEditSetWindow(item: FirewallSetItem & { kind: 'addr' | 'port' | 'iface' }) {
     setEditingSetId(item.id)
-    setActiveSetKind(item.kind)
     setNewSetName(item.name || '')
     setNewSetElements((item.elements || []).join(', '))
     setNewSetComment(item.comment || '')
+    setCollectionKind(item.kind)
     setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 360) / 2) - 40) })
     setSetOpen(true)
   }
@@ -596,7 +807,11 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     setIsBusy(true)
     try {
       const elements = newSetElements.split(',').map((x) => x.trim()).filter(Boolean)
-      await upsertFirewallSet(props.auth, currentSetKind, { id: editingSetId || undefined, name: newSetName.trim(), elements, comment: newSetComment.trim() || null })
+      if (collectionKind === 'map' || collectionKind === 'vmap') {
+        await upsertFirewallMap(props.auth, collectionKind, { id: editingSetId || undefined, name: newSetName.trim(), entries: elements, comment: newSetComment.trim() || null })
+      } else {
+        await upsertFirewallSet(props.auth, collectionKind, { id: editingSetId || undefined, name: newSetName.trim(), elements, comment: newSetComment.trim() || null })
+      }
       setEditingSetId(null)
       setNewSetName('')
       setNewSetElements('')
@@ -617,7 +832,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     setIsBusy(true)
     try {
       await deleteFirewallSet(props.auth, kind, item.id)
-      if (selectedSetId === item.id) setSelectedSetId(null)
+      setSelectedCollectionIds((prev) => prev.filter((id) => id !== item.id))
       await refresh()
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
@@ -639,43 +854,14 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     }
   }
 
-  function openCreateMapWindow() {
-    setEditingMapId(null)
-    setNewMapName('')
-    setNewMapEntries('')
-    setNewMapComment('')
-    setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 360) / 2) - 40) })
-    setMapOpen(true)
-  }
-
   function openEditMapWindow(item: FirewallMapItem & { kind: 'map' | 'vmap' }) {
-    setEditingMapId(item.id)
-    setActiveMapKind(item.kind)
-    setNewMapName(item.name || '')
-    setNewMapEntries((item.entries || []).join(', '))
-    setNewMapComment(item.comment || '')
+    setCollectionKind(item.kind)
+    setEditingSetId(item.id)
+    setNewSetName(item.name || '')
+    setNewSetElements((item.entries || []).join(', '))
+    setNewSetComment(item.comment || '')
     setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 360) / 2) - 40) })
-    setMapOpen(true)
-  }
-
-  async function onSaveMap(): Promise<boolean> {
-    setError(null)
-    setIsBusy(true)
-    try {
-      const entries = newMapEntries.split(',').map((x) => x.trim()).filter(Boolean)
-      await upsertFirewallMap(props.auth, activeMapKind, { id: editingMapId || undefined, name: newMapName.trim(), entries, comment: newMapComment.trim() || null })
-      setEditingMapId(null)
-      setNewMapName('')
-      setNewMapEntries('')
-      setNewMapComment('')
-      await refresh()
-      return true
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc))
-      return false
-    } finally {
-      setIsBusy(false)
-    }
+    setSetOpen(true)
   }
 
   async function onDeleteMap(item: FirewallMapItem, kind: 'map' | 'vmap') {
@@ -684,6 +870,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     setIsBusy(true)
     try {
       await deleteFirewallMap(props.auth, kind, item.id)
+      setSelectedCollectionIds((prev) => prev.filter((id) => id !== item.id))
       await refresh()
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
@@ -712,6 +899,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   }
 
   function openCreateTableWindow() {
+    setEditingTableId(null)
     setNewTableFamily('inet')
     setNewTableName('')
     setNewChainName('')
@@ -724,20 +912,87 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     setTableOpen(true)
   }
 
+  function openEditTableWindow(item: FirewallTableItem) {
+    if (item.builtin) return
+    setEditingTableId(item.id)
+    setNewTableFamily(item.family || 'inet')
+    setNewTableName(item.table_name || '')
+    setNewChainName(item.chain_name || '')
+    setNewChainType((item.chain_type || 'filter') as 'filter' | 'nat' | 'route')
+    setNewHook((item.hook || 'input') as 'prerouting' | 'input' | 'forward' | 'output' | 'postrouting' | 'ingress')
+    setNewDevice(item.device || '')
+    setNewPriority(String(item.priority ?? -10))
+    setNewPolicy((item.policy || 'accept') as 'accept' | 'drop')
+    setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 420) / 2) - 40) })
+    setTableOpen(true)
+  }
+
   async function onSaveTable(): Promise<boolean> {
     setError(null)
+    const family = newTableFamily.trim().toLowerCase()
+    const tableName = newTableName.trim()
+    const chainName = newChainName.trim()
+    const hook = newHook.trim().toLowerCase()
+    const hookValue = newHook
+    const priorityNum = Number(newPriority)
+    const device = newDevice.trim() || null
+
+    if (!tableName || !chainName) {
+      setError('Table name and chain name are required.')
+      return false
+    }
+    if (!Number.isFinite(priorityNum) || !Number.isInteger(priorityNum)) {
+      setError('Priority must be an integer.')
+      return false
+    }
+    if (!/^[A-Za-z0-9_]+$/.test(tableName)) {
+      setError('Table name allows only letters, numbers, and underscore.')
+      return false
+    }
+    if (!/^[A-Za-z0-9_]+$/.test(chainName)) {
+      setError('Chain name allows only letters, numbers, and underscore.')
+      return false
+    }
+
+    const allRows = [...tablesState.builtin, ...tablesState.custom]
+    const duplicateChainInTable = allRows.find((row) =>
+      row.id !== editingTableId
+      && row.family.toLowerCase() === family
+      && row.table_name === tableName
+      && row.chain_name === chainName
+    )
+    if (duplicateChainInTable) {
+      setError(`Chain "${chainName}" already exists in table "${tableName}".`)
+      return false
+    }
+
+    const hookPriorityConflict = allRows.find((row) =>
+      row.id !== editingTableId
+      && row.family.toLowerCase() === family
+      && String(row.hook || '').toLowerCase() === hook
+      && Number(row.priority) === priorityNum
+    )
+    if (hookPriorityConflict) {
+      const origin = hookPriorityConflict.builtin ? 'built-in' : 'custom'
+      setError(`Hook/priority conflict with ${origin} chain ${hookPriorityConflict.table_name}/${hookPriorityConflict.chain_name} (${hook}, ${priorityNum}).`)
+      return false
+    }
+
     setIsBusy(true)
     try {
       await upsertFirewallTable(props.auth, {
-        family: newTableFamily,
-        table_name: newTableName.trim(),
-        chain_name: newChainName.trim(),
+        id: editingTableId || undefined,
+        family,
+        table_name: tableName,
+        chain_name: chainName,
         chain_type: newChainType,
-        hook: newHook,
-        device: newDevice.trim() || null,
-        priority: Number(newPriority),
+        hook: hookValue,
+        device,
+        priority: priorityNum,
         policy: newPolicy,
+        enabled: editingTableId ? (tablesState.custom.find((x) => x.id === editingTableId)?.enabled ?? true) : true,
       })
+      setEditingTableId(null)
       await refresh()
       return true
     } catch (exc) {
@@ -756,7 +1011,165 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     try {
       await deleteFirewallTable(props.auth, item.id)
       await refresh()
-      if (selectedTableId === item.id) setSelectedTableId(null)
+      setSelectedTableIds((prev) => prev.filter((id) => id !== item.id))
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function onSetEnabledTable(item: FirewallTableItem, enabled: boolean) {
+    if (item.builtin) return
+    setError(null)
+    setIsBusy(true)
+    try {
+      await upsertFirewallTable(props.auth, {
+        id: item.id,
+        family: item.family,
+        table_name: item.table_name,
+        chain_name: item.chain_name,
+        chain_type: item.chain_type,
+        hook: item.hook,
+        device: item.device || null,
+        priority: Number(item.priority),
+        policy: item.policy,
+        enabled,
+      })
+      await refresh()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  const selectedRules = visibleRules.filter((r) => selectedRuleIds.includes(r.id))
+  const selectedCollections = allCollectionItems.filter((r) => selectedCollectionIds.includes(r.id))
+  const selectedCustomTables = tableRows.filter((r) => selectedTableIds.includes(r.id) && !r.builtin)
+
+  async function onDeleteSelectedRules() {
+    if (!selectedRules.length) return
+    if (!confirm(`Delete ${selectedRules.length} selected rule(s)?`)) return
+    setError(null)
+    setIsBusy(true)
+    try {
+      for (const rule of selectedRules) await deleteFirewallRule(props.auth, rule.id)
+      setSelectedRuleIds([])
+      setRuleAnchorId(null)
+      await refresh()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function onSetEnabledSelectedRules(enabled: boolean) {
+    if (!selectedRules.length) return
+    setError(null)
+    setIsBusy(true)
+    try {
+      for (const rule of selectedRules) await updateFirewallRule(props.auth, rule.id, { enabled })
+      await refresh()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function onDeleteSelectedCollections() {
+    if (!selectedCollections.length) return
+    if (!confirm(`Delete ${selectedCollections.length} selected collection item(s)?`)) return
+    setError(null)
+    setIsBusy(true)
+    try {
+      for (const item of selectedCollections) {
+        if (item.kind === 'map' || item.kind === 'vmap') await deleteFirewallMap(props.auth, item.kind, item.id)
+        else await deleteFirewallSet(props.auth, item.kind, item.id)
+      }
+      setSelectedCollectionIds([])
+      setCollectionAnchorId(null)
+      await refresh()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function onSetEnabledSelectedCollections(enabled: boolean) {
+    if (!selectedCollections.length) return
+    setError(null)
+    setIsBusy(true)
+    try {
+      for (const item of selectedCollections) {
+        if (item.kind === 'map' || item.kind === 'vmap') {
+          const mapItem = item as FirewallMapItem & { kind: 'map' | 'vmap' }
+          await upsertFirewallMap(props.auth, mapItem.kind, {
+            id: mapItem.id,
+            name: mapItem.name,
+            entries: mapItem.entries || [],
+            comment: mapItem.comment || null,
+            enabled,
+          })
+        } else {
+          const setItem = item as FirewallSetItem & { kind: 'addr' | 'port' | 'iface' }
+          await upsertFirewallSet(props.auth, setItem.kind, {
+            id: setItem.id,
+            name: setItem.name,
+            elements: setItem.elements || [],
+            enabled,
+            comment: setItem.comment || null,
+          })
+        }
+      }
+      await refresh()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function onDeleteSelectedTables() {
+    if (!selectedCustomTables.length) return
+    if (!confirm(`Delete ${selectedCustomTables.length} selected custom table chain(s)?`)) return
+    setError(null)
+    setIsBusy(true)
+    try {
+      for (const row of selectedCustomTables) await deleteFirewallTable(props.auth, row.id)
+      setSelectedTableIds([])
+      setTableAnchorId(null)
+      await refresh()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function onSetEnabledSelectedTables(enabled: boolean) {
+    if (!selectedCustomTables.length) return
+    setError(null)
+    setIsBusy(true)
+    try {
+      for (const item of selectedCustomTables) {
+        await upsertFirewallTable(props.auth, {
+          id: item.id,
+          family: item.family,
+          table_name: item.table_name,
+          chain_name: item.chain_name,
+          chain_type: item.chain_type,
+          hook: item.hook,
+          device: item.device || null,
+          priority: Number(item.priority),
+          policy: item.policy,
+          enabled,
+        })
+      }
+      await refresh()
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
     } finally {
@@ -765,27 +1178,74 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   }
 
   return (
-    <div className='flex h-[calc(100svh-7.5rem)] min-h-[640px] w-full flex-col gap-2'>
+    <div className='flex h-full min-h-0 w-full flex-col gap-2 overflow-x-hidden'>
       <div><h2 className='text-lg font-semibold tracking-tight'>Firewall</h2></div>
       {error ? <div className='rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive'>{error}</div> : null}
-      <Card className='flex min-h-0 w-full flex-1 flex-col text-xs'>
-        <CardContent className='flex min-h-0 flex-1 flex-col gap-2 px-4 pt-0'>
-          <Tabs value={activeTable} onValueChange={(v) => setActiveTable(v as FirewallMainTab)}>
+      <Card className='flex min-h-0 w-full flex-1 flex-col overflow-x-hidden text-xs'>
+        <CardContent className='flex min-h-0 min-w-0 flex-1 flex-col gap-2 px-4 pt-0'>
+          <Tabs value={activeSection} onValueChange={(v) => setActiveSection(v as FirewallSectionTab)}>
             <TabsList className='h-9'>
-              <TabsTrigger className='px-4 text-sm' value='filter'>filter</TabsTrigger>
-              <TabsTrigger className='px-4 text-sm' value='nat'>nat</TabsTrigger>
-              <TabsTrigger className='px-4 text-sm' value='raw'>raw</TabsTrigger>
-              <TabsTrigger className='px-4 text-sm' value='mangle'>mangle</TabsTrigger>
-              <TabsTrigger className='px-4 text-sm' value='sets'>sets</TabsTrigger>
-              <TabsTrigger className='px-4 text-sm' value='maps'>maps</TabsTrigger>
-              <TabsTrigger className='px-4 text-sm' value='tables'>tables</TabsTrigger>
+              <TabsTrigger className='px-4 text-sm' value='policy'>policy</TabsTrigger>
+              <TabsTrigger className='px-4 text-sm' value='collections'>collections</TabsTrigger>
+              <TabsTrigger className='px-4 text-sm' value='table_builder'>table builder</TabsTrigger>
             </TabsList>
           </Tabs>
-          {!isSetTab && !isMapsTab && !isTablesTab ? <div className='flex gap-2'>
+          {!isCollectionsTab && !isTablesTab ? (
+            <div className='flex min-w-0 w-full items-center gap-2 overflow-hidden'>
+              <div className='shrink-0'>
+                <Tabs
+                  value={isCustomRuleTableActive ? '__custom__' : activePolicyTab}
+                  onValueChange={(v) => {
+                    const next = v as FirewallPolicyTab
+                    setActivePolicyTab(next)
+                    setActiveRuleTableName(next)
+                  }}
+                >
+                  <TabsList className='h-9'>
+                    <TabsTrigger className='px-4 text-sm' value='filter'>filter</TabsTrigger>
+                    <TabsTrigger className='px-4 text-sm' value='nat'>nat</TabsTrigger>
+                    <TabsTrigger className='px-4 text-sm' value='raw'>raw</TabsTrigger>
+                    <TabsTrigger className='px-4 text-sm' value='mangle'>mangle</TabsTrigger>
+                  </TabsList>
+                </Tabs>
+              </div>
+              {customTableNames.length ? (
+                <div className='min-w-0 max-w-full basis-0 flex-1'>
+                  <Select
+                    value={isCustomRuleTableActive ? activeRuleTableName : '__none__'}
+                    onValueChange={(v) => {
+                      if (v === '__none__') {
+                        setActiveRuleTableName(activePolicyTab)
+                        return
+                      }
+                      const row = tablesState.custom.find((x) => x.table_name === v)
+                      if (row) {
+                        setSelectedTableIds([row.id])
+                        setTableAnchorId(row.id)
+                      }
+                      setActiveRuleTableName(v)
+                      setActiveSection('policy')
+                    }}
+                  >
+                    <SelectTrigger className='h-9 w-full border-amber-300 bg-amber-50 text-sm'>
+                      <SelectValue placeholder='Custom table (optional)' />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value='__none__'>System table only</SelectItem>
+                      {customTableNames.map((name) => (
+                        <SelectItem key={name} value={name}>{name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {!isCollectionsTab && !isTablesTab ? <div className='flex gap-2'>
             <Button size='sm' onClick={openCreateWindow} disabled={isBusy}><Plus />Add</Button>
-            <Button size='sm' variant='destructive' disabled={isBusy || !selectedRuleId} onClick={() => { const rule = visibleRules.find((r) => r.id === selectedRuleId); if (!rule) return; void onDelete(rule) }}>Del</Button>
-            <Button size='sm' variant='outline' disabled={isBusy || !selectedRuleId} onClick={() => { const rule = visibleRules.find((r) => r.id === selectedRuleId); if (!rule) return; void onSetEnabled(rule, false) }}>Disable</Button>
-            <Button size='sm' disabled={isBusy || !selectedRuleId} onClick={() => { const rule = visibleRules.find((r) => r.id === selectedRuleId); if (!rule) return; void onSetEnabled(rule, true) }}>Enable</Button>
+            <Button size='sm' variant='destructive' disabled={isBusy || !selectedRuleIds.length} onClick={() => void onDeleteSelectedRules()}>Del</Button>
+            <Button size='sm' variant='outline' disabled={isBusy || !selectedRuleIds.length} onClick={() => void onSetEnabledSelectedRules(false)}>Disable</Button>
+            <Button size='sm' disabled={isBusy || !selectedRuleIds.length} onClick={() => void onSetEnabledSelectedRules(true)}>Enable</Button>
             <Button
               size='sm'
               variant='outline'
@@ -805,50 +1265,41 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
             >
               Reset counters
             </Button>
-            <div className='relative'>
-              <Button size='sm' variant='outline' onClick={() => setColumnsOpen((p) => !p)}>Columns</Button>
-              {columnsOpen ? (
-                <div className='absolute left-0 top-9 z-20 min-w-56 rounded-md border bg-background p-2 shadow-xl'>
-                  {[
-                    ['chain', 'Chain'],
-                    ['action', 'Action'],
-                    ['proto', 'Proto'],
-                    ['src', 'src ip'],
-                    ['dst', 'dst ip'],
-                    ['sport', 'src port'],
-                    ['dport', 'dst port'],
-                    ['in_interface', 'In Interface'],
-                    ['out_interface', 'Out Interface'],
-                    ['ct_state', 'Connection State'],
-                    ['comment', 'Comment'],
-                    ['packets', 'Packets'],
-                    ['bytes', 'Bytes'],
-                  ].map(([key, label]) => (
-                    <label key={key} className='flex items-center gap-2 px-1 py-1 text-xs'>
-                      <input
-                        type='checkbox'
-                        className='h-3.5 w-3.5'
-                        checked={!!visibleColumns[key]}
-                        onChange={(e) => setVisibleColumns((prev) => ({ ...prev, [key]: e.target.checked }))}
-                      />
-                      {label}
-                    </label>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          </div> : isSetTab ? (
+            <DropdownMenu open={columnsOpen} onOpenChange={setColumnsOpen}>
+              <DropdownMenuTrigger asChild>
+                <Button size='sm' variant='outline'>Columns</Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align='start'
+                side='bottom'
+                sideOffset={6}
+                className='z-[120] min-w-56 p-1.5'
+              >
+                {POLICY_COLUMN_ORDER.map((key) => (
+                  <DropdownMenuCheckboxItem
+                    key={key}
+                    className='text-xs'
+                    checked={!!visibleColumns[key]}
+                    onCheckedChange={(checked) => {
+                      setVisibleColumns((prev) => ({ ...prev, [key]: !!checked }))
+                    }}
+                    onSelect={(e) => e.preventDefault()}
+                  >
+                    {POLICY_COLUMN_LABELS[key]}
+                  </DropdownMenuCheckboxItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div> : isCollectionsTab ? (
             <div className='flex min-h-0 flex-1 flex-col gap-2'>
               <div className='flex gap-2'>
                 <Button size='sm' onClick={openCreateSetWindow} disabled={isBusy}><Plus />Add</Button>
                 <Button
                   size='sm'
                   variant='destructive'
-                  disabled={isBusy || !selectedSetId}
+                  disabled={isBusy || !selectedCollectionIds.length}
                   onClick={() => {
-                    const row = allSetItems.find((x) => x.id === selectedSetId)
-                    if (!row) return
-                    void onDeleteSet(row, row.kind)
+                    void onDeleteSelectedCollections()
                   }}
                 >
                   Del
@@ -856,45 +1307,63 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                 <Button
                   size='sm'
                   variant='outline'
-                  disabled={isBusy || !selectedSetId}
+                  disabled={isBusy || !selectedCollectionIds.length}
                   onClick={() => {
-                    const row = allSetItems.find((x) => x.id === selectedSetId)
-                    if (!row) return
-                    void onSetEnabledSet(row, row.kind, false)
+                    void onSetEnabledSelectedCollections(false)
                   }}
                 >
                   Disable
                 </Button>
                 <Button
                   size='sm'
-                  disabled={isBusy || !selectedSetId}
+                  disabled={isBusy || !selectedCollectionIds.length}
                   onClick={() => {
-                    const row = allSetItems.find((x) => x.id === selectedSetId)
-                    if (!row) return
-                    void onSetEnabledSet(row, row.kind, true)
+                    void onSetEnabledSelectedCollections(true)
                   }}
                 >
                   Enable
                 </Button>
               </div>
-              <div className='min-h-0 w-full flex-1 overflow-y-scroll rounded-xl border'>
+              <div className='min-h-0 min-w-0 w-full flex-1 overflow-auto rounded-xl border'>
                 <Table>
-                  <TableHeader><TableRow><TableHead>type</TableHead><TableHead>name</TableHead><TableHead>elements</TableHead><TableHead>comment</TableHead></TableRow></TableHeader>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleCollectionSort('kind')}>Type <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(collectionSort.key === 'kind', collectionSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleCollectionSort('name')}>Name <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(collectionSort.key === 'name', collectionSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleCollectionSort('values')}>Values <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(collectionSort.key === 'values', collectionSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleCollectionSort('comment')}>Comment <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(collectionSort.key === 'comment', collectionSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleCollectionSort('status')}>Status <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(collectionSort.key === 'status', collectionSort.dir)}</span></button></TableHead>
+                    </TableRow>
+                  </TableHeader>
                   <TableBody>
-                    {allSetItems.map((row) => (
+                    {sortedCollectionItems.map((row) => (
                       <TableRow
                         key={row.id}
-                        className={`h-7 cursor-pointer border-b ${selectedSetId === row.id ? 'bg-muted/50' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
-                        onClick={() => setSelectedSetId(row.id)}
-                        onDoubleClick={() => openEditSetWindow(row)}
+                        className={`h-7 cursor-pointer select-none border-b ${selectedCollectionIds.includes(row.id) ? 'bg-muted/50' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
+                        onMouseDown={(e) => {
+                          if (e.shiftKey) e.preventDefault()
+                        }}
+                        onClick={(e) => {
+                          const ordered = sortedCollectionItems.map((x) => x.id)
+                          const next = computeSelection(ordered, selectedCollectionIds, collectionAnchorId, row.id, e)
+                          setSelectedCollectionIds(next.selected)
+                          setCollectionAnchorId(next.anchor)
+                        }}
+                        onDoubleClick={() => {
+                          if (row.kind === 'map' || row.kind === 'vmap') openEditMapWindow(row as FirewallMapItem & { kind: 'map' | 'vmap' })
+                          else openEditSetWindow(row as FirewallSetItem & { kind: 'addr' | 'port' | 'iface' })
+                        }}
                       >
-                        <TableCell>{row.kind}</TableCell>
+                        <TableCell>{(row as { kind: string }).kind}</TableCell>
                         <TableCell>{row.name}</TableCell>
-                        <TableCell className='max-w-[700px] truncate'>{(row.elements || []).join(', ') || '—'}</TableCell>
+                        <TableCell className='max-w-[700px] truncate'>{(row.kind === 'map' || row.kind === 'vmap') ? (((row as FirewallMapItem).entries || []).join(', ') || '—') : (((row as FirewallSetItem).elements || []).join(', ') || '—')}</TableCell>
                         <TableCell className='max-w-[260px] truncate'>{row.comment || '—'}</TableCell>
+                        <TableCell>{row.enabled === false ? 'disabled' : 'enabled'}</TableCell>
                       </TableRow>
                     ))}
-                    {!allSetItems.length ? <TableRow><TableCell colSpan={4} className='py-6 text-center text-xs text-muted-foreground'>No sets yet.</TableCell></TableRow> : null}
+                    {!allCollectionItems.length
+                      ? <TableRow><TableCell colSpan={5} className='py-6 text-center text-xs text-muted-foreground'>No collections yet.</TableCell></TableRow>
+                      : null}
                   </TableBody>
                 </Table>
               </div>
@@ -903,14 +1372,58 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
             <div className='flex min-h-0 flex-1 flex-col gap-2'>
               <div className='flex gap-2'>
                 <Button size='sm' onClick={openCreateTableWindow} disabled={isBusy}><Plus />Add</Button>
-                <Button size='sm' variant='destructive' disabled={isBusy || !selectedTableId || selectedTableId.startsWith('builtin:')} onClick={() => { const row = tablesState.custom.find((x) => x.id === selectedTableId); if (!row) return; void onDeleteTable(row) }}>Del</Button>
+                <Button size='sm' variant='destructive' disabled={isBusy || !selectedCustomTables.length} onClick={() => void onDeleteSelectedTables()}>Del</Button>
+                <Button
+                  size='sm'
+                  variant='outline'
+                  disabled={isBusy || !selectedCustomTables.length}
+                  onClick={() => void onSetEnabledSelectedTables(false)}
+                >
+                  Disable
+                </Button>
+                <Button
+                  size='sm'
+                  disabled={isBusy || !selectedCustomTables.length}
+                  onClick={() => void onSetEnabledSelectedTables(true)}
+                >
+                  Enable
+                </Button>
               </div>
-              <div className='min-h-0 w-full flex-1 overflow-y-scroll rounded-xl border'>
+              <div className='min-h-0 min-w-0 w-full flex-1 overflow-auto rounded-xl border'>
                 <Table>
-                  <TableHeader><TableRow><TableHead>family</TableHead><TableHead>table</TableHead><TableHead>chain</TableHead><TableHead>type</TableHead><TableHead>hook</TableHead><TableHead>device</TableHead><TableHead>priority</TableHead><TableHead>policy</TableHead><TableHead>origin</TableHead></TableRow></TableHeader>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleTableSort('family')}>Family <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(tableSort.key === 'family', tableSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleTableSort('table_name')}>Table name <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(tableSort.key === 'table_name', tableSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleTableSort('chain_name')}>Chain name <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(tableSort.key === 'chain_name', tableSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleTableSort('chain_type')}>Chain type <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(tableSort.key === 'chain_type', tableSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleTableSort('hook')}>Hook <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(tableSort.key === 'hook', tableSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleTableSort('device')}>Device <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(tableSort.key === 'device', tableSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleTableSort('priority')}>Priority <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(tableSort.key === 'priority', tableSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleTableSort('policy')}>Policy <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(tableSort.key === 'policy', tableSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleTableSort('origin')}>Origin <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(tableSort.key === 'origin', tableSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleTableSort('status')}>Status <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(tableSort.key === 'status', tableSort.dir)}</span></button></TableHead>
+                    </TableRow>
+                  </TableHeader>
                   <TableBody>
-                    {[...tablesState.builtin, ...tablesState.custom].map((row) => (
-                      <TableRow key={row.id} className={`h-7 cursor-pointer border-b ${selectedTableId === row.id ? 'bg-muted/50' : ''}`} onClick={() => setSelectedTableId(row.id)}>
+                    {sortedTableRows.map((row) => (
+                      <TableRow
+                        key={row.id}
+                        className={`h-7 cursor-pointer select-none border-b ${selectedTableIds.includes(row.id) ? 'bg-muted/50' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
+                        onMouseDown={(e) => {
+                          if (e.shiftKey) e.preventDefault()
+                        }}
+                        onClick={(e) => {
+                          const ordered = sortedTableRows.map((x) => x.id)
+                          const next = computeSelection(ordered, selectedTableIds, tableAnchorId, row.id, e)
+                          setSelectedTableIds(next.selected)
+                          setTableAnchorId(next.anchor)
+                        }}
+                        onDoubleClick={() => {
+                          if (row.builtin) return
+                          openEditTableWindow(row)
+                        }}
+                      >
                         <TableCell>{row.family}</TableCell>
                         <TableCell>{row.table_name}</TableCell>
                         <TableCell>{row.chain_name}</TableCell>
@@ -920,71 +1433,81 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                         <TableCell>{row.priority}</TableCell>
                         <TableCell>{row.policy}</TableCell>
                         <TableCell>{row.builtin ? 'built-in' : 'custom'}</TableCell>
+                        <TableCell>{row.enabled === false ? 'disabled' : 'enabled'}</TableCell>
                       </TableRow>
                     ))}
-                    {(!tablesState.builtin.length && !tablesState.custom.length) ? <TableRow><TableCell colSpan={9} className='py-6 text-center text-xs text-muted-foreground'>No table chains yet.</TableCell></TableRow> : null}
+                    {(!tablesState.builtin.length && !tablesState.custom.length) ? <TableRow><TableCell colSpan={10} className='py-6 text-center text-xs text-muted-foreground'>No table chains yet.</TableCell></TableRow> : null}
                   </TableBody>
                 </Table>
               </div>
             </div>
-          ) : (
-            <div className='flex min-h-0 flex-1 flex-col gap-2'>
-              <div className='flex gap-2'>
-                <Button size='sm' onClick={openCreateMapWindow} disabled={isBusy}><Plus />Add</Button>
-                <Button size='sm' variant='destructive' disabled={isBusy || !selectedMapId} onClick={() => { const row = allMapItems.find((x) => x.id === selectedMapId); if (!row) return; void onDeleteMap(row, row.kind) }}>Del</Button>
-                <Button size='sm' variant='outline' disabled={isBusy || !selectedMapId} onClick={() => { const row = allMapItems.find((x) => x.id === selectedMapId); if (!row) return; void onSetEnabledMap(row, row.kind, false) }}>Disable</Button>
-                <Button size='sm' disabled={isBusy || !selectedMapId} onClick={() => { const row = allMapItems.find((x) => x.id === selectedMapId); if (!row) return; void onSetEnabledMap(row, row.kind, true) }}>Enable</Button>
-              </div>
-              <div className='min-h-0 w-full flex-1 overflow-y-scroll rounded-xl border'>
-                <Table>
-                  <TableHeader><TableRow><TableHead>type</TableHead><TableHead>name</TableHead><TableHead>entries</TableHead><TableHead>comment</TableHead></TableRow></TableHeader>
-                  <TableBody>
-                    {allMapItems.map((row) => (
-                      <TableRow key={row.id} className={`h-7 cursor-pointer border-b ${selectedMapId === row.id ? 'bg-muted/50' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`} onClick={() => setSelectedMapId(row.id)} onDoubleClick={() => openEditMapWindow(row)}>
-                        <TableCell>{row.kind}</TableCell>
-                        <TableCell>{row.name}</TableCell>
-                        <TableCell className='max-w-[700px] truncate'>{(row.entries || []).join(', ') || '—'}</TableCell>
-                        <TableCell className='max-w-[260px] truncate'>{row.comment || '—'}</TableCell>
-                      </TableRow>
-                    ))}
-                    {!allMapItems.length ? <TableRow><TableCell colSpan={4} className='py-6 text-center text-xs text-muted-foreground'>No maps yet.</TableCell></TableRow> : null}
-                  </TableBody>
-                </Table>
-              </div>
-            </div>
-          )}
-          {!isSetTab && !isMapsTab && !isTablesTab ? <div className='min-h-0 w-full flex-1 overflow-y-scroll rounded-xl border'>
+          ) : null}
+          {!isCollectionsTab && !isTablesTab ? <div className='min-h-0 min-w-0 w-full flex-1 overflow-auto rounded-xl border'>
             <Table>
               <TableHeader>
                 <TableRow>
-                  {visibleColumns.chain ? <TableHead>Chain</TableHead> : null}
-                  {visibleColumns.action ? <TableHead>Action</TableHead> : null}
-                  {visibleColumns.proto ? <TableHead>Proto</TableHead> : null}
-                  {visibleColumns.src ? <TableHead>src ip</TableHead> : null}
-                  {visibleColumns.dst ? <TableHead>dst ip</TableHead> : null}
-                  {visibleColumns.sport ? <TableHead>src port</TableHead> : null}
-                  {visibleColumns.dport ? <TableHead>dst port</TableHead> : null}
-                  {visibleColumns.in_interface ? <TableHead>In Interface</TableHead> : null}
-                  {visibleColumns.out_interface ? <TableHead>Out Interface</TableHead> : null}
-                  {visibleColumns.ct_state ? <TableHead>Connection State</TableHead> : null}
-                  {visibleColumns.comment ? <TableHead>Comment</TableHead> : null}
-                  {visibleColumns.packets ? <TableHead>Packets</TableHead> : null}
-                  {visibleColumns.bytes ? <TableHead>Bytes</TableHead> : null}
+                  {visibleColumns.chain ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('chain')}>{POLICY_COLUMN_LABELS.chain} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'chain', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.action ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('action')}>{POLICY_COLUMN_LABELS.action} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'action', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.proto ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('proto')}>{POLICY_COLUMN_LABELS.proto} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'proto', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.src ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('src')}>{POLICY_COLUMN_LABELS.src} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'src', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.dst ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('dst')}>{POLICY_COLUMN_LABELS.dst} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'dst', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.sport ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('sport')}>{POLICY_COLUMN_LABELS.sport} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'sport', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.dport ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('dport')}>{POLICY_COLUMN_LABELS.dport} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'dport', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.in_interface ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('in_interface')}>{POLICY_COLUMN_LABELS.in_interface} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'in_interface', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.out_interface ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('out_interface')}>{POLICY_COLUMN_LABELS.out_interface} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'out_interface', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.ct_state ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('ct_state')}>{POLICY_COLUMN_LABELS.ct_state} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'ct_state', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.comment ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('comment')}>{POLICY_COLUMN_LABELS.comment} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'comment', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.packets ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('packets')}>{POLICY_COLUMN_LABELS.packets} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'packets', policySort.dir)}</span></button></TableHead> : null}
+                  {visibleColumns.bytes ? <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => togglePolicySort('bytes')}>{POLICY_COLUMN_LABELS.bytes} <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(policySort.key === 'bytes', policySort.dir)}</span></button></TableHead> : null}
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {visibleRules.map((r) => (
+                {sortedVisibleRules.map((r) => (
                   <TableRow
                     key={r.id}
-                    draggable
-                    onDragStart={() => setDragRuleId(r.id)}
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={(e) => {
-                      e.preventDefault()
-                      void onReorderDrop(r.id)
+                    draggable={!policySort.key}
+                    onDragStart={(e) => {
+                      if (policySort.key) return
+                      setDragRuleId(r.id)
+                      setDragRuleTableName(String(r.table || activeRuleTable))
+                      try {
+                        e.dataTransfer.setData('text/plain', r.id)
+                        e.dataTransfer.setData('application/x-awg-rule-table', String(r.table || activeRuleTable))
+                        e.dataTransfer.effectAllowed = 'move'
+                      } catch {
+                        // Ignore dataTransfer write issues; local state still supports DnD.
+                      }
                     }}
-                    className={`h-7 cursor-move border-b ${selectedRuleId === r.id ? 'bg-muted/50' : ''} ${dragRuleId === r.id ? 'opacity-60' : ''} ${!r.enabled ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
-                    onClick={() => setSelectedRuleId(r.id)}
+                    onDragEnd={() => {
+                      setDragRuleId(null)
+                      setDragRuleTableName(null)
+                    }}
+                    onDragOver={(e) => {
+                      if (!policySort.key) e.preventDefault()
+                    }}
+                    onDrop={(e) => {
+                      if (policySort.key) return
+                      e.preventDefault()
+                      let droppedId = ''
+                      let droppedTable = ''
+                      try {
+                        droppedId = e.dataTransfer.getData('text/plain') || ''
+                        droppedTable = e.dataTransfer.getData('application/x-awg-rule-table') || ''
+                      } catch {
+                        // fall back to state-managed drag data
+                      }
+                      void onReorderDrop(r.id, String(r.table || activeRuleTable), droppedId || undefined, droppedTable || undefined)
+                    }}
+                    className={`h-7 ${policySort.key ? 'cursor-pointer' : 'cursor-move'} select-none border-b ${selectedRuleIds.includes(r.id) ? 'bg-muted/50' : ''} ${dragRuleId === r.id ? 'opacity-60' : ''} ${!r.enabled ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
+                    onMouseDown={(e) => {
+                      if (e.shiftKey) e.preventDefault()
+                    }}
+                    onClick={(e) => {
+                      const ordered = sortedVisibleRules.map((x) => x.id)
+                      const next = computeSelection(ordered, selectedRuleIds, ruleAnchorId, r.id, e)
+                      setSelectedRuleIds(next.selected)
+                      setRuleAnchorId(next.anchor)
+                    }}
                     onDoubleClick={() => openEditWindow(r)}
                   >
                     {visibleColumns.chain ? <TableCell>{r.chain}</TableCell> : null}
@@ -1037,8 +1560,12 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                   <div className='text-[11px] font-semibold text-muted-foreground'>Base rule placement</div>
                   <div className='space-y-1.5'>
                     <Label>Chain</Label>
-                    <select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={form.chain || 'input'} onChange={(e) => setForm((p) => ({ ...p, chain: e.target.value as FirewallRule['chain'] }))}>
-                      {(chainOptionsByTable[form.table || 'filter'] || []).map((ch) => (<option key={ch} value={ch}>{ch}</option>))}
+                    <select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={form.chain || 'input'} onChange={(e) => setForm((p) => ({ ...p, chain: e.target.value }))}>
+                      {(
+                        builtinRuleTables.has(String(form.table || '').toLowerCase())
+                          ? (chainOptionsByTable[String(form.table || 'filter').toLowerCase()] || [])
+                          : ((customChainRowsByTable[String(form.table || '').toLowerCase()] || []).map((row) => row.chain_name).filter(Boolean))
+                      ).map((ch) => (<option key={ch} value={ch}>{ch}</option>))}
                     </select>
                   </div>
 
@@ -1616,29 +2143,39 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
           <div className='absolute z-50 w-[560px] max-w-[calc(100vw-24px)] rounded-xl border bg-background shadow-2xl' style={{ left: winPos.x, top: winPos.y }}>
             <div className='cursor-move rounded-t-xl border-b bg-muted/70 px-3 py-2 text-xs font-medium select-none' onMouseDown={onDragStart}>
               <div className='flex items-center justify-between'>
-                <span>{editingSetId ? `Edit ${currentSetKind} set` : `Add ${currentSetKind} set`}</span>
+                <span>{editingSetId ? `Edit ${collectionKind}` : 'Add collection'}</span>
                 <button type='button' className='rounded p-1 hover:bg-background/70' onClick={() => setSetOpen(false)}><X className='size-3.5' /></button>
               </div>
             </div>
             <div className='flex max-h-[78vh] flex-col overflow-hidden rounded-b-xl bg-background text-xs'>
               <div className='flex-1 overflow-y-auto p-3 space-y-3'>
                 <div className='space-y-1.5'>
-                  <Label>Set type</Label>
-                  <select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={activeSetKind} onChange={(e) => setActiveSetKind(e.target.value as 'addr' | 'port' | 'iface')}>
+                  <Label>Type</Label>
+                  <select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={collectionKind} onChange={(e) => setCollectionKind(e.target.value as CollectionKind)}>
                     <option value='addr'>addr</option>
                     <option value='port'>port</option>
                     <option value='iface'>iface</option>
+                    <option value='map'>map</option>
+                    <option value='vmap'>vmap</option>
                   </select>
                 </div>
                 <div className='space-y-1.5'>
-                  <Label>Set name</Label>
-                  <Input className='h-7' placeholder='set_name' value={newSetName} onChange={(e) => setNewSetName(e.target.value)} />
+                  <Label>Name</Label>
+                  <Input className='h-7' placeholder={collectionKind === 'map' || collectionKind === 'vmap' ? 'map_name' : 'set_name'} value={newSetName} onChange={(e) => setNewSetName(e.target.value)} />
                 </div>
                 <div className='space-y-1.5'>
-                  <Label>Elements (comma-separated)</Label>
+                  <Label>{collectionKind === 'map' || collectionKind === 'vmap' ? 'Entries (comma-separated, key:value)' : 'Elements (comma-separated)'}</Label>
                   <Input
                     className='h-7'
-                    placeholder={currentSetKind === 'iface' ? 'eth0, awg1' : currentSetKind === 'port' ? '22, 443, 51820' : '10.0.0.0/24, 192.168.1.0/24'}
+                    placeholder={
+                      collectionKind === 'iface'
+                        ? 'eth0, awg1'
+                        : collectionKind === 'port'
+                          ? '22, 443, 51820'
+                          : collectionKind === 'map' || collectionKind === 'vmap'
+                            ? 'tcp:accept, udp:drop'
+                            : '10.0.0.0/24, 192.168.1.0/24'
+                    }
                     value={newSetElements}
                     onChange={(e) => setNewSetElements(e.target.value)}
                   />
@@ -1657,52 +2194,12 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
         </div>
       ) : null}
 
-      {mapOpen ? (
-        <div className='fixed inset-0 z-40'>
-          <div className='absolute z-50 w-[560px] max-w-[calc(100vw-24px)] rounded-xl border bg-background shadow-2xl' style={{ left: winPos.x, top: winPos.y }}>
-            <div className='cursor-move rounded-t-xl border-b bg-muted/70 px-3 py-2 text-xs font-medium select-none' onMouseDown={onDragStart}>
-              <div className='flex items-center justify-between'>
-                <span>{editingMapId ? `Edit ${activeMapKind}` : `Add ${activeMapKind}`}</span>
-                <button type='button' className='rounded p-1 hover:bg-background/70' onClick={() => setMapOpen(false)}><X className='size-3.5' /></button>
-              </div>
-            </div>
-            <div className='flex max-h-[78vh] flex-col overflow-hidden rounded-b-xl bg-background text-xs'>
-              <div className='flex-1 overflow-y-auto p-3 space-y-3'>
-                <div className='space-y-1.5'>
-                  <Label>Type</Label>
-                  <select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={activeMapKind} onChange={(e) => setActiveMapKind(e.target.value as 'map' | 'vmap')}>
-                    <option value='map'>map</option>
-                    <option value='vmap'>vmap</option>
-                  </select>
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>Name</Label>
-                  <Input className='h-7' placeholder='map_name' value={newMapName} onChange={(e) => setNewMapName(e.target.value)} />
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>Entries (comma-separated, key:value)</Label>
-                  <Input className='h-7' placeholder='tcp:accept, udp:drop' value={newMapEntries} onChange={(e) => setNewMapEntries(e.target.value)} />
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>Comment</Label>
-                  <Input className='h-7' placeholder='Optional comment' value={newMapComment} onChange={(e) => setNewMapComment(e.target.value)} />
-                </div>
-              </div>
-              <div className='flex justify-end gap-2 border-t bg-background px-3 py-2'>
-                <Button type='button' variant='outline' onClick={() => setMapOpen(false)}>Cancel</Button>
-                <Button type='button' disabled={isBusy || !newMapName.trim()} onClick={async () => { const ok = await onSaveMap(); if (ok) setMapOpen(false) }}><Plus />{editingMapId ? 'Save' : 'Add'}</Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
       {tableOpen ? (
         <div className='fixed inset-0 z-40'>
           <div className='absolute z-50 w-[560px] max-w-[calc(100vw-24px)] rounded-xl border bg-background shadow-2xl' style={{ left: winPos.x, top: winPos.y }}>
             <div className='cursor-move rounded-t-xl border-b bg-muted/70 px-3 py-2 text-xs font-medium select-none' onMouseDown={onDragStart}>
               <div className='flex items-center justify-between'>
-                <span>Add Table Chain</span>
+                <span>{editingTableId ? 'Edit Table Chain' : 'Add Table Chain'}</span>
                 <button type='button' className='rounded p-1 hover:bg-background/70' onClick={() => setTableOpen(false)}><X className='size-3.5' /></button>
               </div>
             </div>
@@ -1726,7 +2223,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
               </div>
               <div className='flex justify-end gap-2 border-t bg-background px-3 py-2'>
                 <Button type='button' variant='outline' onClick={() => setTableOpen(false)}>Cancel</Button>
-                <Button type='button' disabled={isBusy || !newTableName.trim() || !newChainName.trim()} onClick={async () => { const ok = await onSaveTable(); if (ok) setTableOpen(false) }}><Plus />Add</Button>
+                <Button type='button' disabled={isBusy || !newTableName.trim() || !newChainName.trim()} onClick={async () => { const ok = await onSaveTable(); if (ok) setTableOpen(false) }}><Plus />{editingTableId ? 'Save' : 'Add'}</Button>
               </div>
             </div>
           </div>

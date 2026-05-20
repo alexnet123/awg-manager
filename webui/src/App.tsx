@@ -269,7 +269,7 @@ function DashboardView(props: { auth: AuthState; onLogout: () => void }) {
       </Sidebar>
 
       <SidebarInset>
-        <div className='flex min-h-svh flex-col'>
+        <div className='flex h-svh min-h-0 flex-col overflow-hidden'>
           <header className='flex items-center gap-2 border-b bg-background/60 px-3 py-2 backdrop-blur'>
             <SidebarTrigger />
             <Separator orientation='vertical' className='h-6' />
@@ -331,7 +331,7 @@ function DashboardView(props: { auth: AuthState; onLogout: () => void }) {
               </Button>
             </div>
           </header>
-          <main className='flex-1 p-3 md:p-4'>
+          <main className='flex min-h-0 flex-1 overflow-hidden p-3 md:p-4'>
             {route === 'interfaces' ? <InterfacesPage auth={props.auth} refreshNonce={refreshNonce} /> : null}
             {route === 'clients' ? <ClientsPage auth={props.auth} refreshNonce={refreshNonce} /> : null}
             {route === 'firewall' ? <FirewallPage auth={props.auth} refreshNonce={refreshNonce} /> : null}

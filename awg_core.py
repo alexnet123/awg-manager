@@ -635,17 +635,34 @@ def _normalize_firewall_rule(payload):
 
     if family != FIREWALL_TABLE_FAMILY:
         raise ValueError(f'family must be {FIREWALL_TABLE_FAMILY}')
-    if nft_table not in ('filter', 'nat', 'raw', 'mangle'):
-        raise ValueError('table must be one of: filter, nat, raw, mangle')
-    allowed_chains_by_table = {
-        table: tuple(config['chains'])
-        for table, config in FIREWALL_SCHEMA['tables'].items()
-    }
-    if chain not in allowed_chains_by_table[nft_table]:
+
+    table_mode = None
+    chain_mode = None
+    allowed_chains = ()
+    if nft_table in ('filter', 'nat', 'raw', 'mangle'):
+        table_mode = nft_table
+        allowed_chains = tuple(FIREWALL_SCHEMA['tables'][nft_table]['chains'])
+    else:
+        if not re.fullmatch(r'[a-zA-Z0-9_.-]+', str(nft_table)):
+            raise ValueError('table name contains invalid characters')
+        custom_rows = _read_firewall_tables_file().get('tables', [])
+        table_rows = [row for row in custom_rows if isinstance(row, dict) and str(row.get('table_name', '')).lower() == nft_table]
+        if not table_rows:
+            raise ValueError(f'table "{nft_table}" is not found among built-in or custom tables')
+        allowed_chains = tuple(str(row.get('chain_name', '')).lower() for row in table_rows if row.get('chain_name'))
+        if chain not in allowed_chains:
+            raise ValueError(f'chain "{chain}" is not valid for custom table "{nft_table}"')
+        selected_chain = next((row for row in table_rows if str(row.get('chain_name', '')).lower() == chain), None)
+        chain_mode = str((selected_chain or {}).get('chain_type') or 'filter').lower()
+        if chain_mode not in ('filter', 'nat', 'route'):
+            chain_mode = 'filter'
+        table_mode = 'nat' if chain_mode == 'nat' else 'filter'
+
+    if chain not in allowed_chains:
         raise ValueError(f'chain "{chain}" is not valid for table "{nft_table}"')
     if action not in ('accept', 'drop', 'reject', 'jump', 'goto', 'return'):
         raise ValueError('action must be one of: accept, drop, reject, jump, goto, return')
-    if nft_table != 'filter' and action in ('jump', 'goto', 'return'):
+    if table_mode != 'filter' and action in ('jump', 'goto', 'return'):
         raise ValueError('jump/goto/return are currently supported only in filter table')
     if action in ('jump', 'goto'):
         if target_chain is None:
@@ -730,7 +747,7 @@ def _normalize_firewall_rule(payload):
         nat_type = str(nat_type).lower()
         if nat_type not in ('masquerade', 'snat', 'dnat', 'redirect'):
             raise ValueError('nat_type must be one of: masquerade, snat, dnat, redirect')
-    if nft_table != 'nat' and nat_type is not None:
+    if table_mode != 'nat' and nat_type is not None:
         raise ValueError('nat_type is only valid for nat table')
     if nat_type is not None:
         allowed_nat_types = FIREWALL_SCHEMA['tables']['nat']['nat_types_by_chain'].get(chain, [])
@@ -742,7 +759,7 @@ def _normalize_firewall_rule(payload):
         nat_fully_random = str(nat_fully_random).lower() in ('1', 'true', 'yes', 'on')
     if not isinstance(nat_persistent, bool):
         nat_persistent = str(nat_persistent).lower() in ('1', 'true', 'yes', 'on')
-    if nft_table != 'nat' and (nat_random or nat_fully_random or nat_persistent):
+    if table_mode != 'nat' and (nat_random or nat_fully_random or nat_persistent):
         raise ValueError('nat flags are only valid for nat table')
     if nat_fully_random and nat_type not in ('snat', 'dnat', 'masquerade', 'redirect'):
         raise ValueError('nat_fully_random requires a nat_type statement')
@@ -763,13 +780,13 @@ def _normalize_firewall_rule(payload):
         raise ValueError('to_port is only valid for nat statements')
     if not isinstance(notrack, bool):
         notrack = str(notrack).lower() in ('1', 'true', 'yes', 'on')
-    if notrack and nft_table != 'raw':
+    if notrack and table_mode != 'raw':
         raise ValueError('notrack is only valid for raw table')
     if not isinstance(nftrace, bool):
         nftrace = str(nftrace).lower() in ('1', 'true', 'yes', 'on')
-    if nftrace and nft_table != 'raw':
+    if nftrace and table_mode != 'raw':
         raise ValueError('nftrace is only valid for raw table')
-    if raw_expr is not None and nft_table != 'raw':
+    if raw_expr is not None and table_mode != 'raw':
         raise ValueError('raw_expr is only valid for raw table')
     if tcp_flags is not None and not re.fullmatch(r'[A-Za-z0-9_,/ ]+', str(tcp_flags)):
         raise ValueError('tcp_flags contains invalid characters')
@@ -981,11 +998,34 @@ def _normalize_firewall_rule(payload):
 
 
 def _render_firewall_rule(rule):
+    def _detect_ip_family(value):
+        raw = str(value or '').strip()
+        if not raw:
+            return 'ip'
+        candidate = raw.split('/', 1)[0]
+        try:
+            parsed = ipaddress.ip_address(candidate)
+            return 'ip6' if parsed.version == 6 else 'ip'
+        except ValueError:
+            return 'ip6' if ':' in raw else 'ip'
+
     def _render_port_value(raw):
         value = str(raw)
         if ':' in value:
             return value.replace(':', '-')
         return value
+
+    def _render_l3_proto_type(raw):
+        value = str(raw or '').strip().lower()
+        mapping = {
+            '0x0800': 'ip',
+            '2048': 'ip',
+            '0x86dd': 'ip6',
+            '34525': 'ip6',
+            '0x0806': 'arp',
+            '2054': 'arp',
+        }
+        return mapping.get(value, value)
 
     parts = []
     if rule['in_interface']:
@@ -998,6 +1038,17 @@ def _render_firewall_rule(rule):
     if rule['dst']:
         prefix = 'ip6' if ':' in str(rule['dst']) else 'ip'
         parts.append(f'{prefix} daddr {rule["dst"]}')
+    if rule.get('ether_src'):
+        parts.append(f'ether saddr {rule["ether_src"]}')
+    if rule.get('ether_dst'):
+        parts.append(f'ether daddr {rule["ether_dst"]}')
+    if rule.get('vlan_id'):
+        parts.append(f'vlan id {rule["vlan_id"]}')
+    if rule.get('ether_type'):
+        if rule.get('vlan_id'):
+            parts.append(f'vlan type {_render_l3_proto_type(rule["ether_type"])}')
+        else:
+            parts.append(f'ether type {rule["ether_type"]}')
     if rule['proto']:
         parts.append(f'meta l4proto {rule["proto"]}')
     if rule.get('ct_state'):
@@ -1071,29 +1122,26 @@ def _render_firewall_rule(rule):
     if rule.get('ct_event'):
         parts.append(f'ct event set {rule["ct_event"]}')
     if rule.get('ct_original_saddr'):
-        parts.append(f'ct original saddr {rule["ct_original_saddr"]}')
+        family = _detect_ip_family(rule['ct_original_saddr'])
+        parts.append(f'ct original {family} saddr {rule["ct_original_saddr"]}')
     if rule.get('ct_original_daddr'):
-        parts.append(f'ct original daddr {rule["ct_original_daddr"]}')
+        family = _detect_ip_family(rule['ct_original_daddr'])
+        parts.append(f'ct original {family} daddr {rule["ct_original_daddr"]}')
     if rule.get('ct_reply_saddr'):
-        parts.append(f'ct reply saddr {rule["ct_reply_saddr"]}')
+        family = _detect_ip_family(rule['ct_reply_saddr'])
+        parts.append(f'ct reply {family} saddr {rule["ct_reply_saddr"]}')
     if rule.get('ct_reply_daddr'):
-        parts.append(f'ct reply daddr {rule["ct_reply_daddr"]}')
+        family = _detect_ip_family(rule['ct_reply_daddr'])
+        parts.append(f'ct reply {family} daddr {rule["ct_reply_daddr"]}')
     if rule.get('fib_check'):
         parts.append(f'fib {rule["fib_check"]}')
     if rule.get('socket_match'):
         parts.append(f'socket {rule["socket_match"]}')
     if rule.get('rt_nexthop'):
-        parts.append(f'rt nexthop {rule["rt_nexthop"]}')
+        family = _detect_ip_family(rule['rt_nexthop'])
+        parts.append(f'rt {family} nexthop {rule["rt_nexthop"]}')
     if rule.get('ipv6_exthdrs'):
         parts.append(f'exthdr {rule["ipv6_exthdrs"]}')
-    if rule.get('vlan_id'):
-        parts.append(f'vlan id {rule["vlan_id"]}')
-    if rule.get('ether_src'):
-        parts.append(f'ether saddr {rule["ether_src"]}')
-    if rule.get('ether_dst'):
-        parts.append(f'ether daddr {rule["ether_dst"]}')
-    if rule.get('ether_type'):
-        parts.append(f'ether type {rule["ether_type"]}')
     if rule.get('log_prefix') or rule.get('log_level'):
         log_parts = ['log']
         if rule.get('log_prefix'):
@@ -1235,6 +1283,11 @@ def apply_firewall_rules():
     table_defs = dict(FIREWALL_DEFAULT_TABLE_DEFS)
     custom_tables = _read_firewall_tables_file().get('tables', [])
     for row in custom_tables:
+        enabled = row.get('enabled', True)
+        if not isinstance(enabled, bool):
+            enabled = str(enabled).lower() in ('1', 'true', 'yes', 'on')
+        if not enabled:
+            continue
         table_name = normalize_config_value(row.get('table_name'))
         chain_name = normalize_config_value(row.get('chain_name'))
         chain_type = normalize_config_value(row.get('chain_type'))
@@ -1334,6 +1387,11 @@ def apply_firewall_rules():
     for rule in rules:
         if not rule.get('enabled', True):
             continue
+        rule_table = str(rule.get('table') or '').lower()
+        if rule_table not in active_table_names:
+            # Skip orphaned rule rows that reference missing/disabled custom tables.
+            # This keeps apply resilient after table cleanup or toggle operations.
+            continue
         rendered = _render_firewall_rule(rule)
         table_name = f'{FIREWALL_TABLE_PREFIX}{rule["table"]}'
         script_lines.append(
@@ -1425,8 +1483,16 @@ def reorder_firewall_rules_service(table, ordered_ids, apply_now=True):
     if nft_table is None:
         raise ValueError('table is required')
     nft_table = nft_table.lower()
-    if nft_table not in ('filter', 'nat', 'raw', 'mangle'):
-        raise ValueError('table must be one of: filter, nat, raw, mangle')
+    allowed_tables = {'filter', 'nat', 'raw', 'mangle'}
+    custom_rows = _read_firewall_tables_file().get('tables', [])
+    for row in custom_rows:
+        if not isinstance(row, dict):
+            continue
+        tname = normalize_config_value(row.get('table_name'))
+        if tname:
+            allowed_tables.add(str(tname).lower())
+    if nft_table not in allowed_tables:
+        raise ValueError('table must be one of built-in or existing custom tables')
     if not isinstance(ordered_ids, list) or not all(isinstance(x, str) and x.strip() for x in ordered_ids):
         raise ValueError('ordered_ids must be a non-empty list of rule ids')
 
@@ -1458,16 +1524,25 @@ def reorder_firewall_rules_service(table, ordered_ids, apply_now=True):
 
 
 def reset_firewall_counters_service(table=None):
-    tables = ('filter', 'nat', 'raw', 'mangle')
+    tables = ['filter', 'nat', 'raw', 'mangle']
+    custom_rows = _read_firewall_tables_file().get('tables', [])
+    for row in custom_rows:
+        if not isinstance(row, dict):
+            continue
+        tname = normalize_config_value(row.get('table_name'))
+        if tname:
+            low = str(tname).lower()
+            if low not in tables:
+                tables.append(low)
     if table is None:
-        target_tables = tables
+        target_tables = tuple(tables)
     else:
         nft_table = normalize_config_value(table)
         if nft_table is None:
             raise ValueError('table is empty')
         nft_table = nft_table.lower()
-        if nft_table not in tables:
-            raise ValueError('table must be one of: filter, nat, raw, mangle')
+        if nft_table not in set(tables):
+            raise ValueError('table must be one of built-in or existing custom tables')
         target_tables = (nft_table,)
 
     reset_count = 0
@@ -1792,6 +1867,7 @@ def _normalize_firewall_table_item(payload):
     hook_name = (normalize_config_value(payload.get('hook')) or 'input').lower()
     device = normalize_config_value(payload.get('device'))
     policy = (normalize_config_value(payload.get('policy')) or 'accept').lower()
+    enabled = payload.get('enabled', True)
     try:
         priority = int(payload.get('priority'))
     except Exception:
@@ -1808,6 +1884,8 @@ def _normalize_firewall_table_item(payload):
         raise ValueError('policy must be accept|drop')
     if priority in FIREWALL_RESERVED_PRIORITIES:
         raise ValueError('priority is reserved by built-in tables')
+    if not isinstance(enabled, bool):
+        enabled = str(enabled).lower() in ('1', 'true', 'yes', 'on')
     return {
         'id': str(payload.get('id') or uuid.uuid4().hex),
         'family': family,
@@ -1818,7 +1896,7 @@ def _normalize_firewall_table_item(payload):
         'device': (str(device) if device else None),
         'priority': priority,
         'policy': policy,
-        'enabled': True,
+        'enabled': enabled,
     }
 
 
