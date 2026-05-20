@@ -554,6 +554,95 @@ def _write_firewall_rules_file(rules):
         json.dump({'rules': rules}, f, ensure_ascii=False, indent=2)
 
 
+def _collect_firewall_table_defs():
+    table_defs = dict(FIREWALL_DEFAULT_TABLE_DEFS)
+    custom_tables = _read_firewall_tables_file().get('tables', [])
+    for row in custom_tables:
+        enabled = row.get('enabled', True)
+        if not isinstance(enabled, bool):
+            enabled = str(enabled).lower() in ('1', 'true', 'yes', 'on')
+        if not enabled:
+            continue
+        table_name = normalize_config_value(row.get('table_name'))
+        chain_name = normalize_config_value(row.get('chain_name'))
+        chain_type = normalize_config_value(row.get('chain_type'))
+        hook_name = normalize_config_value(row.get('hook'))
+        policy = normalize_config_value(row.get('policy')) or 'accept'
+        if table_name is None or chain_name is None or chain_type is None or hook_name is None:
+            continue
+        try:
+            priority = int(row.get('priority'))
+        except Exception:
+            continue
+        dev = normalize_config_value(row.get('device'))
+        table_key = str(table_name).strip().lower()
+        table_defs.setdefault(table_key, [])
+        table_defs[table_key].append((str(chain_name), str(chain_type), str(hook_name), priority, (str(dev) if dev else None), str(policy)))
+    return table_defs
+
+
+def _append_table_script_lines(script_lines, nft_table, table_defs, sets_data, maps_data, rules):
+    table_name = f'{FIREWALL_TABLE_PREFIX}{nft_table}'
+    script_lines.append(f'add table {FIREWALL_TABLE_FAMILY} {table_name}')
+    for chain_info in table_defs.get(nft_table, []):
+        if len(chain_info) == 4:
+            chain_name, chain_type, hook_name, priority = chain_info
+            device = None
+            policy = 'accept'
+        else:
+            chain_name, chain_type, hook_name, priority, device, policy = chain_info
+        dev_clause = f' device "{device}"' if device else ''
+        script_lines.append(
+            f'add chain {FIREWALL_TABLE_FAMILY} {table_name} {chain_name} '
+            f'{{ type {chain_type} hook {hook_name}{dev_clause} priority {priority}; policy {policy}; }}'
+        )
+    # create shared sets in table
+    for item in sets_data.get('addr', []):
+        if item.get('name') and item.get('enabled', True):
+            elems = [x for x in (item.get('elements') or []) if x]
+            flags_clause = ' flags interval;' if any('/' in str(x) for x in elems) else ''
+            script_lines.append(f'add set {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ type ipv4_addr;{flags_clause} }}')
+            if elems:
+                script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
+    for item in sets_data.get('port', []):
+        if item.get('name') and item.get('enabled', True):
+            script_lines.append(f'add set {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ type inet_service; }}')
+            elems = [x for x in (item.get('elements') or []) if x]
+            if elems:
+                script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
+    for item in sets_data.get('iface', []):
+        if item.get('name') and item.get('enabled', True):
+            script_lines.append(f'add set {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ type ifname; }}')
+            elems = [f'"{x}"' for x in (item.get('elements') or []) if x]
+            if elems:
+                script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
+    # create shared maps and vmaps in table
+    for item in maps_data.get('map', []):
+        if item.get('name') and item.get('enabled', True):
+            built = _build_map_declaration_and_elements(item)
+            if not built:
+                continue
+            decl_stmt, elems = built
+            script_lines.append(f'add map {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {decl_stmt} }}')
+            script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
+    for item in maps_data.get('vmap', []):
+        if item.get('name') and item.get('enabled', True):
+            built = _build_map_declaration_and_elements(item)
+            if not built:
+                continue
+            decl_stmt, elems = built
+            script_lines.append(f'add map {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {decl_stmt} }}')
+            script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
+    for rule in rules:
+        if not rule.get('enabled', True):
+            continue
+        rule_table = str(rule.get('table') or '').lower()
+        if rule_table != nft_table:
+            continue
+        rendered = _render_firewall_rule(rule)
+        script_lines.append(f'add rule {FIREWALL_TABLE_FAMILY} {table_name} {rule["chain"]} {rendered}')
+
+
 def _normalize_firewall_rule(payload):
     if not isinstance(payload, dict):
         raise ValueError('Rule payload must be an object')
@@ -1280,29 +1369,7 @@ def apply_firewall_rules():
     rules = list_firewall_rules_service()
     sets_data = _read_firewall_sets_file()
     maps_data = _read_firewall_maps_file()
-    table_defs = dict(FIREWALL_DEFAULT_TABLE_DEFS)
-    custom_tables = _read_firewall_tables_file().get('tables', [])
-    for row in custom_tables:
-        enabled = row.get('enabled', True)
-        if not isinstance(enabled, bool):
-            enabled = str(enabled).lower() in ('1', 'true', 'yes', 'on')
-        if not enabled:
-            continue
-        table_name = normalize_config_value(row.get('table_name'))
-        chain_name = normalize_config_value(row.get('chain_name'))
-        chain_type = normalize_config_value(row.get('chain_type'))
-        hook_name = normalize_config_value(row.get('hook'))
-        policy = normalize_config_value(row.get('policy')) or 'accept'
-        if table_name is None or chain_name is None or chain_type is None or hook_name is None:
-            continue
-        try:
-            priority = int(row.get('priority'))
-        except Exception:
-            continue
-        dev = normalize_config_value(row.get('device'))
-        table_key = str(table_name).strip().lower()
-        table_defs.setdefault(table_key, [])
-        table_defs[table_key].append((str(chain_name), str(chain_type), str(hook_name), priority, (str(dev) if dev else None), str(policy)))
+    table_defs = _collect_firewall_table_defs()
     active_table_names = {str(name).lower() for name in table_defs.keys()}
     managed = _read_managed_tables_file().get('tables', [])
     stale_managed = [t for t in managed if t not in active_table_names]
@@ -1334,69 +1401,7 @@ def apply_firewall_rules():
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
-        script_lines.append(f'add table {FIREWALL_TABLE_FAMILY} {table_name}')
-        for chain_info in table_defs[nft_table]:
-            if len(chain_info) == 4:
-                chain_name, chain_type, hook_name, priority = chain_info
-                device = None
-                policy = 'accept'
-            else:
-                chain_name, chain_type, hook_name, priority, device, policy = chain_info
-            dev_clause = f' device "{device}"' if device else ''
-            script_lines.append(
-                f'add chain {FIREWALL_TABLE_FAMILY} {table_name} {chain_name} '
-                f'{{ type {chain_type} hook {hook_name}{dev_clause} priority {priority}; policy {policy}; }}'
-            )
-        # create shared sets in each table to allow matching from any chain/table
-        for item in sets_data.get('addr', []):
-            if item.get('name') and item.get('enabled', True):
-                elems = [x for x in (item.get('elements') or []) if x]
-                flags_clause = ' flags interval;' if any('/' in str(x) for x in elems) else ''
-                script_lines.append(f'add set {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ type ipv4_addr;{flags_clause} }}')
-                if elems:
-                    script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
-        for item in sets_data.get('port', []):
-            if item.get('name') and item.get('enabled', True):
-                script_lines.append(f'add set {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ type inet_service; }}')
-                elems = [x for x in (item.get('elements') or []) if x]
-                if elems:
-                    script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
-        for item in sets_data.get('iface', []):
-            if item.get('name') and item.get('enabled', True):
-                script_lines.append(f'add set {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ type ifname; }}')
-                elems = [f'"{x}"' for x in (item.get('elements') or []) if x]
-                if elems:
-                    script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
-        # create shared maps and vmaps in each table
-        for item in maps_data.get('map', []):
-            if item.get('name') and item.get('enabled', True):
-                built = _build_map_declaration_and_elements(item)
-                if not built:
-                    continue
-                decl_stmt, elems = built
-                script_lines.append(f'add map {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {decl_stmt} }}')
-                script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
-        for item in maps_data.get('vmap', []):
-            if item.get('name') and item.get('enabled', True):
-                built = _build_map_declaration_and_elements(item)
-                if not built:
-                    continue
-                decl_stmt, elems = built
-                script_lines.append(f'add map {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {decl_stmt} }}')
-                script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
-    for rule in rules:
-        if not rule.get('enabled', True):
-            continue
-        rule_table = str(rule.get('table') or '').lower()
-        if rule_table not in active_table_names:
-            # Skip orphaned rule rows that reference missing/disabled custom tables.
-            # This keeps apply resilient after table cleanup or toggle operations.
-            continue
-        rendered = _render_firewall_rule(rule)
-        table_name = f'{FIREWALL_TABLE_PREFIX}{rule["table"]}'
-        script_lines.append(
-            f'add rule {FIREWALL_TABLE_FAMILY} {table_name} {rule["chain"]} {rendered}'
-        )
+        _append_table_script_lines(script_lines, nft_table, table_defs, sets_data, maps_data, rules)
     script_text = '\n'.join(script_lines) + '\n'
     subprocess.run(['nft', '-f', '-'], input=script_text.encode('utf-8'), check=True)
     return True
@@ -1546,20 +1551,82 @@ def reset_firewall_counters_service(table=None):
         target_tables = (nft_table,)
 
     reset_count = 0
+    target_table_set = set(target_tables)
+    rules = list_firewall_rules_service()
+    sets_data = _read_firewall_sets_file()
+    maps_data = _read_firewall_maps_file()
+    table_defs = _collect_firewall_table_defs()
+    runtime_reset_supported = False
     for nft_table in target_tables:
         table_name = f'{FIREWALL_TABLE_PREFIX}{nft_table}'
+        table_reset_ok = False
         try:
+            # Reset named stateful counters if present.
             subprocess.run(
                 ['nft', 'reset', 'counters', 'table', FIREWALL_TABLE_FAMILY, table_name],
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            reset_count += 1
+            table_reset_ok = True
+            runtime_reset_supported = True
         except Exception:
-            # Skip missing tables; state can be recreated by apply call.
-            continue
-    return {'ok': True, 'tables_reset': reset_count}
+            pass
+        try:
+            # Reset named quotas if present.
+            subprocess.run(
+                ['nft', 'reset', 'quotas', 'table', FIREWALL_TABLE_FAMILY, table_name],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            table_reset_ok = True
+            runtime_reset_supported = True
+        except Exception:
+            pass
+        if table_reset_ok:
+            reset_count += 1
+
+    # Reset local runtime rate/cache snapshots for selected table(s),
+    # otherwise pps/bps may use stale "last" values after nft reset.
+    stats_store = _read_firewall_stats_file()
+    target_ids = {
+        str(rule.get('id'))
+        for rule in rules
+        if str(rule.get('table') or '').lower() in target_table_set and rule.get('id')
+    }
+    for rule_id in target_ids:
+        stats_store.pop(rule_id, None)
+    _write_firewall_stats_file(stats_store)
+
+    # This nft build does not support `reset rules`; anonymous per-rule counters are
+    # reset by recreating runtime rules from stored JSON.
+    if table is None:
+        apply_firewall_rules()
+    else:
+        nft_table = next(iter(target_table_set))
+        if nft_table in table_defs:
+            table_name = f'{FIREWALL_TABLE_PREFIX}{nft_table}'
+            subprocess.run(
+                ['nft', 'delete', 'table', FIREWALL_TABLE_FAMILY, table_name],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            script_lines = []
+            _append_table_script_lines(script_lines, nft_table, table_defs, sets_data, maps_data, rules)
+            script_text = '\n'.join(script_lines) + '\n'
+            subprocess.run(['nft', '-f', '-'], input=script_text.encode('utf-8'), check=True)
+        else:
+            # Fallback: if table was removed from topology, full apply keeps runtime coherent.
+            apply_firewall_rules()
+    return {
+        'ok': True,
+        'tables_reset': reset_count,
+        'rules_stats_reset': len(target_ids),
+        'runtime_reapplied': True,
+        'named_reset_supported': runtime_reset_supported,
+    }
 
 
 def get_firewall_state_service():
@@ -1621,7 +1688,7 @@ def get_firewall_state_service():
         pass
     enriched_rules = []
     stats_store = _read_firewall_stats_file()
-    now_ts = int(time.time())
+    now_ts = time.time()
     for rule in rules:
         payload = dict(rule)
         counter = runtime_counters.get(rule['id'])
@@ -1632,24 +1699,33 @@ def get_firewall_state_service():
 
         stat_row = stats_store.get(rule['id']) if isinstance(stats_store.get(rule['id']), dict) else {}
         last = stat_row.get('last') if isinstance(stat_row, dict) else None
-        prev_packets = int(last.get('packets', packets)) if isinstance(last, dict) else packets
-        prev_bytes = int(last.get('bytes', bytes_count)) if isinstance(last, dict) else bytes_count
-        prev_t = int(last.get('t', now_ts)) if isinstance(last, dict) else now_ts
-        dt = max(1, now_ts - prev_t)
+        prev_packets = int(last.get('packets', packets)) if isinstance(last, dict) else int(packets)
+        prev_bytes = int(last.get('bytes', bytes_count)) if isinstance(last, dict) else int(bytes_count)
+        prev_t = float(last.get('t', now_ts)) if isinstance(last, dict) else float(now_ts)
+
+        counter_enabled = bool(payload.get('counter'))
+        reset_detected = int(packets) < prev_packets or int(bytes_count) < prev_bytes or now_ts < prev_t
+        dt = max(0.001, float(now_ts) - float(prev_t))
         dpk = max(0, int(packets) - prev_packets)
         dby = max(0, int(bytes_count) - prev_bytes)
-        pps = dpk / dt
-        bps = dby / dt
+        if not counter_enabled or reset_detected:
+            pps = 0.0
+            bps = 0.0
+        else:
+            pps = dpk / dt
+            bps = dby / dt
         payload['runtime_pps'] = pps
         payload['runtime_bps'] = bps
 
         history = stat_row.get('history', []) if isinstance(stat_row, dict) else []
         if not isinstance(history, list):
             history = []
-        history.append({'t': now_ts, 'pps': pps, 'bps': bps, 'packets': packets, 'bytes': bytes_count})
+        if not counter_enabled or reset_detected:
+            history = []
+        history.append({'t': now_ts, 'pps': pps, 'bps': bps, 'packets': int(packets), 'bytes': int(bytes_count)})
         history = history[-120:]
         payload['runtime_history'] = history
-        stats_store[rule['id']] = {'last': {'t': now_ts, 'packets': packets, 'bytes': bytes_count}, 'history': history}
+        stats_store[rule['id']] = {'last': {'t': now_ts, 'packets': int(packets), 'bytes': int(bytes_count)}, 'history': history}
         enriched_rules.append(payload)
     _write_firewall_stats_file(stats_store)
     return {

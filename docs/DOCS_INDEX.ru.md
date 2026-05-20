@@ -15,6 +15,7 @@
 - [FIREWALL_ADD_RULE_FIELDS_INVENTORY.md](FIREWALL_ADD_RULE_FIELDS_INVENTORY.md) — матрица полей Add Rule: что реализовано/покрыто/запланировано.
 - [FIREWALL_ADD_RULE_GUIDE.ru.md](FIREWALL_ADD_RULE_GUIDE.ru.md) — практическое руководство по полям Add Rule на русском.
 - [FIREWALL_ADD_RULE_GUIDE.md](FIREWALL_ADD_RULE_GUIDE.md) — то же на английском.
+- [FIREWALL_OBJECTS_UI_PLAN.ru.md](FIREWALL_OBJECTS_UI_PLAN.ru.md) — понятный план по вкладке `Objects`: что это за сущности, где кнопки/модалки, как влияет на трафик.
 
 ## Планирование и контроль качества
 
