@@ -114,6 +114,11 @@ export type FirewallSetItem = {
   elements: string[]
   enabled?: boolean
   comment?: string | null
+  timeout?: string | null
+  created_at?: number | null
+  timeout_started_at?: number | null
+  timeout_seconds?: number | null
+  timeout_remaining_seconds?: number | null
 }
 
 export type FirewallSetsState = {
@@ -129,6 +134,11 @@ export type FirewallMapItem = {
   entries: string[]
   enabled?: boolean
   comment?: string | null
+  timeout?: string | null
+  created_at?: number | null
+  timeout_started_at?: number | null
+  timeout_seconds?: number | null
+  timeout_remaining_seconds?: number | null
 }
 
 export type FirewallMapsState = {

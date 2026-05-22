@@ -322,6 +322,164 @@ def normalize_config_value(value):
     return value if value else None
 
 
+def normalize_nft_timeout(value):
+    timeout = normalize_config_value(value)
+    if timeout is None:
+        return None
+    raw = str(timeout).strip().lower()
+    compact = re.sub(r'\s+', '', raw)
+    if compact in ('inf', 'infinite', 'infinity', 'perm', 'permanent', 'never'):
+        raise ValueError('timeout must be finite')
+
+    # MikroTik-like format: "41d 15:00:00" or "15:00:00".
+    mk_match = re.fullmatch(r'(?:(\d+)d\s+)?(\d{1,2}):([0-5]\d):([0-5]\d)', raw)
+    if mk_match:
+        days = int(mk_match.group(1) or 0)
+        hours = int(mk_match.group(2))
+        minutes = int(mk_match.group(3))
+        seconds = int(mk_match.group(4))
+        if hours > 23:
+            raise ValueError('timeout hour must be 0..23 in "Xd HH:MM:SS" format')
+        total_seconds = (days * 86400) + (hours * 3600) + (minutes * 60) + seconds
+        if total_seconds <= 0:
+            raise ValueError('timeout must be greater than zero')
+        return f'{total_seconds}s'
+
+    # Bare integer: seconds.
+    if re.fullmatch(r'\d+', raw):
+        total_seconds = int(raw)
+        if total_seconds <= 0:
+            raise ValueError('timeout must be greater than zero')
+        return f'{total_seconds}s'
+
+    # nft-style duration, including combined units like "2h30m10s".
+    parts = re.findall(r'([1-9]\d*)(ms|s|m|h|d|w)', compact)
+    if not parts or ''.join(f'{num}{unit}' for num, unit in parts) != compact:
+        raise ValueError('timeout is invalid; use "10m", "2h30m", or "1d 15:00:00"')
+    total_ms = 0
+    for raw_num, unit in parts:
+        number = int(raw_num)
+        if unit == 'ms':
+            total_ms += number
+        elif unit == 's':
+            total_ms += number * 1000
+        elif unit == 'm':
+            total_ms += number * 60 * 1000
+        elif unit == 'h':
+            total_ms += number * 3600 * 1000
+        elif unit == 'd':
+            total_ms += number * 86400 * 1000
+        elif unit == 'w':
+            total_ms += number * 7 * 86400 * 1000
+    if total_ms <= 0:
+        raise ValueError('timeout must be greater than zero')
+    return f'{max(1, (total_ms + 999) // 1000)}s'
+
+
+def timeout_to_seconds(value):
+    timeout = normalize_config_value(value)
+    if timeout is None:
+        return None
+    try:
+        normalized = normalize_nft_timeout(timeout)
+    except ValueError:
+        return None
+    match = re.fullmatch(r'([1-9][0-9]*)s', normalized)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def enrich_collection_item_runtime(item, now_ts=None):
+    payload = dict(item or {})
+    if now_ts is None:
+        now_ts = int(time.time())
+    else:
+        now_ts = int(now_ts)
+
+    created_at_raw = payload.get('created_at')
+    started_at_raw = payload.get('timeout_started_at')
+    timeout_seconds = timeout_to_seconds(payload.get('timeout'))
+    enabled = bool(payload.get('enabled', True))
+
+    created_at = None
+    try:
+        created_at = int(created_at_raw) if created_at_raw is not None else None
+    except Exception:
+        created_at = None
+
+    timeout_started_at = None
+    try:
+        timeout_started_at = int(started_at_raw) if started_at_raw is not None else None
+    except Exception:
+        timeout_started_at = None
+
+    timeout_remaining_seconds = None
+    if enabled and timeout_seconds and timeout_started_at:
+        timeout_remaining_seconds = max(0, timeout_seconds - max(0, now_ts - timeout_started_at))
+
+    payload['created_at'] = created_at
+    payload['timeout_started_at'] = timeout_started_at
+    payload['timeout_seconds'] = timeout_seconds
+    payload['timeout_remaining_seconds'] = timeout_remaining_seconds
+    return payload
+
+
+def _cleanup_expired_collection_rows(rows, now_ts):
+    changed = False
+    removed_active = 0
+    kept = []
+    for row in rows:
+        payload = dict(row or {})
+        timeout_seconds = timeout_to_seconds(payload.get('timeout'))
+        if not timeout_seconds:
+            kept.append(payload)
+            continue
+        started = payload.get('timeout_started_at')
+        if started is None:
+            started = payload.get('created_at')
+            if started is not None:
+                payload['timeout_started_at'] = started
+                changed = True
+        try:
+            started_ts = int(started) if started is not None else None
+        except Exception:
+            started_ts = None
+        if started_ts is None:
+            kept.append(payload)
+            continue
+        if now_ts >= started_ts + int(timeout_seconds):
+            changed = True
+            if bool(payload.get('enabled', True)):
+                removed_active += 1
+            continue
+        kept.append(payload)
+    return kept, changed, removed_active
+
+
+def _set_runtime_signature(item):
+    payload = dict(item or {})
+    elems = [str(x).strip() for x in (payload.get('elements') or []) if normalize_config_value(x) is not None]
+    return (
+        str(payload.get('name') or ''),
+        bool(payload.get('enabled', True)),
+        normalize_config_value(payload.get('timeout')),
+        tuple(sorted(set(elems))),
+    )
+
+
+def _map_runtime_signature(item):
+    payload = dict(item or {})
+    entries = [str(x).strip() for x in (payload.get('entries') or []) if normalize_config_value(x) is not None]
+    return (
+        str(payload.get('name') or ''),
+        bool(payload.get('enabled', True)),
+        normalize_config_value(payload.get('timeout')),
+        str(payload.get('kind') or ''),
+        tuple(sorted(set(entries))),
+    )
+
+
 def load_api_key():
     env_api_key = normalize_config_value(os.environ.get(API_KEY_ENV_VAR))
     if env_api_key is not None:
@@ -600,19 +758,32 @@ def _append_table_script_lines(script_lines, nft_table, table_defs, sets_data, m
     for item in sets_data.get('addr', []):
         if item.get('name') and item.get('enabled', True):
             elems = [x for x in (item.get('elements') or []) if x]
-            flags_clause = ' flags interval;' if any('/' in str(x) for x in elems) else ''
-            script_lines.append(f'add set {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ type ipv4_addr;{flags_clause} }}')
+            flags = []
+            if any('/' in str(x) for x in elems):
+                flags.append('interval')
+            timeout = normalize_config_value(item.get('timeout'))
+            if timeout:
+                flags.append('timeout')
+            flags_clause = f' flags {",".join(flags)};' if flags else ''
+            timeout_clause = f' timeout {timeout};' if timeout else ''
+            script_lines.append(f'add set {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ type ipv4_addr;{flags_clause}{timeout_clause} }}')
             if elems:
                 script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
     for item in sets_data.get('port', []):
         if item.get('name') and item.get('enabled', True):
-            script_lines.append(f'add set {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ type inet_service; }}')
+            timeout = normalize_config_value(item.get('timeout'))
+            flags_clause = ' flags timeout;' if timeout else ''
+            timeout_clause = f' timeout {timeout};' if timeout else ''
+            script_lines.append(f'add set {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ type inet_service;{flags_clause}{timeout_clause} }}')
             elems = [x for x in (item.get('elements') or []) if x]
             if elems:
                 script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
     for item in sets_data.get('iface', []):
         if item.get('name') and item.get('enabled', True):
-            script_lines.append(f'add set {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ type ifname; }}')
+            timeout = normalize_config_value(item.get('timeout'))
+            flags_clause = ' flags timeout;' if timeout else ''
+            timeout_clause = f' timeout {timeout};' if timeout else ''
+            script_lines.append(f'add set {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ type ifname;{flags_clause}{timeout_clause} }}')
             elems = [f'"{x}"' for x in (item.get('elements') or []) if x]
             if elems:
                 script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
@@ -1346,8 +1517,15 @@ def _build_map_declaration_and_elements(item):
     key_type = _infer_map_token_type(pairs[0][0])
     value_type = 'verdict' if item.get('kind') == 'vmap' else _infer_map_token_type(pairs[0][1])
     has_prefix = any('/' in key for key, _ in pairs)
-    flags_clause = ' flags interval;' if has_prefix and key_type in ('ipv4_addr', 'ipv6_addr') else ''
-    decl_stmt = f'type {key_type} : {value_type};{flags_clause}'
+    flags = []
+    if has_prefix and key_type in ('ipv4_addr', 'ipv6_addr'):
+        flags.append('interval')
+    timeout = normalize_config_value(item.get('timeout'))
+    if timeout:
+        flags.append('timeout')
+    flags_clause = f' flags {",".join(flags)};' if flags else ''
+    timeout_clause = f' timeout {timeout};' if timeout else ''
+    decl_stmt = f'type {key_type} : {value_type};{flags_clause}{timeout_clause}'
     elems = []
     for key, value in pairs:
         elems.append(f'{_format_map_token(key, key_type)} : {_format_map_token(value, value_type)}')
@@ -1752,6 +1930,7 @@ def _normalize_set_item(payload, set_kind):
     comment = normalize_config_value(payload.get('comment'))
     if comment is not None:
         comment = str(comment).replace('"', "'")
+    timeout = normalize_nft_timeout(payload.get('timeout'))
     out = []
     for raw in elems:
         val = normalize_config_value(raw)
@@ -1770,11 +1949,37 @@ def _normalize_set_item(payload, set_kind):
             if not re.fullmatch(r'[A-Za-z0-9_.:-]+', s):
                 raise ValueError('iface element contains invalid characters')
         out.append(s)
-    return {'id': str(payload.get('id') or uuid.uuid4().hex), 'name': str(name), 'elements': sorted(set(out)), 'enabled': enabled, 'comment': comment}
+    return {'id': str(payload.get('id') or uuid.uuid4().hex), 'name': str(name), 'elements': sorted(set(out)), 'enabled': enabled, 'comment': comment, 'timeout': timeout}
 
 
 def list_firewall_sets_service():
-    return _read_firewall_sets_file()
+    data = _read_firewall_sets_file()
+    changed = False
+    removed_active = 0
+    now_ts = int(time.time())
+    response = {'addr': [], 'port': [], 'iface': []}
+    for set_kind in ('addr', 'port', 'iface'):
+        source_rows = [dict(row or {}) for row in data.get(set_kind, [])]
+        persisted_rows, expired_changed, expired_active = _cleanup_expired_collection_rows(source_rows, now_ts)
+        if expired_changed:
+            changed = True
+            removed_active += int(expired_active)
+        normalized_rows = []
+        for payload in persisted_rows:
+            if payload.get('created_at') is None:
+                payload['created_at'] = now_ts
+                changed = True
+            if payload.get('timeout') and payload.get('enabled', True) and payload.get('timeout_started_at') is None:
+                payload['timeout_started_at'] = int(payload['created_at'])
+                changed = True
+            normalized_rows.append(payload)
+            response[set_kind].append(enrich_collection_item_runtime(payload, now_ts))
+        data[set_kind] = normalized_rows
+    if changed:
+        _write_firewall_sets_file(data)
+        if removed_active > 0:
+            apply_firewall_rules()
+    return response
 
 
 def upsert_firewall_set_service(set_kind, payload):
@@ -1784,14 +1989,43 @@ def upsert_firewall_set_service(set_kind, payload):
     item = _normalize_set_item(payload, set_kind)
     out = []
     replaced = False
+    runtime_changed = False
+    now_ts = int(time.time())
     for row in data[set_kind]:
         if row.get('id') == item['id']:
+            prev_runtime_sig = _set_runtime_signature(row)
+            prev_timeout = normalize_config_value(row.get('timeout'))
+            if prev_timeout:
+                raise ValueError('temporary collections are read-only; delete and recreate')
+            next_timeout = normalize_config_value(item.get('timeout'))
+            prev_enabled = bool(row.get('enabled', True))
+            next_enabled = bool(item.get('enabled', True))
+            if prev_timeout and prev_enabled != next_enabled:
+                raise ValueError('temporary collections cannot be enabled/disabled; delete them instead')
+            created_at = row.get('created_at')
+            if created_at is None:
+                created_at = now_ts
+            started_at = row.get('timeout_started_at')
+            if not next_enabled or not next_timeout:
+                started_at = None
+            elif prev_timeout != next_timeout or not prev_enabled:
+                started_at = now_ts
+            elif started_at is None:
+                started_at = now_ts
+            item['created_at'] = int(created_at)
+            item['timeout_started_at'] = int(started_at) if started_at is not None else None
+            runtime_changed = runtime_changed or (prev_runtime_sig != _set_runtime_signature(item))
             out.append(item)
             replaced = True
         else:
             out.append(row)
     if not replaced:
+        if item.get('timeout') and not item.get('enabled', True):
+            raise ValueError('temporary collections cannot be created in disabled state')
+        item['created_at'] = now_ts
+        item['timeout_started_at'] = now_ts if item.get('enabled', True) and item.get('timeout') else None
         out.append(item)
+        runtime_changed = bool(item.get('enabled', True))
     # Keep a single logical namespace for set names across addr/port/iface.
     existing_other_names = []
     for kind in ('addr', 'port', 'iface'):
@@ -1805,8 +2039,9 @@ def upsert_firewall_set_service(set_kind, payload):
         raise ValueError('set name must be globally unique across addr/port/iface')
     data[set_kind] = out
     _write_firewall_sets_file(data)
-    apply_firewall_rules()
-    return item
+    if runtime_changed:
+        apply_firewall_rules()
+    return enrich_collection_item_runtime(item)
 
 
 def delete_firewall_set_service(set_kind, set_id):
@@ -1818,7 +2053,8 @@ def delete_firewall_set_service(set_kind, set_id):
         raise LookupError('set not found')
     data[set_kind] = [x for x in data[set_kind] if x.get('id') != str(set_id)]
     _write_firewall_sets_file(data)
-    apply_firewall_rules()
+    if bool(existing.get('enabled', True)):
+        apply_firewall_rules()
     return existing
 
 
@@ -1837,6 +2073,7 @@ def _normalize_map_item(payload, map_kind):
     comment = normalize_config_value(payload.get('comment'))
     if comment is not None:
         comment = str(comment).replace('"', "'")
+    timeout = normalize_nft_timeout(payload.get('timeout'))
     normalized_entries = []
     for raw in entries:
         val = normalize_config_value(raw)
@@ -1854,12 +2091,39 @@ def _normalize_map_item(payload, map_kind):
         'entries': sorted(set(normalized_entries)),
         'enabled': enabled,
         'comment': comment,
+        'timeout': timeout,
         'kind': map_kind,
     }
 
 
 def list_firewall_maps_service():
-    return _read_firewall_maps_file()
+    data = _read_firewall_maps_file()
+    changed = False
+    removed_active = 0
+    now_ts = int(time.time())
+    response = {'map': [], 'vmap': []}
+    for map_kind in ('map', 'vmap'):
+        source_rows = [dict(row or {}) for row in data.get(map_kind, [])]
+        persisted_rows, expired_changed, expired_active = _cleanup_expired_collection_rows(source_rows, now_ts)
+        if expired_changed:
+            changed = True
+            removed_active += int(expired_active)
+        normalized_rows = []
+        for payload in persisted_rows:
+            if payload.get('created_at') is None:
+                payload['created_at'] = now_ts
+                changed = True
+            if payload.get('timeout') and payload.get('enabled', True) and payload.get('timeout_started_at') is None:
+                payload['timeout_started_at'] = int(payload['created_at'])
+                changed = True
+            normalized_rows.append(payload)
+            response[map_kind].append(enrich_collection_item_runtime(payload, now_ts))
+        data[map_kind] = normalized_rows
+    if changed:
+        _write_firewall_maps_file(data)
+        if removed_active > 0:
+            apply_firewall_rules()
+    return response
 
 
 def upsert_firewall_map_service(map_kind, payload):
@@ -1869,14 +2133,43 @@ def upsert_firewall_map_service(map_kind, payload):
     item = _normalize_map_item(payload, map_kind)
     out = []
     replaced = False
+    runtime_changed = False
+    now_ts = int(time.time())
     for row in data[map_kind]:
         if row.get('id') == item['id']:
+            prev_runtime_sig = _map_runtime_signature(row)
+            prev_timeout = normalize_config_value(row.get('timeout'))
+            if prev_timeout:
+                raise ValueError('temporary collections are read-only; delete and recreate')
+            next_timeout = normalize_config_value(item.get('timeout'))
+            prev_enabled = bool(row.get('enabled', True))
+            next_enabled = bool(item.get('enabled', True))
+            if prev_timeout and prev_enabled != next_enabled:
+                raise ValueError('temporary collections cannot be enabled/disabled; delete them instead')
+            created_at = row.get('created_at')
+            if created_at is None:
+                created_at = now_ts
+            started_at = row.get('timeout_started_at')
+            if not next_enabled or not next_timeout:
+                started_at = None
+            elif prev_timeout != next_timeout or not prev_enabled:
+                started_at = now_ts
+            elif started_at is None:
+                started_at = now_ts
+            item['created_at'] = int(created_at)
+            item['timeout_started_at'] = int(started_at) if started_at is not None else None
+            runtime_changed = runtime_changed or (prev_runtime_sig != _map_runtime_signature(item))
             out.append(item)
             replaced = True
         else:
             out.append(row)
     if not replaced:
+        if item.get('timeout') and not item.get('enabled', True):
+            raise ValueError('temporary collections cannot be created in disabled state')
+        item['created_at'] = now_ts
+        item['timeout_started_at'] = now_ts if item.get('enabled', True) and item.get('timeout') else None
         out.append(item)
+        runtime_changed = bool(item.get('enabled', True))
     other = 'vmap' if map_kind == 'map' else 'map'
     names = [x['name'] for x in out]
     if len(names) != len(set(names)):
@@ -1885,8 +2178,9 @@ def upsert_firewall_map_service(map_kind, payload):
         raise ValueError('map name must be globally unique across map/vmap')
     data[map_kind] = out
     _write_firewall_maps_file(data)
-    apply_firewall_rules()
-    return item
+    if runtime_changed:
+        apply_firewall_rules()
+    return enrich_collection_item_runtime(item)
 
 
 def delete_firewall_map_service(map_kind, map_id):
@@ -1898,7 +2192,8 @@ def delete_firewall_map_service(map_kind, map_id):
         raise LookupError('map not found')
     data[map_kind] = [x for x in data[map_kind] if x.get('id') != str(map_id)]
     _write_firewall_maps_file(data)
-    apply_firewall_rules()
+    if bool(existing.get('enabled', True)):
+        apply_firewall_rules()
     return existing
 
 

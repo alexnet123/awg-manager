@@ -106,7 +106,7 @@ function buildCtState(flags: { established: boolean; related: boolean; newState:
   return null
 }
 
-function ToggleLine(props: { label: string; enabled: boolean; onToggle: () => void; children: React.ReactNode; inactiveHint?: string }) {
+function ToggleLine(props: { label: string; enabled: boolean; onToggle: () => void; children: React.ReactNode; inactiveHint?: string; disabled?: boolean }) {
   return (
     <div className='space-y-1.5'>
       <div className='flex items-center justify-between gap-2'>
@@ -120,8 +120,9 @@ function ToggleLine(props: { label: string; enabled: boolean; onToggle: () => vo
             </div>
             <button
               type='button'
-              className='absolute right-1 top-1 h-5 min-w-5 rounded border px-1 text-[11px] leading-4 text-foreground'
+              className='absolute right-1 top-1 h-5 min-w-5 rounded border px-1 text-[11px] leading-4 text-foreground disabled:pointer-events-none disabled:opacity-50'
               onClick={props.onToggle}
+              disabled={props.disabled}
             >
               -
             </button>
@@ -130,7 +131,7 @@ function ToggleLine(props: { label: string; enabled: boolean; onToggle: () => vo
         : (
           <div className='flex h-7 items-center justify-between rounded-md border border-dashed px-2.5 text-[11px] text-muted-foreground'>
             <span className='truncate pr-2'>{props.inactiveHint || ''}</span>
-            <button type='button' className='h-5 min-w-5 rounded border px-1 text-[11px] leading-4 text-foreground' onClick={props.onToggle}>+</button>
+            <button type='button' className='h-5 min-w-5 rounded border px-1 text-[11px] leading-4 text-foreground disabled:pointer-events-none disabled:opacity-50' onClick={props.onToggle} disabled={props.disabled}>+</button>
           </div>
         )}
     </div>
@@ -149,7 +150,7 @@ type FirewallPolicyTab = 'filter' | 'nat' | 'raw' | 'mangle'
 type FirewallSectionTab = 'policy' | 'collections' | 'table_builder'
 type CollectionKind = 'addr' | 'port' | 'iface' | 'map' | 'vmap'
 type SortDirection = 'asc' | 'desc'
-type CollectionSortKey = 'kind' | 'name' | 'values' | 'status'
+type CollectionSortKey = 'kind' | 'name' | 'values' | 'timeout' | 'created_at'
 type TableSortKey = 'family' | 'table_name' | 'chain_name' | 'chain_type' | 'hook' | 'device' | 'priority' | 'policy' | 'origin' | 'status'
 type PolicySortKey = 'chain' | 'action' | 'proto' | 'src' | 'dst' | 'sport' | 'dport' | 'in_interface' | 'out_interface' | 'ct_state' | 'packets' | 'bytes'
 
@@ -255,9 +256,13 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [selectedCollectionIds, setSelectedCollectionIds] = React.useState<string[]>([])
   const [collectionAnchorId, setCollectionAnchorId] = React.useState<string | null>(null)
   const [collectionSort, setCollectionSort] = React.useState<{ key: CollectionSortKey | null; dir: SortDirection }>({ key: null, dir: 'asc' })
+  const [collectionsNowSec, setCollectionsNowSec] = React.useState(() => Math.floor(Date.now() / 1000))
   const [newSetName, setNewSetName] = React.useState('')
   const [newSetElements, setNewSetElements] = React.useState('')
   const [newSetComment, setNewSetComment] = React.useState('')
+  const [newSetTimeoutEnabled, setNewSetTimeoutEnabled] = React.useState(false)
+  const [newSetTimeout, setNewSetTimeout] = React.useState('')
+  const [newSetReadOnly, setNewSetReadOnly] = React.useState(false)
   const [setOpen, setSetOpen] = React.useState(false)
   const [editingSetId, setEditingSetId] = React.useState<string | null>(null)
   const [selectedTableIds, setSelectedTableIds] = React.useState<string[]>([])
@@ -275,6 +280,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [newPolicy, setNewPolicy] = React.useState<'accept' | 'drop'>('accept')
   const liveRateRef = React.useRef<{ pps: number; bps: number }>({ pps: 0, bps: 0 })
   const [advOpen, setAdvOpen] = React.useState<Record<string, boolean>>({ ...ADVANCED_SECTIONS_CLOSED })
+  const collectionFieldClass = 'h-7 text-[11px] md:text-[11px] placeholder:text-[11px]'
 
   function formatCounter(value?: number) {
     const n = Number(value || 0)
@@ -305,6 +311,85 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     if (n < 10) return `${n.toFixed(1)} p/s`
     if (n < 1000) return `${Math.round(n)} p/s`
     return `${(n / 1000).toFixed(1)} Kp/s`
+  }
+
+  function formatDurationClock(seconds?: number | null) {
+    if (seconds === null || seconds === undefined) return '—'
+    const s = Math.max(0, Math.floor(Number(seconds) || 0))
+    const days = Math.floor(s / 86400)
+    const hh = Math.floor((s % 86400) / 3600)
+    const mm = Math.floor((s % 3600) / 60)
+    const ss = s % 60
+    const clock = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`
+    return days > 0 ? `${days}d ${clock}` : clock
+  }
+
+  function formatDateTime(sec?: number | null) {
+    if (!sec) return '—'
+    const dt = new Date(Number(sec) * 1000)
+    const y = dt.getFullYear()
+    const m = String(dt.getMonth() + 1).padStart(2, '0')
+    const d = String(dt.getDate()).padStart(2, '0')
+    const hh = String(dt.getHours()).padStart(2, '0')
+    const mm = String(dt.getMinutes()).padStart(2, '0')
+    const ss = String(dt.getSeconds()).padStart(2, '0')
+    return `${y}-${m}-${d} ${hh}:${mm}:${ss}`
+  }
+
+  function getCollectionRemainingSeconds(
+    row: (FirewallSetItem & { kind: 'addr' | 'port' | 'iface' }) | (FirewallMapItem & { kind: 'map' | 'vmap' })
+  ): number | null {
+    if (row.enabled === false) return null
+    const timeoutSec = Number(row.timeout_seconds || 0)
+    if (!timeoutSec) return null
+    const started = Number(row.timeout_started_at || 0)
+    if (!started) return timeoutSec
+    return Math.max(0, timeoutSec - Math.max(0, collectionsNowSec - started))
+  }
+
+  function normalizeCollectionTimeoutInput(value: string): string | null {
+    const raw = value.trim().toLowerCase()
+    if (!raw) return null
+    const compact = raw.replace(/\s+/g, '')
+    if (['inf', 'infinite', 'infinity', 'perm', 'permanent', 'never'].includes(compact)) {
+      throw new Error('Timeout must be finite')
+    }
+
+    const mk = raw.match(/^(?:(\d+)d\s+)?(\d{1,2}):([0-5]\d):([0-5]\d)$/)
+    if (mk) {
+      const days = Number(mk[1] || 0)
+      const hours = Number(mk[2] || 0)
+      const minutes = Number(mk[3] || 0)
+      const seconds = Number(mk[4] || 0)
+      if (hours > 23) throw new Error('Timeout hour must be 0..23 in "Xd HH:MM:SS" format')
+      const totalSeconds = (days * 86400) + (hours * 3600) + (minutes * 60) + seconds
+      if (totalSeconds <= 0) throw new Error('Timeout must be greater than zero')
+      return `${totalSeconds}s`
+    }
+
+    if (/^\d+$/.test(raw)) {
+      const seconds = Number(raw)
+      if (!Number.isFinite(seconds) || seconds <= 0) throw new Error('Timeout must be greater than zero')
+      return `${Math.floor(seconds)}s`
+    }
+
+    const parts = Array.from(compact.matchAll(/([1-9]\d*)(ms|s|m|h|d|w)/g))
+    if (!parts.length || parts.map((m) => `${m[1]}${m[2]}`).join('') !== compact) {
+      throw new Error('Timeout is invalid; use "10m", "2h30m", or "1d 15:00:00"')
+    }
+    let totalMs = 0
+    for (const match of parts) {
+      const num = Number(match[1])
+      const unit = match[2]
+      if (unit === 'ms') totalMs += num
+      if (unit === 's') totalMs += num * 1000
+      if (unit === 'm') totalMs += num * 60 * 1000
+      if (unit === 'h') totalMs += num * 3600 * 1000
+      if (unit === 'd') totalMs += num * 86400 * 1000
+      if (unit === 'w') totalMs += num * 7 * 86400 * 1000
+    }
+    if (totalMs <= 0) throw new Error('Timeout must be greater than zero')
+    return `${Math.max(1, Math.ceil(totalMs / 1000))}s`
   }
 
   function computeSelection(
@@ -434,6 +519,17 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     }
   }
 
+  async function refreshCollections() {
+    setError(null)
+    try {
+      const [fwSets, fwMaps] = await Promise.all([getFirewallSets(props.auth), getFirewallMaps(props.auth)])
+      setSetsState(fwSets)
+      setMapsState(fwMaps)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    }
+  }
+
   React.useEffect(() => {
     void refresh()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -456,6 +552,11 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     }, 3000)
     return () => window.clearInterval(intervalId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  React.useEffect(() => {
+    const timer = window.setInterval(() => setCollectionsNowSec(Math.floor(Date.now() / 1000)), 1000)
+    return () => window.clearInterval(timer)
   }, [])
 
   React.useEffect(() => {
@@ -833,11 +934,8 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     rows.sort((a, b) => {
       if (collectionSort.key === 'kind') return dir * compareStr(a.kind, b.kind)
       if (collectionSort.key === 'name') return dir * compareStr(String(a.name || ''), String(b.name || ''))
-      if (collectionSort.key === 'status') {
-        const av = a.enabled === false ? 'disabled' : 'enabled'
-        const bv = b.enabled === false ? 'disabled' : 'enabled'
-        return dir * compareStr(av, bv)
-      }
+      if (collectionSort.key === 'timeout') return dir * (((getCollectionRemainingSeconds(a) || 0) - (getCollectionRemainingSeconds(b) || 0)))
+      if (collectionSort.key === 'created_at') return dir * ((Number(a.created_at || 0)) - (Number(b.created_at || 0)))
       const av = a.kind === 'map' || a.kind === 'vmap'
         ? ((a as FirewallMapItem).entries || []).join(', ')
         : ((a as FirewallSetItem).elements || []).join(', ')
@@ -847,7 +945,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
       return dir * compareStr(av, bv)
     })
     return rows
-  }, [allCollectionItems, collectionSort])
+  }, [allCollectionItems, collectionSort, collectionsNowSec])
   const sortedTableRows = React.useMemo(() => {
     const key = tableSort.key
     if (!key) return tableRows
@@ -891,39 +989,53 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
 
   function openCreateSetWindow() {
     setEditingSetId(null)
+    setNewSetReadOnly(false)
     setNewSetName('')
     setNewSetElements('')
     setNewSetComment('')
+    setNewSetTimeoutEnabled(false)
+    setNewSetTimeout('')
     setCollectionKind('addr')
     setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 360) / 2) - 40) })
     setSetOpen(true)
   }
 
   function openEditSetWindow(item: FirewallSetItem & { kind: 'addr' | 'port' | 'iface' }) {
+    const isTemporary = !!item.timeout
     setEditingSetId(item.id)
+    setNewSetReadOnly(isTemporary)
     setNewSetName(item.name || '')
     setNewSetElements((item.elements || []).join(', '))
     setNewSetComment(item.comment || '')
+    setNewSetTimeoutEnabled(!!item.timeout)
+    setNewSetTimeout(item.timeout || '')
     setCollectionKind(item.kind)
     setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 360) / 2) - 40) })
     setSetOpen(true)
   }
 
   async function onSaveSet(): Promise<boolean> {
+    if (newSetReadOnly) {
+      setError('Temporary collections are read-only. Delete and recreate if needed.')
+      return false
+    }
     setError(null)
     setIsBusy(true)
     try {
       const elements = newSetElements.split(',').map((x) => x.trim()).filter(Boolean)
+      const timeout = newSetTimeoutEnabled ? normalizeCollectionTimeoutInput(newSetTimeout) : null
       if (collectionKind === 'map' || collectionKind === 'vmap') {
-        await upsertFirewallMap(props.auth, collectionKind, { id: editingSetId || undefined, name: newSetName.trim(), entries: elements, comment: newSetComment.trim() || null })
+        await upsertFirewallMap(props.auth, collectionKind, { id: editingSetId || undefined, name: newSetName.trim(), entries: elements, comment: newSetComment.trim() || null, timeout })
       } else {
-        await upsertFirewallSet(props.auth, collectionKind, { id: editingSetId || undefined, name: newSetName.trim(), elements, comment: newSetComment.trim() || null })
+        await upsertFirewallSet(props.auth, collectionKind, { id: editingSetId || undefined, name: newSetName.trim(), elements, comment: newSetComment.trim() || null, timeout })
       }
       setEditingSetId(null)
       setNewSetName('')
       setNewSetElements('')
       setNewSetComment('')
-      await refresh()
+      setNewSetTimeoutEnabled(false)
+      setNewSetTimeout('')
+      await refreshCollections()
       return true
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
@@ -940,7 +1052,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     try {
       await deleteFirewallSet(props.auth, kind, item.id)
       setSelectedCollectionIds((prev) => prev.filter((id) => id !== item.id))
-      await refresh()
+      await refreshCollections()
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
     } finally {
@@ -952,8 +1064,8 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     setError(null)
     setIsBusy(true)
     try {
-      await upsertFirewallSet(props.auth, kind, { id: item.id, name: item.name, elements: item.elements, enabled, comment: item.comment || null })
-      await refresh()
+      await upsertFirewallSet(props.auth, kind, { id: item.id, name: item.name, elements: item.elements, enabled, comment: item.comment || null, timeout: item.timeout || null })
+      await refreshCollections()
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
     } finally {
@@ -962,11 +1074,15 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   }
 
   function openEditMapWindow(item: FirewallMapItem & { kind: 'map' | 'vmap' }) {
+    const isTemporary = !!item.timeout
     setCollectionKind(item.kind)
     setEditingSetId(item.id)
+    setNewSetReadOnly(isTemporary)
     setNewSetName(item.name || '')
     setNewSetElements((item.entries || []).join(', '))
     setNewSetComment(item.comment || '')
+    setNewSetTimeoutEnabled(!!item.timeout)
+    setNewSetTimeout(item.timeout || '')
     setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 360) / 2) - 40) })
     setSetOpen(true)
   }
@@ -978,7 +1094,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     try {
       await deleteFirewallMap(props.auth, kind, item.id)
       setSelectedCollectionIds((prev) => prev.filter((id) => id !== item.id))
-      await refresh()
+      await refreshCollections()
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
     } finally {
@@ -995,9 +1111,10 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
         name: item.name,
         entries: item.entries || [],
         comment: item.comment || null,
+        timeout: item.timeout || null,
         enabled,
       })
-      await refresh()
+      await refreshCollections()
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
     } finally {
@@ -1153,6 +1270,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
 
   const selectedRules = visibleRules.filter((r) => selectedRuleIds.includes(r.id))
   const selectedCollections = allCollectionItems.filter((r) => selectedCollectionIds.includes(r.id))
+  const selectedTimedCollections = selectedCollections.filter((r) => !!r.timeout)
   const selectedCustomTables = tableRows.filter((r) => selectedTableIds.includes(r.id) && !r.builtin)
 
   async function onDeleteSelectedRules() {
@@ -1198,7 +1316,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
       }
       setSelectedCollectionIds([])
       setCollectionAnchorId(null)
-      await refresh()
+      await refreshCollections()
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
     } finally {
@@ -1208,6 +1326,10 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
 
   async function onSetEnabledSelectedCollections(enabled: boolean) {
     if (!selectedCollections.length) return
+    if (selectedTimedCollections.length) {
+      setError('Temporary collections cannot be enabled/disabled; delete them instead.')
+      return
+    }
     setError(null)
     setIsBusy(true)
     try {
@@ -1219,6 +1341,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
             name: mapItem.name,
             entries: mapItem.entries || [],
             comment: mapItem.comment || null,
+            timeout: mapItem.timeout || null,
             enabled,
           })
         } else {
@@ -1229,10 +1352,11 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
             elements: setItem.elements || [],
             enabled,
             comment: setItem.comment || null,
+            timeout: setItem.timeout || null,
           })
         }
       }
-      await refresh()
+      await refreshCollections()
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
     } finally {
@@ -1425,7 +1549,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                 <Button
                   size='sm'
                   variant='outline'
-                  disabled={isBusy || !selectedCollectionIds.length}
+                  disabled={isBusy || !selectedCollectionIds.length || !!selectedTimedCollections.length}
                   onClick={() => {
                     void onSetEnabledSelectedCollections(false)
                   }}
@@ -1434,7 +1558,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                 </Button>
                 <Button
                   size='sm'
-                  disabled={isBusy || !selectedCollectionIds.length}
+                  disabled={isBusy || !selectedCollectionIds.length || !!selectedTimedCollections.length}
                   onClick={() => {
                     void onSetEnabledSelectedCollections(true)
                   }}
@@ -1449,14 +1573,15 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                       <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleCollectionSort('kind')}>Type <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(collectionSort.key === 'kind', collectionSort.dir)}</span></button></TableHead>
                       <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleCollectionSort('name')}>Name <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(collectionSort.key === 'name', collectionSort.dir)}</span></button></TableHead>
                       <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleCollectionSort('values')}>Values <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(collectionSort.key === 'values', collectionSort.dir)}</span></button></TableHead>
-                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleCollectionSort('status')}>Status <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(collectionSort.key === 'status', collectionSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleCollectionSort('timeout')}>Timeout <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(collectionSort.key === 'timeout', collectionSort.dir)}</span></button></TableHead>
+                      <TableHead><button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => toggleCollectionSort('created_at')}>Creation time <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(collectionSort.key === 'created_at', collectionSort.dir)}</span></button></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {sortedCollectionItems.map((row) => (
                       <TableRow
                         key={row.id}
-                        className={`${row.comment ? 'h-9' : 'h-7'} cursor-default select-none border-b hover:bg-blue-100/80 dark:hover:bg-blue-900/35 ${selectedCollectionIds.includes(row.id) ? 'bg-blue-100/80 dark:bg-blue-900/35' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
+                        className={`${row.comment || row.timeout ? 'h-9' : 'h-7'} cursor-default select-none border-b hover:bg-blue-100/80 dark:hover:bg-blue-900/35 ${selectedCollectionIds.includes(row.id) ? 'bg-blue-100/80 dark:bg-blue-900/35' : ''} ${row.enabled === false ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
                         onMouseDown={(e) => {
                           if (e.shiftKey) e.preventDefault()
                         }}
@@ -1483,11 +1608,12 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                         <TableCell className={`max-w-[700px] truncate ${row.comment ? 'align-bottom pb-0.5 pt-2' : ''}`}>
                           <span className={row.comment ? 'block pt-1' : ''}>{(row.kind === 'map' || row.kind === 'vmap') ? (((row as FirewallMapItem).entries || []).join(', ') || '—') : (((row as FirewallSetItem).elements || []).join(', ') || '—')}</span>
                         </TableCell>
-                        <TableCell className={row.comment ? 'align-bottom pb-0.5 pt-2' : undefined}><span className={row.comment ? 'block pt-1' : ''}>{row.enabled === false ? 'disabled' : 'enabled'}</span></TableCell>
+                        <TableCell className={row.comment ? 'align-bottom pb-0.5 pt-2' : undefined}><span className={row.comment ? 'block pt-1' : ''}>{formatDurationClock(getCollectionRemainingSeconds(row))}</span></TableCell>
+                        <TableCell className={row.comment ? 'align-bottom pb-0.5 pt-2' : undefined}><span className={row.comment ? 'block pt-1' : ''}>{formatDateTime(row.created_at || null)}</span></TableCell>
                       </TableRow>
                     ))}
                     {!allCollectionItems.length
-                      ? <TableRow><TableCell colSpan={4} className='py-6 text-center text-xs text-muted-foreground'>No collections yet.</TableCell></TableRow>
+                      ? <TableRow><TableCell colSpan={5} className='py-6 text-center text-xs text-muted-foreground'>No collections yet.</TableCell></TableRow>
                       : null}
                   </TableBody>
                 </Table>
@@ -2334,7 +2460,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
           <div className='absolute z-50 w-[560px] max-w-[calc(100vw-24px)] rounded-xl border bg-background shadow-2xl' style={{ left: winPos.x, top: winPos.y }}>
             <div className='cursor-move rounded-t-xl border-b bg-muted/70 px-3 py-2 text-xs font-medium select-none' onMouseDown={onDragStart}>
               <div className='flex items-center justify-between'>
-                <span>{editingSetId ? `Edit ${collectionKind}` : 'Add collection'}</span>
+                <span>{editingSetId ? `Edit ${collectionKind}` : 'Add collection'}{newSetReadOnly ? ' (read-only)' : ''}</span>
                 <button type='button' className='rounded p-1 hover:bg-background/70' onClick={() => setSetOpen(false)}><X className='size-3.5' /></button>
               </div>
             </div>
@@ -2342,7 +2468,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
               <div className='flex-1 overflow-y-auto p-3 space-y-3'>
                 <div className='space-y-1.5'>
                   <Label>Type</Label>
-                  <select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={collectionKind} onChange={(e) => setCollectionKind(e.target.value as CollectionKind)}>
+                  <select className={`${collectionFieldClass} w-full rounded-md border bg-background px-2.5`} value={collectionKind} onChange={(e) => setCollectionKind(e.target.value as CollectionKind)} disabled={newSetReadOnly}>
                     <option value='addr'>addr</option>
                     <option value='port'>port</option>
                     <option value='iface'>iface</option>
@@ -2352,12 +2478,12 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                 </div>
                 <div className='space-y-1.5'>
                   <Label>Name</Label>
-                  <Input className='h-7' placeholder={collectionKind === 'map' || collectionKind === 'vmap' ? 'map_name' : 'set_name'} value={newSetName} onChange={(e) => setNewSetName(e.target.value)} />
+                  <Input className={collectionFieldClass} placeholder={collectionKind === 'map' || collectionKind === 'vmap' ? 'map_name' : 'set_name'} value={newSetName} onChange={(e) => setNewSetName(e.target.value)} disabled={newSetReadOnly} />
                 </div>
                 <div className='space-y-1.5'>
                   <Label>{collectionKind === 'map' || collectionKind === 'vmap' ? 'Entries (comma-separated, key:value)' : 'Elements (comma-separated)'}</Label>
                   <Input
-                    className='h-7'
+                    className={collectionFieldClass}
                     placeholder={
                       collectionKind === 'iface'
                         ? 'eth0, awg1'
@@ -2369,16 +2495,34 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                     }
                     value={newSetElements}
                     onChange={(e) => setNewSetElements(e.target.value)}
+                    disabled={newSetReadOnly}
                   />
                 </div>
+                <ToggleLine
+                  label='Timeout'
+                  enabled={newSetTimeoutEnabled}
+                  inactiveHint='Finite only; e.g. 10m or 1d 15:00:00'
+                  disabled={newSetReadOnly}
+                  onToggle={() => {
+                    if (newSetTimeoutEnabled) {
+                      setNewSetTimeoutEnabled(false)
+                      setNewSetTimeout('')
+                    } else {
+                      setNewSetTimeoutEnabled(true)
+                      if (!newSetTimeout.trim()) setNewSetTimeout('1h')
+                    }
+                  }}
+                >
+                  <Input className={collectionFieldClass} placeholder='10m, 2h30m, 1d 15:00:00' value={newSetTimeout} onChange={(e) => setNewSetTimeout(e.target.value)} disabled={newSetReadOnly} />
+                </ToggleLine>
                 <div className='space-y-1.5'>
                   <Label>Comment</Label>
-                  <Input className='h-7' placeholder='Optional comment' value={newSetComment} onChange={(e) => setNewSetComment(e.target.value)} />
+                  <Input className={collectionFieldClass} placeholder='Optional comment' value={newSetComment} onChange={(e) => setNewSetComment(e.target.value)} disabled={newSetReadOnly} />
                 </div>
               </div>
               <div className='flex justify-end gap-2 border-t bg-background px-3 py-2'>
                 <Button type='button' variant='outline' onClick={() => setSetOpen(false)}>Cancel</Button>
-                <Button type='button' disabled={isBusy || !newSetName.trim()} onClick={async () => { const ok = await onSaveSet(); if (ok) setSetOpen(false) }}><Plus />{editingSetId ? 'Save' : 'Add'}</Button>
+                <Button type='button' disabled={isBusy || !newSetName.trim() || newSetReadOnly} onClick={async () => { const ok = await onSaveSet(); if (ok) setSetOpen(false) }}><Plus />{editingSetId ? 'Save' : 'Add'}</Button>
               </div>
             </div>
           </div>
