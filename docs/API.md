@@ -447,3 +447,45 @@ Error:
 - Client creation, update and deletion affect live runtime peer state.
 - The API uses the same encryption secret and database as the CLI.
 - Direct SVG output is generated with `segno`.
+
+### IPsec (strongSwan/VICI)
+
+Namespace:
+
+- `/api/ipsec/*`
+
+Configuration endpoints (draft storage):
+
+- `GET /api/ipsec/peers`
+- `POST /api/ipsec/peers`
+- `PUT /api/ipsec/peers/{name}`
+- `DELETE /api/ipsec/peers/{name}`
+- `GET /api/ipsec/identities`
+- `POST /api/ipsec/identities`
+- `GET /api/ipsec/policies`
+- `POST /api/ipsec/policies`
+- `PUT /api/ipsec/policies/{name}`
+- `DELETE /api/ipsec/policies/{name}`
+- `GET /api/ipsec/phase1-profiles`
+- `POST /api/ipsec/phase1-profiles`
+- `GET /api/ipsec/phase2-proposals`
+- `POST /api/ipsec/phase2-proposals`
+
+Runtime/actions:
+
+- `POST /api/ipsec/apply`
+- `POST /api/ipsec/load/{peer}`
+- `POST /api/ipsec/initiate/{policy}`
+- `POST /api/ipsec/terminate/{peer}`
+
+Read-only runtime state:
+
+- `GET /api/ipsec/active-peers`
+- `GET /api/ipsec/installed-sas`
+- `GET /api/ipsec/events`
+
+Security notes:
+
+- Frontend never talks to VICI directly.
+- PSK is not returned back after save; API returns `has_psk` marker.
+- Runtime mutations are done only via explicit `Apply` or action endpoints.

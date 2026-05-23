@@ -78,6 +78,12 @@ FIREWALL_MAPS_FILE = os.path.join(bd_path, 'firewall_maps.json')
 FIREWALL_TABLES_FILE = os.path.join(bd_path, 'firewall_tables.json')
 FIREWALL_MANAGED_TABLES_FILE = os.path.join(bd_path, 'firewall_managed_tables.json')
 FIREWALL_STATS_FILE = os.path.join(bd_path, 'firewall_stats.json')
+IPSEC_PEERS_FILE = os.path.join(bd_path, 'ipsec_peers.json')
+IPSEC_IDENTITIES_FILE = os.path.join(bd_path, 'ipsec_identities.json')
+IPSEC_PHASE1_PROFILES_FILE = os.path.join(bd_path, 'ipsec_phase1_profiles.json')
+IPSEC_PHASE2_PROPOSALS_FILE = os.path.join(bd_path, 'ipsec_phase2_proposals.json')
+IPSEC_POLICIES_FILE = os.path.join(bd_path, 'ipsec_policies.json')
+IPSEC_EVENTS_FILE = os.path.join(bd_path, 'ipsec_events.json')
 FIREWALL_TABLE_FAMILY = 'inet'
 FIREWALL_SUPPORTED_TABLE_FAMILIES = ('inet', 'ip', 'ip6', 'bridge', 'netdev')
 FIREWALL_TABLE_PREFIX = ''
@@ -3818,3 +3824,537 @@ def decrypt_private_key(encrypted_private_key):
         return "InvalidToken"
     except Exception:
         return "InvalidToken"
+
+
+def _read_json_file_or_default(path, default_payload):
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return dict(default_payload)
+
+
+def _write_json_file(path, payload):
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def _read_ipsec_collection(path):
+    data = _read_json_file_or_default(path, {'items': []})
+    items = data.get('items') if isinstance(data.get('items'), list) else []
+    return [x for x in items if isinstance(x, dict)]
+
+
+def _write_ipsec_collection(path, items):
+    _write_json_file(path, {'items': items})
+
+
+def _valid_name(value, field_name='name'):
+    val = normalize_config_value(value)
+    if val is None or not re.fullmatch(r'[A-Za-z0-9_.:-]+', str(val)):
+        raise ValueError(f'{field_name} is invalid')
+    return str(val)
+
+
+def _normalize_ip_list(value, field_name):
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f'{field_name} must be array')
+    out = []
+    for raw in value:
+        v = normalize_config_value(raw)
+        if v is None:
+            continue
+        out.append(str(v))
+    return out
+
+
+def _normalize_ts_list(value, field_name):
+    out = _normalize_ip_list(value, field_name)
+    for token in out:
+        try:
+            ipaddress.ip_network(token, strict=False)
+        except Exception:
+            raise ValueError(f'{field_name} contains invalid CIDR')
+    return out
+
+
+def _build_phase1_proposal_string(enc, hash_alg, dh_group):
+    e = _valid_name(enc, 'encryption').lower()
+    h = _valid_name(hash_alg, 'hash').lower()
+    d = _valid_name(dh_group, 'dh_group').lower()
+    return f'{e}-{h}-{d}'
+
+
+def _build_phase2_proposal_string(enc, auth_alg, pfs_group=None):
+    e = _valid_name(enc, 'encryption').lower()
+    a = _valid_name(auth_alg, 'auth').lower()
+    p = normalize_config_value(pfs_group)
+    if p is None:
+        return f'{e}-{a}'
+    return f'{e}-{a}-{_valid_name(p, "pfs_group").lower()}'
+
+
+def _secret_encrypt(value):
+    f = Fernet(encryption_key)
+    return f.encrypt(str(value).encode('utf-8')).decode('utf-8')
+
+
+def _secret_decrypt(value):
+    if value is None:
+        return None
+    token = value.encode('utf-8') if isinstance(value, str) else value
+    for key in (encryption_key, encryption_key_legacy):
+        try:
+            f = Fernet(key)
+            return f.decrypt(token).decode('utf-8')
+        except Exception:
+            continue
+    raise ValueError('secret decryption failed')
+
+
+def list_ipsec_peers_service():
+    return _read_ipsec_collection(IPSEC_PEERS_FILE)
+
+
+def list_ipsec_identities_service():
+    out = []
+    for row in _read_ipsec_collection(IPSEC_IDENTITIES_FILE):
+        item = dict(row)
+        item.pop('psk_encrypted', None)
+        item['has_psk'] = bool(row.get('psk_encrypted'))
+        out.append(item)
+    return out
+
+
+def list_ipsec_phase1_profiles_service():
+    return _read_ipsec_collection(IPSEC_PHASE1_PROFILES_FILE)
+
+
+def list_ipsec_phase2_proposals_service():
+    return _read_ipsec_collection(IPSEC_PHASE2_PROPOSALS_FILE)
+
+
+def list_ipsec_policies_service():
+    return _read_ipsec_collection(IPSEC_POLICIES_FILE)
+
+
+def _ensure_ipsec_peer_exists(peer_name):
+    if not any(x.get('name') == str(peer_name) for x in _read_ipsec_collection(IPSEC_PEERS_FILE)):
+        raise ValueError('peer not found')
+
+
+def _ensure_ipsec_phase1_exists(profile_name):
+    if not any(x.get('name') == str(profile_name) for x in _read_ipsec_collection(IPSEC_PHASE1_PROFILES_FILE)):
+        raise ValueError('phase1 profile not found')
+
+
+def _ensure_ipsec_phase2_exists(proposal_name):
+    if not any(x.get('name') == str(proposal_name) for x in _read_ipsec_collection(IPSEC_PHASE2_PROPOSALS_FILE)):
+        raise ValueError('phase2 proposal not found')
+
+
+def upsert_ipsec_peer_service(payload):
+    if not isinstance(payload, dict):
+        raise ValueError('peer payload must be object')
+    item = {
+        'name': _valid_name(payload.get('name')),
+        'remote_addrs': _normalize_ip_list(payload.get('remote_addrs'), 'remote_addrs'),
+        'local_addrs': _normalize_ip_list(payload.get('local_addrs'), 'local_addrs'),
+        'ike_version': 2,
+        'phase1_profile': _valid_name(payload.get('phase1_profile'), 'phase1_profile'),
+        'enabled': bool(payload.get('enabled', True)),
+        'dpd': bool(payload.get('dpd', True)),
+        'nat_t': bool(payload.get('nat_t', True)),
+        'send_initial_contact': bool(payload.get('send_initial_contact', True)),
+    }
+    if not item['remote_addrs']:
+        raise ValueError('remote_addrs is required')
+    _ensure_ipsec_phase1_exists(item['phase1_profile'])
+    items = _read_ipsec_collection(IPSEC_PEERS_FILE)
+    replaced = False
+    for i, row in enumerate(items):
+        if row.get('name') == item['name']:
+            items[i] = item
+            replaced = True
+            break
+    if not replaced:
+        items.append(item)
+    _write_ipsec_collection(IPSEC_PEERS_FILE, items)
+    return item
+
+
+def upsert_ipsec_identity_service(payload):
+    if not isinstance(payload, dict):
+        raise ValueError('identity payload must be object')
+    peer_name = _valid_name(payload.get('peer'), 'peer')
+    _ensure_ipsec_peer_exists(peer_name)
+    auth_method = str(payload.get('auth_method') or 'psk').lower()
+    if auth_method != 'psk':
+        raise ValueError('only psk auth_method is supported in v1')
+    local_id = _valid_name(payload.get('local_id'), 'local_id')
+    remote_id = _valid_name(payload.get('remote_id'), 'remote_id')
+    psk = normalize_config_value(payload.get('psk'))
+    items = _read_ipsec_collection(IPSEC_IDENTITIES_FILE)
+    previous = next((x for x in items if x.get('peer') == peer_name), None)
+    psk_encrypted = previous.get('psk_encrypted') if previous else None
+    if psk is not None:
+        psk_encrypted = _secret_encrypt(str(psk))
+    if not psk_encrypted:
+        raise ValueError('psk is required for new identity')
+    item = {
+        'peer': peer_name,
+        'auth_method': auth_method,
+        'local_id': local_id,
+        'remote_id': remote_id,
+        'psk_encrypted': psk_encrypted,
+    }
+    out = [x for x in items if x.get('peer') != peer_name]
+    out.append(item)
+    _write_ipsec_collection(IPSEC_IDENTITIES_FILE, out)
+    safe = dict(item)
+    safe.pop('psk_encrypted', None)
+    safe['has_psk'] = True
+    return safe
+
+
+def upsert_ipsec_phase1_profile_service(payload):
+    if not isinstance(payload, dict):
+        raise ValueError('phase1 profile payload must be object')
+    item = {
+        'name': _valid_name(payload.get('name')),
+        'encryption': _valid_name(payload.get('encryption'), 'encryption').lower(),
+        'hash': _valid_name(payload.get('hash'), 'hash').lower(),
+        'dh_group': _valid_name(payload.get('dh_group'), 'dh_group').lower(),
+        'lifetime': str(normalize_config_value(payload.get('lifetime')) or '1d'),
+        'proposal_check': str(normalize_config_value(payload.get('proposal_check')) or 'obey').lower(),
+    }
+    item['proposal_string'] = _build_phase1_proposal_string(item['encryption'], item['hash'], item['dh_group'])
+    items = _read_ipsec_collection(IPSEC_PHASE1_PROFILES_FILE)
+    out = [x for x in items if x.get('name') != item['name']]
+    out.append(item)
+    _write_ipsec_collection(IPSEC_PHASE1_PROFILES_FILE, out)
+    return item
+
+
+def upsert_ipsec_phase2_proposal_service(payload):
+    if not isinstance(payload, dict):
+        raise ValueError('phase2 proposal payload must be object')
+    pfs_raw = normalize_config_value(payload.get('pfs_group'))
+    item = {
+        'name': _valid_name(payload.get('name')),
+        'encryption': _valid_name(payload.get('encryption'), 'encryption').lower(),
+        'auth': _valid_name(payload.get('auth'), 'auth').lower(),
+        'pfs_group': _valid_name(pfs_raw, 'pfs_group').lower() if pfs_raw else None,
+        'lifetime': str(normalize_config_value(payload.get('lifetime')) or '1h'),
+    }
+    item['proposal_string'] = _build_phase2_proposal_string(item['encryption'], item['auth'], item.get('pfs_group'))
+    items = _read_ipsec_collection(IPSEC_PHASE2_PROPOSALS_FILE)
+    out = [x for x in items if x.get('name') != item['name']]
+    out.append(item)
+    _write_ipsec_collection(IPSEC_PHASE2_PROPOSALS_FILE, out)
+    return item
+
+
+def upsert_ipsec_policy_service(payload):
+    if not isinstance(payload, dict):
+        raise ValueError('policy payload must be object')
+    item = {
+        'name': _valid_name(payload.get('name')),
+        'peer': _valid_name(payload.get('peer'), 'peer'),
+        'local_ts': _normalize_ts_list(payload.get('local_ts'), 'local_ts'),
+        'remote_ts': _normalize_ts_list(payload.get('remote_ts'), 'remote_ts'),
+        'proposal': _valid_name(payload.get('proposal'), 'proposal'),
+        'action': str(normalize_config_value(payload.get('action')) or 'encrypt').lower(),
+        'level': str(normalize_config_value(payload.get('level')) or 'require').lower(),
+        'mode': str(normalize_config_value(payload.get('mode')) or 'tunnel').lower(),
+        'start_action': str(normalize_config_value(payload.get('start_action')) or 'start').lower(),
+        'enabled': bool(payload.get('enabled', True)),
+    }
+    _ensure_ipsec_peer_exists(item['peer'])
+    _ensure_ipsec_phase2_exists(item['proposal'])
+    if not item['local_ts'] or not item['remote_ts']:
+        raise ValueError('local_ts and remote_ts are required')
+    items = _read_ipsec_collection(IPSEC_POLICIES_FILE)
+    out = [x for x in items if x.get('name') != item['name']]
+    out.append(item)
+    _write_ipsec_collection(IPSEC_POLICIES_FILE, out)
+    return item
+
+
+def delete_ipsec_peer_service(name):
+    peer_name = str(name)
+    policies = _read_ipsec_collection(IPSEC_POLICIES_FILE)
+    if any(x.get('peer') == peer_name for x in policies):
+        raise ValueError('peer is referenced by policy')
+    peers = _read_ipsec_collection(IPSEC_PEERS_FILE)
+    existing = next((x for x in peers if x.get('name') == peer_name), None)
+    if existing is None:
+        raise LookupError('peer not found')
+    _write_ipsec_collection(IPSEC_PEERS_FILE, [x for x in peers if x.get('name') != peer_name])
+    ids = _read_ipsec_collection(IPSEC_IDENTITIES_FILE)
+    _write_ipsec_collection(IPSEC_IDENTITIES_FILE, [x for x in ids if x.get('peer') != peer_name])
+    return existing
+
+
+def delete_ipsec_policy_service(name):
+    policy_name = str(name)
+    items = _read_ipsec_collection(IPSEC_POLICIES_FILE)
+    existing = next((x for x in items if x.get('name') == policy_name), None)
+    if existing is None:
+        raise LookupError('policy not found')
+    _write_ipsec_collection(IPSEC_POLICIES_FILE, [x for x in items if x.get('name') != policy_name])
+    return existing
+
+
+def _log_ipsec_event(event_type, payload):
+    data = _read_json_file_or_default(IPSEC_EVENTS_FILE, {'items': []})
+    items = data.get('items') if isinstance(data.get('items'), list) else []
+    items.append({'t': int(time.time()), 'event': str(event_type), 'payload': payload})
+    items = items[-500:]
+    _write_json_file(IPSEC_EVENTS_FILE, {'items': items})
+
+
+def list_ipsec_events_service():
+    data = _read_json_file_or_default(IPSEC_EVENTS_FILE, {'items': []})
+    return data.get('items') if isinstance(data.get('items'), list) else []
+
+
+def _vici_session():
+    try:
+        import vici  # type: ignore
+        return vici.Session()
+    except Exception as exc:
+        raise RuntimeError(f'VICI unavailable: {exc}')
+
+
+def _collect_ipsec_refs():
+    peers = list_ipsec_peers_service()
+    identities = _read_ipsec_collection(IPSEC_IDENTITIES_FILE)
+    phase1 = {x['name']: x for x in list_ipsec_phase1_profiles_service()}
+    phase2 = {x['name']: x for x in list_ipsec_phase2_proposals_service()}
+    policies = list_ipsec_policies_service()
+    by_peer_identity = {x.get('peer'): x for x in identities}
+    by_peer_policies = {}
+    for p in policies:
+        by_peer_policies.setdefault(p.get('peer'), []).append(p)
+    out = []
+    for peer in peers:
+        profile = phase1.get(peer.get('phase1_profile'))
+        if profile is None:
+            raise ValueError(f"peer {peer.get('name')} references unknown phase1 profile")
+        identity = by_peer_identity.get(peer.get('name'))
+        if identity is None:
+            raise ValueError(f"peer {peer.get('name')} has no identity")
+        child_policies = by_peer_policies.get(peer.get('name'), [])
+        if not child_policies:
+            raise ValueError(f"peer {peer.get('name')} has no policies")
+        out.append((peer, identity, profile, child_policies, phase2))
+    return out
+
+
+def _build_vici_connection_for_peer(peer, identity, profile, policies, phase2_index):
+    children = {}
+    for policy in policies:
+        prop2 = phase2_index.get(policy.get('proposal'))
+        if prop2 is None:
+            raise ValueError(f"policy {policy.get('name')} references unknown phase2 proposal")
+        children[str(policy['name'])] = {
+            'local_ts': policy.get('local_ts', []),
+            'remote_ts': policy.get('remote_ts', []),
+            'esp_proposals': [str(prop2.get('proposal_string'))],
+            'start_action': str(policy.get('start_action') or 'start'),
+            'mode': str(policy.get('mode') or 'tunnel'),
+        }
+    return {
+        str(peer['name']): {
+            'version': '2',
+            'local_addrs': peer.get('local_addrs', []),
+            'remote_addrs': peer.get('remote_addrs', []),
+            'local': {
+                'auth': 'psk',
+                'id': str(identity.get('local_id') or ''),
+            },
+            'remote': {
+                'auth': 'psk',
+                'id': str(identity.get('remote_id') or ''),
+            },
+            'children': children,
+            'proposals': [str(profile.get('proposal_string'))],
+            'unique': 'replace',
+        }
+    }
+
+
+def _build_vici_secret_for_peer(peer, identity):
+    psk = _secret_decrypt(identity.get('psk_encrypted'))
+    return {
+        f"ike-{peer['name']}": {
+            'type': 'IKE',
+            'data': psk,
+            'owners': [str(identity.get('local_id') or ''), str(identity.get('remote_id') or '')],
+        }
+    }
+
+
+def _sanitize_vici_sas(raw):
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, list):
+        return {'items': raw}
+    return {'items': []}
+
+
+def _extract_active_peers_from_sas(sas):
+    out = []
+    if isinstance(sas, dict):
+        for k, v in sas.items():
+            if not isinstance(v, dict):
+                continue
+            out.append({
+                'status': 'up',
+                'peer': k,
+                'remote_address': v.get('remote-host') or v.get('remote-hosts') or '',
+                'ike_version': v.get('version') or '2',
+                'profile': v.get('name') or '',
+                'uptime': v.get('established') or '',
+                'rekey': v.get('rekey-time') or '',
+                'state': v.get('state') or 'ESTABLISHED',
+            })
+    return out
+
+
+def _extract_installed_sas_from_sas(sas):
+    out = []
+    if not isinstance(sas, dict):
+        return out
+    for _, ike_sa in sas.items():
+        if not isinstance(ike_sa, dict):
+            continue
+        children = ike_sa.get('child-sas')
+        if not isinstance(children, dict):
+            continue
+        for child_name, child in children.items():
+            if not isinstance(child, dict):
+                continue
+            out.append({
+                'state': child.get('state') or 'INSTALLED',
+                'child_sa': child_name,
+                'spi_in': child.get('spi-in') or '',
+                'spi_out': child.get('spi-out') or '',
+                'local_ts': child.get('local-ts') or [],
+                'remote_ts': child.get('remote-ts') or [],
+                'esp_proposal': child.get('proposal') or '',
+                'bytes_in': child.get('bytes-in') or 0,
+                'bytes_out': child.get('bytes-out') or 0,
+            })
+    return out
+
+
+def _run_ip_xfrm_best_effort():
+    out = {'state': '', 'policy': ''}
+    try:
+        state = subprocess.run(['ip', 'xfrm', 'state'], check=False, capture_output=True, text=True)
+        out['state'] = state.stdout or ''
+    except Exception:
+        pass
+    try:
+        policy = subprocess.run(['ip', 'xfrm', 'policy'], check=False, capture_output=True, text=True)
+        out['policy'] = policy.stdout or ''
+    except Exception:
+        pass
+    return out
+
+
+def list_ipsec_active_peers_service():
+    try:
+        session = _vici_session()
+        sas = _sanitize_vici_sas(session.list_sas())
+        return _extract_active_peers_from_sas(sas)
+    except Exception:
+        return []
+
+
+def list_ipsec_installed_sas_service():
+    try:
+        session = _vici_session()
+        sas = _sanitize_vici_sas(session.list_sas())
+        items = _extract_installed_sas_from_sas(sas)
+    except Exception:
+        items = []
+    xfrm = _run_ip_xfrm_best_effort()
+    return {'items': items, 'xfrm': xfrm}
+
+
+def load_ipsec_peer_service(peer_name):
+    target = str(peer_name)
+    refs = _collect_ipsec_refs()
+    peer_data = next((r for r in refs if r[0].get('name') == target), None)
+    if peer_data is None:
+        raise LookupError('peer not found')
+    peer, identity, profile, policies, phase2 = peer_data
+    conn_obj = _build_vici_connection_for_peer(peer, identity, profile, policies, phase2)
+    secret_obj = _build_vici_secret_for_peer(peer, identity)
+    session = _vici_session()
+    session.load_shared(secret_obj)
+    session.load_conn(conn_obj)
+    _log_ipsec_event('load_peer', {'peer': target})
+    return {'peer': target, 'loaded': True}
+
+
+def initiate_ipsec_policy_service(policy_name):
+    target = str(policy_name)
+    policy = next((x for x in list_ipsec_policies_service() if x.get('name') == target), None)
+    if policy is None:
+        raise LookupError('policy not found')
+    session = _vici_session()
+    session.initiate({'child': target, 'timeout': 30})
+    _log_ipsec_event('initiate', {'policy': target})
+    return {'policy': target, 'initiated': True}
+
+
+def terminate_ipsec_peer_service(peer_name):
+    target = str(peer_name)
+    session = _vici_session()
+    session.terminate({'ike': target, 'force': True})
+    _log_ipsec_event('terminate', {'peer': target})
+    return {'peer': target, 'terminated': True}
+
+
+def apply_ipsec_config_service():
+    refs = _collect_ipsec_refs()
+    loaded = []
+    initiated = []
+    warnings = []
+    session = _vici_session()
+    for peer, identity, profile, policies, phase2 in refs:
+        conn_obj = _build_vici_connection_for_peer(peer, identity, profile, policies, phase2)
+        secret_obj = _build_vici_secret_for_peer(peer, identity)
+        session.load_shared(secret_obj)
+        session.load_conn(conn_obj)
+        loaded.append(str(peer.get('name')))
+        for policy in policies:
+            if bool(policy.get('enabled', True)) and str(policy.get('start_action') or 'start') == 'start':
+                try:
+                    session.initiate({'child': str(policy.get('name')), 'timeout': 30})
+                    initiated.append(str(policy.get('name')))
+                except Exception as exc:
+                    warnings.append(f"initiate failed for {policy.get('name')}: {exc}")
+    sas = _sanitize_vici_sas(session.list_sas())
+    active = _extract_active_peers_from_sas(sas)
+    installed_items = _extract_installed_sas_from_sas(sas)
+    xfrm = _run_ip_xfrm_best_effort()
+    if not xfrm.get('state') and not xfrm.get('policy'):
+        warnings.append('xfrm probe unavailable')
+    _log_ipsec_event('apply', {'loaded_peers': loaded, 'initiated_policies': initiated})
+    return {
+        'loaded_peers': loaded,
+        'initiated_policies': initiated,
+        'active_peers': active,
+        'installed_sas': {'items': installed_items, 'xfrm': xfrm},
+        'warnings': warnings,
+    }
