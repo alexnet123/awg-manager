@@ -78,7 +78,14 @@ FIREWALL_MAPS_FILE = os.path.join(bd_path, 'firewall_maps.json')
 FIREWALL_TABLES_FILE = os.path.join(bd_path, 'firewall_tables.json')
 FIREWALL_MANAGED_TABLES_FILE = os.path.join(bd_path, 'firewall_managed_tables.json')
 FIREWALL_STATS_FILE = os.path.join(bd_path, 'firewall_stats.json')
+IPSEC_PEERS_FILE = os.path.join(bd_path, 'ipsec_peers.json')
+IPSEC_IDENTITIES_FILE = os.path.join(bd_path, 'ipsec_identities.json')
+IPSEC_PHASE1_PROFILES_FILE = os.path.join(bd_path, 'ipsec_phase1_profiles.json')
+IPSEC_PHASE2_PROPOSALS_FILE = os.path.join(bd_path, 'ipsec_phase2_proposals.json')
+IPSEC_POLICIES_FILE = os.path.join(bd_path, 'ipsec_policies.json')
+IPSEC_EVENTS_FILE = os.path.join(bd_path, 'ipsec_events.json')
 FIREWALL_TABLE_FAMILY = 'inet'
+FIREWALL_SUPPORTED_TABLE_FAMILIES = ('inet', 'ip', 'ip6', 'bridge', 'netdev')
 FIREWALL_TABLE_PREFIX = ''
 FIREWALL_SCHEMA = {
     'family': FIREWALL_TABLE_FAMILY,
@@ -322,6 +329,164 @@ def normalize_config_value(value):
     return value if value else None
 
 
+def normalize_nft_timeout(value):
+    timeout = normalize_config_value(value)
+    if timeout is None:
+        return None
+    raw = str(timeout).strip().lower()
+    compact = re.sub(r'\s+', '', raw)
+    if compact in ('inf', 'infinite', 'infinity', 'perm', 'permanent', 'never'):
+        raise ValueError('timeout must be finite')
+
+    # MikroTik-like format: "41d 15:00:00" or "15:00:00".
+    mk_match = re.fullmatch(r'(?:(\d+)d\s+)?(\d{1,2}):([0-5]\d):([0-5]\d)', raw)
+    if mk_match:
+        days = int(mk_match.group(1) or 0)
+        hours = int(mk_match.group(2))
+        minutes = int(mk_match.group(3))
+        seconds = int(mk_match.group(4))
+        if hours > 23:
+            raise ValueError('timeout hour must be 0..23 in "Xd HH:MM:SS" format')
+        total_seconds = (days * 86400) + (hours * 3600) + (minutes * 60) + seconds
+        if total_seconds <= 0:
+            raise ValueError('timeout must be greater than zero')
+        return f'{total_seconds}s'
+
+    # Bare integer: seconds.
+    if re.fullmatch(r'\d+', raw):
+        total_seconds = int(raw)
+        if total_seconds <= 0:
+            raise ValueError('timeout must be greater than zero')
+        return f'{total_seconds}s'
+
+    # nft-style duration, including combined units like "2h30m10s".
+    parts = re.findall(r'([1-9]\d*)(ms|s|m|h|d|w)', compact)
+    if not parts or ''.join(f'{num}{unit}' for num, unit in parts) != compact:
+        raise ValueError('timeout is invalid; use "10m", "2h30m", or "1d 15:00:00"')
+    total_ms = 0
+    for raw_num, unit in parts:
+        number = int(raw_num)
+        if unit == 'ms':
+            total_ms += number
+        elif unit == 's':
+            total_ms += number * 1000
+        elif unit == 'm':
+            total_ms += number * 60 * 1000
+        elif unit == 'h':
+            total_ms += number * 3600 * 1000
+        elif unit == 'd':
+            total_ms += number * 86400 * 1000
+        elif unit == 'w':
+            total_ms += number * 7 * 86400 * 1000
+    if total_ms <= 0:
+        raise ValueError('timeout must be greater than zero')
+    return f'{max(1, (total_ms + 999) // 1000)}s'
+
+
+def timeout_to_seconds(value):
+    timeout = normalize_config_value(value)
+    if timeout is None:
+        return None
+    try:
+        normalized = normalize_nft_timeout(timeout)
+    except ValueError:
+        return None
+    match = re.fullmatch(r'([1-9][0-9]*)s', normalized)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def enrich_collection_item_runtime(item, now_ts=None):
+    payload = dict(item or {})
+    if now_ts is None:
+        now_ts = int(time.time())
+    else:
+        now_ts = int(now_ts)
+
+    created_at_raw = payload.get('created_at')
+    started_at_raw = payload.get('timeout_started_at')
+    timeout_seconds = timeout_to_seconds(payload.get('timeout'))
+    enabled = bool(payload.get('enabled', True))
+
+    created_at = None
+    try:
+        created_at = int(created_at_raw) if created_at_raw is not None else None
+    except Exception:
+        created_at = None
+
+    timeout_started_at = None
+    try:
+        timeout_started_at = int(started_at_raw) if started_at_raw is not None else None
+    except Exception:
+        timeout_started_at = None
+
+    timeout_remaining_seconds = None
+    if enabled and timeout_seconds and timeout_started_at:
+        timeout_remaining_seconds = max(0, timeout_seconds - max(0, now_ts - timeout_started_at))
+
+    payload['created_at'] = created_at
+    payload['timeout_started_at'] = timeout_started_at
+    payload['timeout_seconds'] = timeout_seconds
+    payload['timeout_remaining_seconds'] = timeout_remaining_seconds
+    return payload
+
+
+def _cleanup_expired_collection_rows(rows, now_ts):
+    changed = False
+    removed_active = 0
+    kept = []
+    for row in rows:
+        payload = dict(row or {})
+        timeout_seconds = timeout_to_seconds(payload.get('timeout'))
+        if not timeout_seconds:
+            kept.append(payload)
+            continue
+        started = payload.get('timeout_started_at')
+        if started is None:
+            started = payload.get('created_at')
+            if started is not None:
+                payload['timeout_started_at'] = started
+                changed = True
+        try:
+            started_ts = int(started) if started is not None else None
+        except Exception:
+            started_ts = None
+        if started_ts is None:
+            kept.append(payload)
+            continue
+        if now_ts >= started_ts + int(timeout_seconds):
+            changed = True
+            if bool(payload.get('enabled', True)):
+                removed_active += 1
+            continue
+        kept.append(payload)
+    return kept, changed, removed_active
+
+
+def _set_runtime_signature(item):
+    payload = dict(item or {})
+    elems = [str(x).strip() for x in (payload.get('elements') or []) if normalize_config_value(x) is not None]
+    return (
+        str(payload.get('name') or ''),
+        bool(payload.get('enabled', True)),
+        normalize_config_value(payload.get('timeout')),
+        tuple(sorted(set(elems))),
+    )
+
+
+def _map_runtime_signature(item):
+    payload = dict(item or {})
+    entries = [str(x).strip() for x in (payload.get('entries') or []) if normalize_config_value(x) is not None]
+    return (
+        str(payload.get('name') or ''),
+        bool(payload.get('enabled', True)),
+        normalize_config_value(payload.get('timeout')),
+        str(payload.get('kind') or ''),
+        tuple(sorted(set(entries))),
+    )
+
+
 def load_api_key():
     env_api_key = normalize_config_value(os.environ.get(API_KEY_ENV_VAR))
     if env_api_key is not None:
@@ -519,7 +684,26 @@ def _write_managed_tables_file(data):
     _write_json_file(FIREWALL_MANAGED_TABLES_FILE, {'tables': sorted(set(clean))})
 
 
-def _list_inet_tables_runtime():
+def _managed_table_key(family, table_name):
+    return f'{str(family).lower()}:{str(table_name).lower()}'
+
+
+def _parse_managed_table_key(value):
+    raw = normalize_config_value(value)
+    if raw is None:
+        return None
+    text = str(raw).lower()
+    if ':' in text:
+        fam, name = text.split(':', 1)
+        fam = fam.strip()
+        name = name.strip()
+        if fam in FIREWALL_SUPPORTED_TABLE_FAMILIES and name:
+            return (fam, name)
+    # Backward compatibility with legacy format: "table_name" means inet.
+    return (FIREWALL_TABLE_FAMILY, text)
+
+
+def _list_runtime_tables():
     res = subprocess.run(
         ['nft', 'list', 'tables'],
         check=False,
@@ -532,10 +716,13 @@ def _list_inet_tables_runtime():
     out = []
     for line in (res.stdout or '').splitlines():
         line = line.strip()
-        if line.startswith('table inet '):
-            name = line.split('table inet ', 1)[1].strip()
-            if name:
-                out.append(name)
+        match = re.match(r'^table\s+([A-Za-z0-9_]+)\s+([A-Za-z0-9_.:-]+)$', line)
+        if not match:
+            continue
+        family = match.group(1).lower()
+        name = match.group(2).strip().lower()
+        if family in FIREWALL_SUPPORTED_TABLE_FAMILIES and name:
+            out.append((family, name))
     return sorted(set(out))
 
 
@@ -554,6 +741,117 @@ def _write_firewall_rules_file(rules):
         json.dump({'rules': rules}, f, ensure_ascii=False, indent=2)
 
 
+def _collect_firewall_table_defs():
+    table_defs = {
+        (FIREWALL_TABLE_FAMILY, str(table_name).lower()): list(chains)
+        for table_name, chains in FIREWALL_DEFAULT_TABLE_DEFS.items()
+    }
+    custom_tables = _read_firewall_tables_file().get('tables', [])
+    for row in custom_tables:
+        enabled = row.get('enabled', True)
+        if not isinstance(enabled, bool):
+            enabled = str(enabled).lower() in ('1', 'true', 'yes', 'on')
+        if not enabled:
+            continue
+        family = (normalize_config_value(row.get('family')) or FIREWALL_TABLE_FAMILY).lower()
+        table_name = normalize_config_value(row.get('table_name'))
+        chain_name = normalize_config_value(row.get('chain_name'))
+        chain_type = normalize_config_value(row.get('chain_type'))
+        hook_name = normalize_config_value(row.get('hook'))
+        policy = normalize_config_value(row.get('policy')) or 'accept'
+        if family not in FIREWALL_SUPPORTED_TABLE_FAMILIES:
+            continue
+        if table_name is None or chain_name is None or chain_type is None or hook_name is None:
+            continue
+        try:
+            priority = int(row.get('priority'))
+        except Exception:
+            continue
+        dev = normalize_config_value(row.get('device'))
+        table_key = (family, str(table_name).strip().lower())
+        table_defs.setdefault(table_key, [])
+        table_defs[table_key].append((str(chain_name), str(chain_type), str(hook_name), priority, (str(dev) if dev else None), str(policy)))
+    return table_defs
+
+
+def _append_table_script_lines(script_lines, table_family, nft_table, table_defs, sets_data, maps_data, rules, include_runtime_objects=True):
+    table_name = f'{FIREWALL_TABLE_PREFIX}{nft_table}'
+    script_lines.append(f'add table {table_family} {table_name}')
+    for chain_info in table_defs.get((table_family, nft_table), []):
+        if len(chain_info) == 4:
+            chain_name, chain_type, hook_name, priority = chain_info
+            device = None
+            policy = 'accept'
+        else:
+            chain_name, chain_type, hook_name, priority, device, policy = chain_info
+        dev_clause = f' device "{device}"' if device else ''
+        script_lines.append(
+            f'add chain {table_family} {table_name} {chain_name} '
+            f'{{ type {chain_type} hook {hook_name}{dev_clause} priority {priority}; policy {policy}; }}'
+        )
+    if include_runtime_objects:
+        # create shared sets in table
+        for item in sets_data.get('addr', []):
+            if item.get('name') and item.get('enabled', True):
+                elems = [x for x in (item.get('elements') or []) if x]
+                flags = []
+                if any('/' in str(x) for x in elems):
+                    flags.append('interval')
+                timeout = normalize_config_value(item.get('timeout'))
+                if timeout:
+                    flags.append('timeout')
+                flags_clause = f' flags {",".join(flags)};' if flags else ''
+                timeout_clause = f' timeout {timeout};' if timeout else ''
+                script_lines.append(f'add set {table_family} {table_name} {item["name"]} {{ type ipv4_addr;{flags_clause}{timeout_clause} }}')
+                if elems:
+                    script_lines.append(f'add element {table_family} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
+        for item in sets_data.get('port', []):
+            if item.get('name') and item.get('enabled', True):
+                timeout = normalize_config_value(item.get('timeout'))
+                flags_clause = ' flags timeout;' if timeout else ''
+                timeout_clause = f' timeout {timeout};' if timeout else ''
+                script_lines.append(f'add set {table_family} {table_name} {item["name"]} {{ type inet_service;{flags_clause}{timeout_clause} }}')
+                elems = [x for x in (item.get('elements') or []) if x]
+                if elems:
+                    script_lines.append(f'add element {table_family} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
+        for item in sets_data.get('iface', []):
+            if item.get('name') and item.get('enabled', True):
+                timeout = normalize_config_value(item.get('timeout'))
+                flags_clause = ' flags timeout;' if timeout else ''
+                timeout_clause = f' timeout {timeout};' if timeout else ''
+                script_lines.append(f'add set {table_family} {table_name} {item["name"]} {{ type ifname;{flags_clause}{timeout_clause} }}')
+                elems = [f'"{x}"' for x in (item.get('elements') or []) if x]
+                if elems:
+                    script_lines.append(f'add element {table_family} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
+        # create shared maps and vmaps in table
+        for item in maps_data.get('map', []):
+            if item.get('name') and item.get('enabled', True):
+                built = _build_map_declaration_and_elements(item)
+                if not built:
+                    continue
+                decl_stmt, elems = built
+                script_lines.append(f'add map {table_family} {table_name} {item["name"]} {{ {decl_stmt} }}')
+                script_lines.append(f'add element {table_family} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
+        for item in maps_data.get('vmap', []):
+            if item.get('name') and item.get('enabled', True):
+                built = _build_map_declaration_and_elements(item)
+                if not built:
+                    continue
+                decl_stmt, elems = built
+                script_lines.append(f'add map {table_family} {table_name} {item["name"]} {{ {decl_stmt} }}')
+                script_lines.append(f'add element {table_family} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
+    for rule in rules:
+        if not rule.get('enabled', True):
+            continue
+        rule_table = str(rule.get('table') or '').lower()
+        if rule_table != nft_table:
+            continue
+        if str(rule.get('family') or FIREWALL_TABLE_FAMILY).lower() != table_family:
+            continue
+        rendered = _render_firewall_rule(rule, table_family=table_family)
+        script_lines.append(f'add rule {table_family} {table_name} {rule["chain"]} {rendered}')
+
+
 def _normalize_firewall_rule(payload):
     if not isinstance(payload, dict):
         raise ValueError('Rule payload must be an object')
@@ -567,6 +865,8 @@ def _normalize_firewall_rule(payload):
     dst = normalize_config_value(payload.get('dst'))
     in_interface = normalize_config_value(payload.get('in_interface'))
     out_interface = normalize_config_value(payload.get('out_interface'))
+    ibrname = normalize_config_value(payload.get('ibrname'))
+    obrname = normalize_config_value(payload.get('obrname'))
     dport = normalize_config_value(payload.get('dport'))
     sport = normalize_config_value(payload.get('sport'))
     comment = normalize_config_value(payload.get('comment'))
@@ -584,6 +884,10 @@ def _normalize_firewall_rule(payload):
     ct_mark_set = normalize_config_value(payload.get('ct_mark_set'))
     log_prefix = normalize_config_value(payload.get('log_prefix'))
     log_level = normalize_config_value(payload.get('log_level'))
+    log_flags_raw = payload.get('log_flags')
+    log_group = normalize_config_value(payload.get('log_group'))
+    log_snaplen = normalize_config_value(payload.get('log_snaplen'))
+    log_queue_threshold = normalize_config_value(payload.get('log_queue_threshold'))
     fib_expr = normalize_config_value(payload.get('fib_expr'))
     socket_expr = normalize_config_value(payload.get('socket_expr'))
     rt_expr = normalize_config_value(payload.get('rt_expr'))
@@ -633,20 +937,27 @@ def _normalize_firewall_rule(payload):
     counter = payload.get('counter', False)
     enabled = payload.get('enabled', True)
 
-    if family != FIREWALL_TABLE_FAMILY:
-        raise ValueError(f'family must be {FIREWALL_TABLE_FAMILY}')
+    family = str(family).lower()
+    if family not in (FIREWALL_TABLE_FAMILY, 'bridge'):
+        raise ValueError('family must be inet or bridge')
 
     table_mode = None
     chain_mode = None
     allowed_chains = ()
-    if nft_table in ('filter', 'nat', 'raw', 'mangle'):
+    selected_chain = None
+    if family == FIREWALL_TABLE_FAMILY and nft_table in ('filter', 'nat', 'raw', 'mangle'):
         table_mode = nft_table
         allowed_chains = tuple(FIREWALL_SCHEMA['tables'][nft_table]['chains'])
     else:
         if not re.fullmatch(r'[a-zA-Z0-9_.-]+', str(nft_table)):
             raise ValueError('table name contains invalid characters')
         custom_rows = _read_firewall_tables_file().get('tables', [])
-        table_rows = [row for row in custom_rows if isinstance(row, dict) and str(row.get('table_name', '')).lower() == nft_table]
+        table_rows = [
+            row for row in custom_rows
+            if isinstance(row, dict)
+            and str((row.get('family') or FIREWALL_TABLE_FAMILY)).lower() == family
+            and str(row.get('table_name', '')).lower() == nft_table
+        ]
         if not table_rows:
             raise ValueError(f'table "{nft_table}" is not found among built-in or custom tables')
         allowed_chains = tuple(str(row.get('chain_name', '')).lower() for row in table_rows if row.get('chain_name'))
@@ -673,6 +984,10 @@ def _normalize_firewall_rule(payload):
             raise ValueError('target_chain must be a user-defined chain, not base hook chain')
     elif target_chain is not None:
         raise ValueError('target_chain is only valid for jump/goto')
+    if family == 'bridge' and action == 'reject':
+        selected_hook = str((selected_chain or {}).get('hook') or '').lower()
+        if selected_hook not in ('input', 'prerouting'):
+            raise ValueError('action=reject is valid for family=bridge only when chain hook is input or prerouting')
     if reject_type is not None:
         if action != 'reject':
             raise ValueError('reject_type is only valid when action=reject')
@@ -722,6 +1037,10 @@ def _normalize_firewall_rule(payload):
         raise ValueError('in_interface contains invalid characters')
     if out_interface is not None and not re.fullmatch(r'[A-Za-z0-9_.:-]+', str(out_interface)):
         raise ValueError('out_interface contains invalid characters')
+    if ibrname is not None and not re.fullmatch(r'[A-Za-z0-9_.:-]+', str(ibrname)):
+        raise ValueError('ibrname contains invalid characters')
+    if obrname is not None and not re.fullmatch(r'[A-Za-z0-9_.:-]+', str(obrname)):
+        raise ValueError('obrname contains invalid characters')
     if not isinstance(enabled, bool):
         enabled = str(enabled).lower() in ('1', 'true', 'yes', 'on')
     if ct_state is not None:
@@ -872,14 +1191,22 @@ def _normalize_firewall_rule(payload):
                 raise ValueError(f'{fld} must be valid IPv4/IPv6 address')
     if vlan_id is not None:
         if not re.fullmatch(r'[0-9]{1,4}', str(vlan_id)):
-            raise ValueError('vlan_id must be integer in range 0..4095')
-        if int(str(vlan_id)) > 4095:
-            raise ValueError('vlan_id must be integer in range 0..4095')
+            raise ValueError('vlan_id must be integer in range 1..4095')
+        if int(str(vlan_id)) < 1 or int(str(vlan_id)) > 4095:
+            raise ValueError('vlan_id must be integer in range 1..4095')
     for fld, val in (('ether_src', ether_src), ('ether_dst', ether_dst)):
         if val is not None and not re.fullmatch(r'([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}', str(val)):
             raise ValueError(f'{fld} must be MAC like aa:bb:cc:dd:ee:ff')
-    if ether_type is not None and not re.fullmatch(r'0x[0-9a-fA-F]{1,4}|[0-9]{1,5}', str(ether_type)):
-        raise ValueError('ether_type must be hex or integer (e.g. 0x0800)')
+    if ether_type is not None:
+        ether_type_str = str(ether_type)
+        if not re.fullmatch(r'0x[0-9a-fA-F]{1,4}|[0-9]{1,5}', ether_type_str):
+            raise ValueError('ether_type must be hex or integer (e.g. 0x0800)')
+        if ether_type_str.lower().startswith('0x'):
+            ether_type_val = int(ether_type_str, 16)
+        else:
+            ether_type_val = int(ether_type_str)
+        if ether_type_val < 0 or ether_type_val > 65535:
+            raise ValueError('ether_type integer value must be in range 0..65535')
     if mark_set is not None and not re.fullmatch(r'0x[0-9a-fA-F]+|[0-9]+', str(mark_set)):
         raise ValueError('mark_set must be integer or hex (e.g. 10 or 0x1)')
     if ct_mark_set is not None and not re.fullmatch(r'0x[0-9a-fA-F]+|[0-9]+', str(ct_mark_set)):
@@ -890,6 +1217,48 @@ def _normalize_firewall_rule(payload):
             raise ValueError('log_level must be one of emerg, alert, crit, err, warn, notice, info, debug')
     if log_prefix is not None:
         log_prefix = str(log_prefix).replace('"', "'")
+    log_flags = None
+    if log_flags_raw is not None:
+        if isinstance(log_flags_raw, list):
+            raw_parts = []
+            for token in log_flags_raw:
+                if token is None:
+                    continue
+                raw_parts.extend([x for x in str(token).split(',') if x.strip()])
+        else:
+            raw_parts = [x for x in str(log_flags_raw).split(',') if x.strip()]
+        allowed_log_flags = {
+            'tcp sequence',
+            'tcp options',
+            'ip options',
+            'skuid',
+            'ether',
+            'all',
+        }
+        normalized_flags = []
+        for token in raw_parts:
+            normalized = str(token).strip().lower()
+            if normalized not in allowed_log_flags:
+                raise ValueError('log_flags supports only: tcp sequence, tcp options, ip options, skuid, ether, all')
+            if normalized not in normalized_flags:
+                normalized_flags.append(normalized)
+        log_flags = normalized_flags if normalized_flags else None
+    if log_group is not None:
+        if not re.fullmatch(r'[0-9]{1,5}', str(log_group)):
+            raise ValueError('log_group must be integer in range 0..65535')
+        if int(str(log_group)) > 65535:
+            raise ValueError('log_group must be integer in range 0..65535')
+    if log_group is not None and log_flags is not None:
+        raise ValueError('log_group and log_flags are mutually exclusive')
+    for field_name, field_value in (('log_snaplen', log_snaplen), ('log_queue_threshold', log_queue_threshold)):
+        if field_value is None:
+            continue
+        if not re.fullmatch(r'[0-9]{1,10}', str(field_value)):
+            raise ValueError(f'{field_name} must be integer in range 0..4294967295')
+        if int(str(field_value)) > 4294967295:
+            raise ValueError(f'{field_name} must be integer in range 0..4294967295')
+    if (log_snaplen is not None or log_queue_threshold is not None) and log_group is None:
+        raise ValueError('log_snaplen/log_queue_threshold require log_group')
     if limit_rate is not None:
         if not re.fullmatch(r'[0-9]+/(second|minute|hour|day)', str(limit_rate).lower()):
             raise ValueError('limit_rate must be like 10/second or 200/minute')
@@ -918,6 +1287,71 @@ def _normalize_firewall_rule(payload):
     if ct_helper_set is not None or ct_timeout_set is not None or ct_expectation_set is not None:
         raise ValueError('ct_helper_set/ct_timeout_set/ct_expectation_set require nft stateful ct objects and are not enabled yet')
 
+    if family == 'bridge':
+        bridge_disallowed = (
+            ('src', src),
+            ('dst', dst),
+            ('in_interface', in_interface),
+            ('out_interface', out_interface),
+            ('user_id', user_id),
+            ('hour', hour),
+            ('dscp', dscp),
+            ('nat_type', nat_type),
+            ('to_addr', to_addr),
+            ('to_port', to_port),
+            ('nat_random', nat_random),
+            ('nat_fully_random', nat_fully_random),
+            ('nat_persistent', nat_persistent),
+            ('notrack', notrack),
+            ('mark_set', mark_set),
+            ('ct_mark_set', ct_mark_set),
+            ('fib_expr', fib_expr),
+            ('socket_expr', socket_expr),
+            ('rt_expr', rt_expr),
+            ('exthdr_expr', exthdr_expr),
+            ('raw_expr', raw_expr),
+            ('nftrace', nftrace),
+            ('tcp_flags', tcp_flags),
+            ('icmp_type', icmp_type),
+            ('icmp_code', icmp_code),
+            ('icmpv6_type', icmpv6_type),
+            ('icmpv6_code', icmpv6_code),
+            ('meta_length', meta_length),
+            ('meta_priority', meta_priority),
+            ('meta_cpu', meta_cpu),
+            ('meta_pkttype', meta_pkttype),
+            ('meta_iiftype', meta_iiftype),
+            ('meta_oiftype', meta_oiftype),
+            ('meta_iifgroup', meta_iifgroup),
+            ('meta_oifgroup', meta_oifgroup),
+            ('mark_match', mark_match),
+            ('ct_mark_match', ct_mark_match),
+            ('ct_status', ct_status),
+            ('ct_direction', ct_direction),
+            ('ct_expiration', ct_expiration),
+            ('ct_helper_match', ct_helper_match),
+            ('ct_label', ct_label),
+            ('ct_event', ct_event),
+            ('ct_original_saddr', ct_original_saddr),
+            ('ct_original_daddr', ct_original_daddr),
+            ('ct_reply_saddr', ct_reply_saddr),
+            ('ct_reply_daddr', ct_reply_daddr),
+            ('fib_check', fib_check),
+            ('socket_match', socket_match),
+            ('rt_nexthop', rt_nexthop),
+            ('ipv6_exthdrs', ipv6_exthdrs),
+            ('ct_helper_set', ct_helper_set),
+            ('ct_timeout_set', ct_timeout_set),
+            ('ct_expectation_set', ct_expectation_set),
+            ('limit_rate', limit_rate),
+        )
+        for field_name, field_value in bridge_disallowed:
+            if isinstance(field_value, bool):
+                if field_value:
+                    raise ValueError(f'{field_name} is not supported for family=bridge in Policy v2 MVP')
+            elif field_value is not None:
+                raise ValueError(f'{field_name} is not supported for family=bridge in Policy v2 MVP')
+
     return {
         'id': str(payload.get('id') or uuid.uuid4().hex),
         'table': nft_table,
@@ -929,6 +1363,8 @@ def _normalize_firewall_rule(payload):
         'dst': dst,
         'in_interface': in_interface,
         'out_interface': out_interface,
+        'ibrname': ibrname,
+        'obrname': obrname,
         'sport': str(sport) if sport is not None else None,
         'dport': str(dport) if dport is not None else None,
         'comment': comment,
@@ -949,6 +1385,10 @@ def _normalize_firewall_rule(payload):
         'ct_mark_set': str(ct_mark_set) if ct_mark_set is not None else None,
         'log_prefix': log_prefix,
         'log_level': log_level,
+        'log_flags': log_flags,
+        'log_group': int(str(log_group)) if log_group is not None else None,
+        'log_snaplen': int(str(log_snaplen)) if log_snaplen is not None else None,
+        'log_queue_threshold': int(str(log_queue_threshold)) if log_queue_threshold is not None else None,
         'fib_expr': fib_expr,
         'socket_expr': socket_expr,
         'rt_expr': rt_expr,
@@ -997,7 +1437,7 @@ def _normalize_firewall_rule(payload):
     }
 
 
-def _render_firewall_rule(rule):
+def _render_firewall_rule(rule, table_family='inet'):
     def _detect_ip_family(value):
         raw = str(value or '').strip()
         if not raw:
@@ -1028,9 +1468,13 @@ def _render_firewall_rule(rule):
         return mapping.get(value, value)
 
     parts = []
-    if rule['in_interface']:
+    if table_family == 'bridge' and rule.get('ibrname'):
+        parts.append(f'ibrname "{rule["ibrname"]}"')
+    elif rule['in_interface']:
         parts.append(f'iifname "{rule["in_interface"]}"')
-    if rule['out_interface']:
+    if table_family == 'bridge' and rule.get('obrname'):
+        parts.append(f'obrname "{rule["obrname"]}"')
+    elif rule['out_interface']:
         parts.append(f'oifname "{rule["out_interface"]}"')
     if rule['src']:
         prefix = 'ip6' if ':' in str(rule['src']) else 'ip'
@@ -1142,12 +1586,25 @@ def _render_firewall_rule(rule):
         parts.append(f'rt {family} nexthop {rule["rt_nexthop"]}')
     if rule.get('ipv6_exthdrs'):
         parts.append(f'exthdr {rule["ipv6_exthdrs"]}')
-    if rule.get('log_prefix') or rule.get('log_level'):
+    if rule.get('log_prefix') or rule.get('log_level') or rule.get('log_flags') or rule.get('log_group') is not None:
         log_parts = ['log']
+        if rule.get('log_group') is not None:
+            log_parts.extend(['group', str(rule['log_group'])])
         if rule.get('log_prefix'):
             log_parts.append(f'prefix "{rule["log_prefix"]}"')
         if rule.get('log_level'):
             log_parts.append(f'level {rule["log_level"]}')
+        if rule.get('log_flags'):
+            if isinstance(rule.get('log_flags'), list):
+                flags = ','.join([str(x).strip() for x in rule['log_flags'] if str(x).strip()])
+            else:
+                flags = str(rule.get('log_flags') or '').strip()
+            if flags:
+                log_parts.append(f'flags {flags}')
+        if rule.get('log_queue_threshold') is not None:
+            log_parts.append(f'queue-threshold {rule["log_queue_threshold"]}')
+        if rule.get('log_snaplen') is not None:
+            log_parts.append(f'snaplen {rule["log_snaplen"]}')
         parts.append(' '.join(log_parts))
     if rule.get('counter'):
         parts.append('counter')
@@ -1257,20 +1714,38 @@ def _build_map_declaration_and_elements(item):
     key_type = _infer_map_token_type(pairs[0][0])
     value_type = 'verdict' if item.get('kind') == 'vmap' else _infer_map_token_type(pairs[0][1])
     has_prefix = any('/' in key for key, _ in pairs)
-    flags_clause = ' flags interval;' if has_prefix and key_type in ('ipv4_addr', 'ipv6_addr') else ''
-    decl_stmt = f'type {key_type} : {value_type};{flags_clause}'
+    flags = []
+    if has_prefix and key_type in ('ipv4_addr', 'ipv6_addr'):
+        flags.append('interval')
+    timeout = normalize_config_value(item.get('timeout'))
+    if timeout:
+        flags.append('timeout')
+    flags_clause = f' flags {",".join(flags)};' if flags else ''
+    timeout_clause = f' timeout {timeout};' if timeout else ''
+    decl_stmt = f'type {key_type} : {value_type};{flags_clause}{timeout_clause}'
     elems = []
     for key, value in pairs:
         elems.append(f'{_format_map_token(key, key_type)} : {_format_map_token(value, value_type)}')
     return decl_stmt, elems
 
 
-def list_firewall_rules_service():
+def list_firewall_rules_service(family=None, table=None):
+    family_filter = normalize_config_value(family)
+    table_filter = normalize_config_value(table)
+    if family_filter is not None:
+        family_filter = str(family_filter).lower()
+    if table_filter is not None:
+        table_filter = str(table_filter).lower()
     raw_rules = _read_firewall_rules_file()
     normalized = []
     for payload in raw_rules:
         try:
-            normalized.append(_normalize_firewall_rule(payload))
+            row = _normalize_firewall_rule(payload)
+            if family_filter and str(row.get('family') or '').lower() != family_filter:
+                continue
+            if table_filter and str(row.get('table') or '').lower() != table_filter:
+                continue
+            normalized.append(row)
         except Exception:
             continue
     return normalized
@@ -1280,125 +1755,57 @@ def apply_firewall_rules():
     rules = list_firewall_rules_service()
     sets_data = _read_firewall_sets_file()
     maps_data = _read_firewall_maps_file()
-    table_defs = dict(FIREWALL_DEFAULT_TABLE_DEFS)
-    custom_tables = _read_firewall_tables_file().get('tables', [])
-    for row in custom_tables:
-        enabled = row.get('enabled', True)
-        if not isinstance(enabled, bool):
-            enabled = str(enabled).lower() in ('1', 'true', 'yes', 'on')
-        if not enabled:
-            continue
-        table_name = normalize_config_value(row.get('table_name'))
-        chain_name = normalize_config_value(row.get('chain_name'))
-        chain_type = normalize_config_value(row.get('chain_type'))
-        hook_name = normalize_config_value(row.get('hook'))
-        policy = normalize_config_value(row.get('policy')) or 'accept'
-        if table_name is None or chain_name is None or chain_type is None or hook_name is None:
-            continue
-        try:
-            priority = int(row.get('priority'))
-        except Exception:
-            continue
-        dev = normalize_config_value(row.get('device'))
-        table_key = str(table_name).strip().lower()
-        table_defs.setdefault(table_key, [])
-        table_defs[table_key].append((str(chain_name), str(chain_type), str(hook_name), priority, (str(dev) if dev else None), str(policy)))
-    active_table_names = {str(name).lower() for name in table_defs.keys()}
-    managed = _read_managed_tables_file().get('tables', [])
-    stale_managed = [t for t in managed if t not in active_table_names]
-    for stale in stale_managed:
+    table_defs = _collect_firewall_table_defs()
+    active_table_refs = set(table_defs.keys())
+    managed_keys = _read_managed_tables_file().get('tables', [])
+    managed_refs = set()
+    for key in managed_keys:
+        parsed = _parse_managed_table_key(key)
+        if parsed is not None:
+            managed_refs.add(parsed)
+    stale_managed = [t for t in managed_refs if t not in active_table_refs]
+    for stale_family, stale_table in stale_managed:
         subprocess.run(
-            ['nft', 'delete', 'table', FIREWALL_TABLE_FAMILY, str(stale)],
+            ['nft', 'delete', 'table', str(stale_family), str(stale_table)],
             check=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-    # Also prune any runtime inet table that is outside the active manager set.
-    # This prevents orphaned custom tables from surviving after JSON state cleanup.
-    runtime_tables = _list_inet_tables_runtime()
-    for runtime_name in runtime_tables:
-        if runtime_name.lower() not in active_table_names:
+    # Also prune managed runtime tables that are no longer active.
+    runtime_tables = _list_runtime_tables()
+    for runtime_ref in runtime_tables:
+        if runtime_ref in managed_refs and runtime_ref not in active_table_refs:
+            runtime_family, runtime_name = runtime_ref
             subprocess.run(
-                ['nft', 'delete', 'table', FIREWALL_TABLE_FAMILY, str(runtime_name)],
+                ['nft', 'delete', 'table', str(runtime_family), str(runtime_name)],
                 check=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
     script_lines = []
-    for nft_table in table_defs.keys():
+    for table_family, nft_table in table_defs.keys():
         table_name = f'{FIREWALL_TABLE_PREFIX}{nft_table}'
         # Best-effort delete to avoid "already exists" and missing table conflicts.
         subprocess.run(
-            ['nft', 'delete', 'table', FIREWALL_TABLE_FAMILY, table_name],
+            ['nft', 'delete', 'table', table_family, table_name],
             check=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
-        script_lines.append(f'add table {FIREWALL_TABLE_FAMILY} {table_name}')
-        for chain_info in table_defs[nft_table]:
-            if len(chain_info) == 4:
-                chain_name, chain_type, hook_name, priority = chain_info
-                device = None
-                policy = 'accept'
-            else:
-                chain_name, chain_type, hook_name, priority, device, policy = chain_info
-            dev_clause = f' device "{device}"' if device else ''
-            script_lines.append(
-                f'add chain {FIREWALL_TABLE_FAMILY} {table_name} {chain_name} '
-                f'{{ type {chain_type} hook {hook_name}{dev_clause} priority {priority}; policy {policy}; }}'
-            )
-        # create shared sets in each table to allow matching from any chain/table
-        for item in sets_data.get('addr', []):
-            if item.get('name') and item.get('enabled', True):
-                elems = [x for x in (item.get('elements') or []) if x]
-                flags_clause = ' flags interval;' if any('/' in str(x) for x in elems) else ''
-                script_lines.append(f'add set {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ type ipv4_addr;{flags_clause} }}')
-                if elems:
-                    script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
-        for item in sets_data.get('port', []):
-            if item.get('name') and item.get('enabled', True):
-                script_lines.append(f'add set {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ type inet_service; }}')
-                elems = [x for x in (item.get('elements') or []) if x]
-                if elems:
-                    script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
-        for item in sets_data.get('iface', []):
-            if item.get('name') and item.get('enabled', True):
-                script_lines.append(f'add set {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ type ifname; }}')
-                elems = [f'"{x}"' for x in (item.get('elements') or []) if x]
-                if elems:
-                    script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
-        # create shared maps and vmaps in each table
-        for item in maps_data.get('map', []):
-            if item.get('name') and item.get('enabled', True):
-                built = _build_map_declaration_and_elements(item)
-                if not built:
-                    continue
-                decl_stmt, elems = built
-                script_lines.append(f'add map {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {decl_stmt} }}')
-                script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
-        for item in maps_data.get('vmap', []):
-            if item.get('name') and item.get('enabled', True):
-                built = _build_map_declaration_and_elements(item)
-                if not built:
-                    continue
-                decl_stmt, elems = built
-                script_lines.append(f'add map {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {decl_stmt} }}')
-                script_lines.append(f'add element {FIREWALL_TABLE_FAMILY} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
-    for rule in rules:
-        if not rule.get('enabled', True):
-            continue
-        rule_table = str(rule.get('table') or '').lower()
-        if rule_table not in active_table_names:
-            # Skip orphaned rule rows that reference missing/disabled custom tables.
-            # This keeps apply resilient after table cleanup or toggle operations.
-            continue
-        rendered = _render_firewall_rule(rule)
-        table_name = f'{FIREWALL_TABLE_PREFIX}{rule["table"]}'
-        script_lines.append(
-            f'add rule {FIREWALL_TABLE_FAMILY} {table_name} {rule["chain"]} {rendered}'
+        _append_table_script_lines(
+            script_lines,
+            table_family,
+            nft_table,
+            table_defs,
+            sets_data,
+            maps_data,
+            rules,
+            include_runtime_objects=(table_family == FIREWALL_TABLE_FAMILY),
         )
     script_text = '\n'.join(script_lines) + '\n'
     subprocess.run(['nft', '-f', '-'], input=script_text.encode('utf-8'), check=True)
+    managed_serialized = sorted(_managed_table_key(fam, name) for fam, name in active_table_refs)
+    _write_managed_tables_file({'tables': managed_serialized})
     return True
 
 
@@ -1409,7 +1816,7 @@ def create_firewall_rule_service(payload, apply_now=True):
     # Keep one logical rule for the same effective payload.
     identity_keys = (
         'table', 'family', 'chain', 'action', 'proto', 'src', 'dst',
-        'in_interface', 'out_interface', 'sport', 'dport', 'comment', 'ct_state', 'user_id', 'hour', 'dscp',
+        'in_interface', 'out_interface', 'ibrname', 'obrname', 'sport', 'dport', 'comment', 'ct_state', 'user_id', 'hour', 'dscp',
         'nat_type', 'target_chain', 'reject_type', 'to_addr', 'to_port',
         'nat_random', 'nat_fully_random', 'nat_persistent', 'notrack',
         'raw_expr', 'nftrace',
@@ -1420,7 +1827,7 @@ def create_firewall_rule_service(payload, apply_now=True):
         'ct_original_saddr', 'ct_original_daddr', 'ct_reply_saddr', 'ct_reply_daddr',
         'fib_check', 'socket_match', 'rt_nexthop', 'ipv6_exthdrs',
         'vlan_id', 'ether_src', 'ether_dst', 'ether_type',
-        'mark_set', 'ct_mark_set', 'log_prefix', 'log_level',
+        'mark_set', 'ct_mark_set', 'log_prefix', 'log_level', 'log_flags', 'log_group', 'log_snaplen', 'log_queue_threshold',
         'fib_expr', 'socket_expr', 'rt_expr', 'exthdr_expr',
         'ct_helper_set', 'ct_timeout_set', 'ct_expectation_set',
         'limit_rate', 'counter', 'enabled',
@@ -1488,6 +1895,8 @@ def reorder_firewall_rules_service(table, ordered_ids, apply_now=True):
     for row in custom_rows:
         if not isinstance(row, dict):
             continue
+        if str((row.get('family') or FIREWALL_TABLE_FAMILY)).lower() != FIREWALL_TABLE_FAMILY:
+            continue
         tname = normalize_config_value(row.get('table_name'))
         if tname:
             allowed_tables.add(str(tname).lower())
@@ -1529,6 +1938,8 @@ def reset_firewall_counters_service(table=None):
     for row in custom_rows:
         if not isinstance(row, dict):
             continue
+        if str((row.get('family') or FIREWALL_TABLE_FAMILY)).lower() != FIREWALL_TABLE_FAMILY:
+            continue
         tname = normalize_config_value(row.get('table_name'))
         if tname:
             low = str(tname).lower()
@@ -1546,20 +1957,92 @@ def reset_firewall_counters_service(table=None):
         target_tables = (nft_table,)
 
     reset_count = 0
+    target_table_set = set(target_tables)
+    rules = list_firewall_rules_service()
+    sets_data = _read_firewall_sets_file()
+    maps_data = _read_firewall_maps_file()
+    table_defs = _collect_firewall_table_defs()
+    runtime_reset_supported = False
     for nft_table in target_tables:
         table_name = f'{FIREWALL_TABLE_PREFIX}{nft_table}'
+        table_reset_ok = False
         try:
+            # Reset named stateful counters if present.
             subprocess.run(
                 ['nft', 'reset', 'counters', 'table', FIREWALL_TABLE_FAMILY, table_name],
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            reset_count += 1
+            table_reset_ok = True
+            runtime_reset_supported = True
         except Exception:
-            # Skip missing tables; state can be recreated by apply call.
-            continue
-    return {'ok': True, 'tables_reset': reset_count}
+            pass
+        try:
+            # Reset named quotas if present.
+            subprocess.run(
+                ['nft', 'reset', 'quotas', 'table', FIREWALL_TABLE_FAMILY, table_name],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            table_reset_ok = True
+            runtime_reset_supported = True
+        except Exception:
+            pass
+        if table_reset_ok:
+            reset_count += 1
+
+    # Reset local runtime rate/cache snapshots for selected table(s),
+    # otherwise pps/bps may use stale "last" values after nft reset.
+    stats_store = _read_firewall_stats_file()
+    target_ids = {
+        str(rule.get('id'))
+        for rule in rules
+        if str(rule.get('table') or '').lower() in target_table_set and rule.get('id')
+    }
+    for rule_id in target_ids:
+        stats_store.pop(rule_id, None)
+    _write_firewall_stats_file(stats_store)
+
+    # This nft build does not support `reset rules`; anonymous per-rule counters are
+    # reset by recreating runtime rules from stored JSON.
+    if table is None:
+        apply_firewall_rules()
+    else:
+        nft_table = next(iter(target_table_set))
+        key = (FIREWALL_TABLE_FAMILY, nft_table)
+        if key in table_defs:
+            table_name = f'{FIREWALL_TABLE_PREFIX}{nft_table}'
+            subprocess.run(
+                ['nft', 'delete', 'table', FIREWALL_TABLE_FAMILY, table_name],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            script_lines = []
+            _append_table_script_lines(
+                script_lines,
+                FIREWALL_TABLE_FAMILY,
+                nft_table,
+                table_defs,
+                sets_data,
+                maps_data,
+                rules,
+                include_runtime_objects=True,
+            )
+            script_text = '\n'.join(script_lines) + '\n'
+            subprocess.run(['nft', '-f', '-'], input=script_text.encode('utf-8'), check=True)
+        else:
+            # Fallback: if table was removed from topology, full apply keeps runtime coherent.
+            apply_firewall_rules()
+    return {
+        'ok': True,
+        'tables_reset': reset_count,
+        'rules_stats_reset': len(target_ids),
+        'runtime_reapplied': True,
+        'named_reset_supported': runtime_reset_supported,
+    }
 
 
 def get_firewall_state_service():
@@ -1590,6 +2073,7 @@ def get_firewall_state_service():
             rule_payload = item.get('rule')
             if not rule_payload:
                 continue
+            runtime_family = str(rule_payload.get('family') or '').lower()
             table_name = str(rule_payload.get('table') or '')
             if not table_name.startswith(FIREWALL_TABLE_PREFIX):
                 continue
@@ -1599,7 +2083,7 @@ def get_firewall_state_service():
             nft_table = table_name.replace(FIREWALL_TABLE_PREFIX, '', 1)
             expr = rule_payload.get('expr', [])
             counter_item = next((x.get('counter') for x in expr if isinstance(x, dict) and 'counter' in x), None)
-            rules_by_table_chain.setdefault((nft_table, chain_name), []).append({
+            rules_by_table_chain.setdefault((runtime_family, nft_table, chain_name), []).append({
                 'packets': int(counter_item.get('packets', 0)) if counter_item else 0,
                 'bytes': int(counter_item.get('bytes', 0)) if counter_item else 0,
             })
@@ -1611,7 +2095,8 @@ def get_firewall_state_service():
                 continue
             nft_table = rule.get('table')
             chain_name = rule.get('chain')
-            key = (nft_table, chain_name)
+            family = str(rule.get('family') or FIREWALL_TABLE_FAMILY).lower()
+            key = (family, nft_table, chain_name)
             idx = chain_runtime_index.get(key, 0)
             counter_list = rules_by_table_chain.get(key, [])
             if idx < len(counter_list):
@@ -1621,7 +2106,7 @@ def get_firewall_state_service():
         pass
     enriched_rules = []
     stats_store = _read_firewall_stats_file()
-    now_ts = int(time.time())
+    now_ts = time.time()
     for rule in rules:
         payload = dict(rule)
         counter = runtime_counters.get(rule['id'])
@@ -1632,24 +2117,33 @@ def get_firewall_state_service():
 
         stat_row = stats_store.get(rule['id']) if isinstance(stats_store.get(rule['id']), dict) else {}
         last = stat_row.get('last') if isinstance(stat_row, dict) else None
-        prev_packets = int(last.get('packets', packets)) if isinstance(last, dict) else packets
-        prev_bytes = int(last.get('bytes', bytes_count)) if isinstance(last, dict) else bytes_count
-        prev_t = int(last.get('t', now_ts)) if isinstance(last, dict) else now_ts
-        dt = max(1, now_ts - prev_t)
+        prev_packets = int(last.get('packets', packets)) if isinstance(last, dict) else int(packets)
+        prev_bytes = int(last.get('bytes', bytes_count)) if isinstance(last, dict) else int(bytes_count)
+        prev_t = float(last.get('t', now_ts)) if isinstance(last, dict) else float(now_ts)
+
+        counter_enabled = bool(payload.get('counter'))
+        reset_detected = int(packets) < prev_packets or int(bytes_count) < prev_bytes or now_ts < prev_t
+        dt = max(0.001, float(now_ts) - float(prev_t))
         dpk = max(0, int(packets) - prev_packets)
         dby = max(0, int(bytes_count) - prev_bytes)
-        pps = dpk / dt
-        bps = dby / dt
+        if not counter_enabled or reset_detected:
+            pps = 0.0
+            bps = 0.0
+        else:
+            pps = dpk / dt
+            bps = dby / dt
         payload['runtime_pps'] = pps
         payload['runtime_bps'] = bps
 
         history = stat_row.get('history', []) if isinstance(stat_row, dict) else []
         if not isinstance(history, list):
             history = []
-        history.append({'t': now_ts, 'pps': pps, 'bps': bps, 'packets': packets, 'bytes': bytes_count})
+        if not counter_enabled or reset_detected:
+            history = []
+        history.append({'t': now_ts, 'pps': pps, 'bps': bps, 'packets': int(packets), 'bytes': int(bytes_count)})
         history = history[-120:]
         payload['runtime_history'] = history
-        stats_store[rule['id']] = {'last': {'t': now_ts, 'packets': packets, 'bytes': bytes_count}, 'history': history}
+        stats_store[rule['id']] = {'last': {'t': now_ts, 'packets': int(packets), 'bytes': int(bytes_count)}, 'history': history}
         enriched_rules.append(payload)
     _write_firewall_stats_file(stats_store)
     return {
@@ -1676,6 +2170,7 @@ def _normalize_set_item(payload, set_kind):
     comment = normalize_config_value(payload.get('comment'))
     if comment is not None:
         comment = str(comment).replace('"', "'")
+    timeout = normalize_nft_timeout(payload.get('timeout'))
     out = []
     for raw in elems:
         val = normalize_config_value(raw)
@@ -1694,11 +2189,37 @@ def _normalize_set_item(payload, set_kind):
             if not re.fullmatch(r'[A-Za-z0-9_.:-]+', s):
                 raise ValueError('iface element contains invalid characters')
         out.append(s)
-    return {'id': str(payload.get('id') or uuid.uuid4().hex), 'name': str(name), 'elements': sorted(set(out)), 'enabled': enabled, 'comment': comment}
+    return {'id': str(payload.get('id') or uuid.uuid4().hex), 'name': str(name), 'elements': sorted(set(out)), 'enabled': enabled, 'comment': comment, 'timeout': timeout}
 
 
 def list_firewall_sets_service():
-    return _read_firewall_sets_file()
+    data = _read_firewall_sets_file()
+    changed = False
+    removed_active = 0
+    now_ts = int(time.time())
+    response = {'addr': [], 'port': [], 'iface': []}
+    for set_kind in ('addr', 'port', 'iface'):
+        source_rows = [dict(row or {}) for row in data.get(set_kind, [])]
+        persisted_rows, expired_changed, expired_active = _cleanup_expired_collection_rows(source_rows, now_ts)
+        if expired_changed:
+            changed = True
+            removed_active += int(expired_active)
+        normalized_rows = []
+        for payload in persisted_rows:
+            if payload.get('created_at') is None:
+                payload['created_at'] = now_ts
+                changed = True
+            if payload.get('timeout') and payload.get('enabled', True) and payload.get('timeout_started_at') is None:
+                payload['timeout_started_at'] = int(payload['created_at'])
+                changed = True
+            normalized_rows.append(payload)
+            response[set_kind].append(enrich_collection_item_runtime(payload, now_ts))
+        data[set_kind] = normalized_rows
+    if changed:
+        _write_firewall_sets_file(data)
+        if removed_active > 0:
+            apply_firewall_rules()
+    return response
 
 
 def upsert_firewall_set_service(set_kind, payload):
@@ -1708,14 +2229,43 @@ def upsert_firewall_set_service(set_kind, payload):
     item = _normalize_set_item(payload, set_kind)
     out = []
     replaced = False
+    runtime_changed = False
+    now_ts = int(time.time())
     for row in data[set_kind]:
         if row.get('id') == item['id']:
+            prev_runtime_sig = _set_runtime_signature(row)
+            prev_timeout = normalize_config_value(row.get('timeout'))
+            if prev_timeout:
+                raise ValueError('temporary collections are read-only; delete and recreate')
+            next_timeout = normalize_config_value(item.get('timeout'))
+            prev_enabled = bool(row.get('enabled', True))
+            next_enabled = bool(item.get('enabled', True))
+            if prev_timeout and prev_enabled != next_enabled:
+                raise ValueError('temporary collections cannot be enabled/disabled; delete them instead')
+            created_at = row.get('created_at')
+            if created_at is None:
+                created_at = now_ts
+            started_at = row.get('timeout_started_at')
+            if not next_enabled or not next_timeout:
+                started_at = None
+            elif prev_timeout != next_timeout or not prev_enabled:
+                started_at = now_ts
+            elif started_at is None:
+                started_at = now_ts
+            item['created_at'] = int(created_at)
+            item['timeout_started_at'] = int(started_at) if started_at is not None else None
+            runtime_changed = runtime_changed or (prev_runtime_sig != _set_runtime_signature(item))
             out.append(item)
             replaced = True
         else:
             out.append(row)
     if not replaced:
+        if item.get('timeout') and not item.get('enabled', True):
+            raise ValueError('temporary collections cannot be created in disabled state')
+        item['created_at'] = now_ts
+        item['timeout_started_at'] = now_ts if item.get('enabled', True) and item.get('timeout') else None
         out.append(item)
+        runtime_changed = bool(item.get('enabled', True))
     # Keep a single logical namespace for set names across addr/port/iface.
     existing_other_names = []
     for kind in ('addr', 'port', 'iface'):
@@ -1729,8 +2279,9 @@ def upsert_firewall_set_service(set_kind, payload):
         raise ValueError('set name must be globally unique across addr/port/iface')
     data[set_kind] = out
     _write_firewall_sets_file(data)
-    apply_firewall_rules()
-    return item
+    if runtime_changed:
+        apply_firewall_rules()
+    return enrich_collection_item_runtime(item)
 
 
 def delete_firewall_set_service(set_kind, set_id):
@@ -1742,7 +2293,8 @@ def delete_firewall_set_service(set_kind, set_id):
         raise LookupError('set not found')
     data[set_kind] = [x for x in data[set_kind] if x.get('id') != str(set_id)]
     _write_firewall_sets_file(data)
-    apply_firewall_rules()
+    if bool(existing.get('enabled', True)):
+        apply_firewall_rules()
     return existing
 
 
@@ -1761,6 +2313,7 @@ def _normalize_map_item(payload, map_kind):
     comment = normalize_config_value(payload.get('comment'))
     if comment is not None:
         comment = str(comment).replace('"', "'")
+    timeout = normalize_nft_timeout(payload.get('timeout'))
     normalized_entries = []
     for raw in entries:
         val = normalize_config_value(raw)
@@ -1778,12 +2331,39 @@ def _normalize_map_item(payload, map_kind):
         'entries': sorted(set(normalized_entries)),
         'enabled': enabled,
         'comment': comment,
+        'timeout': timeout,
         'kind': map_kind,
     }
 
 
 def list_firewall_maps_service():
-    return _read_firewall_maps_file()
+    data = _read_firewall_maps_file()
+    changed = False
+    removed_active = 0
+    now_ts = int(time.time())
+    response = {'map': [], 'vmap': []}
+    for map_kind in ('map', 'vmap'):
+        source_rows = [dict(row or {}) for row in data.get(map_kind, [])]
+        persisted_rows, expired_changed, expired_active = _cleanup_expired_collection_rows(source_rows, now_ts)
+        if expired_changed:
+            changed = True
+            removed_active += int(expired_active)
+        normalized_rows = []
+        for payload in persisted_rows:
+            if payload.get('created_at') is None:
+                payload['created_at'] = now_ts
+                changed = True
+            if payload.get('timeout') and payload.get('enabled', True) and payload.get('timeout_started_at') is None:
+                payload['timeout_started_at'] = int(payload['created_at'])
+                changed = True
+            normalized_rows.append(payload)
+            response[map_kind].append(enrich_collection_item_runtime(payload, now_ts))
+        data[map_kind] = normalized_rows
+    if changed:
+        _write_firewall_maps_file(data)
+        if removed_active > 0:
+            apply_firewall_rules()
+    return response
 
 
 def upsert_firewall_map_service(map_kind, payload):
@@ -1793,14 +2373,43 @@ def upsert_firewall_map_service(map_kind, payload):
     item = _normalize_map_item(payload, map_kind)
     out = []
     replaced = False
+    runtime_changed = False
+    now_ts = int(time.time())
     for row in data[map_kind]:
         if row.get('id') == item['id']:
+            prev_runtime_sig = _map_runtime_signature(row)
+            prev_timeout = normalize_config_value(row.get('timeout'))
+            if prev_timeout:
+                raise ValueError('temporary collections are read-only; delete and recreate')
+            next_timeout = normalize_config_value(item.get('timeout'))
+            prev_enabled = bool(row.get('enabled', True))
+            next_enabled = bool(item.get('enabled', True))
+            if prev_timeout and prev_enabled != next_enabled:
+                raise ValueError('temporary collections cannot be enabled/disabled; delete them instead')
+            created_at = row.get('created_at')
+            if created_at is None:
+                created_at = now_ts
+            started_at = row.get('timeout_started_at')
+            if not next_enabled or not next_timeout:
+                started_at = None
+            elif prev_timeout != next_timeout or not prev_enabled:
+                started_at = now_ts
+            elif started_at is None:
+                started_at = now_ts
+            item['created_at'] = int(created_at)
+            item['timeout_started_at'] = int(started_at) if started_at is not None else None
+            runtime_changed = runtime_changed or (prev_runtime_sig != _map_runtime_signature(item))
             out.append(item)
             replaced = True
         else:
             out.append(row)
     if not replaced:
+        if item.get('timeout') and not item.get('enabled', True):
+            raise ValueError('temporary collections cannot be created in disabled state')
+        item['created_at'] = now_ts
+        item['timeout_started_at'] = now_ts if item.get('enabled', True) and item.get('timeout') else None
         out.append(item)
+        runtime_changed = bool(item.get('enabled', True))
     other = 'vmap' if map_kind == 'map' else 'map'
     names = [x['name'] for x in out]
     if len(names) != len(set(names)):
@@ -1809,8 +2418,9 @@ def upsert_firewall_map_service(map_kind, payload):
         raise ValueError('map name must be globally unique across map/vmap')
     data[map_kind] = out
     _write_firewall_maps_file(data)
-    apply_firewall_rules()
-    return item
+    if runtime_changed:
+        apply_firewall_rules()
+    return enrich_collection_item_runtime(item)
 
 
 def delete_firewall_map_service(map_kind, map_id):
@@ -1822,7 +2432,8 @@ def delete_firewall_map_service(map_kind, map_id):
         raise LookupError('map not found')
     data[map_kind] = [x for x in data[map_kind] if x.get('id') != str(map_id)]
     _write_firewall_maps_file(data)
-    apply_firewall_rules()
+    if bool(existing.get('enabled', True)):
+        apply_firewall_rules()
     return existing
 
 
@@ -1850,6 +2461,7 @@ def list_firewall_tables_service():
         if not isinstance(row, dict):
             continue
         item = dict(row)
+        item['family'] = str((item.get('family') or FIREWALL_TABLE_FAMILY)).lower()
         item['builtin'] = False
         custom.append(item)
     return {'builtin': builtin, 'custom': custom}
@@ -1859,8 +2471,8 @@ def _normalize_firewall_table_item(payload):
     if not isinstance(payload, dict):
         raise ValueError('table payload must be object')
     family = (normalize_config_value(payload.get('family')) or FIREWALL_TABLE_FAMILY).lower()
-    if family != FIREWALL_TABLE_FAMILY:
-        raise ValueError(f'only family "{FIREWALL_TABLE_FAMILY}" is supported')
+    if family not in FIREWALL_SUPPORTED_TABLE_FAMILIES:
+        raise ValueError('family must be one of: inet, ip, ip6, bridge, netdev')
     table_name = normalize_config_value(payload.get('table_name'))
     chain_name = normalize_config_value(payload.get('chain_name'))
     chain_type = (normalize_config_value(payload.get('chain_type')) or 'filter').lower()
@@ -1880,6 +2492,29 @@ def _normalize_firewall_table_item(payload):
         raise ValueError('chain_type must be filter|nat|route')
     if hook_name not in ('prerouting', 'input', 'forward', 'output', 'postrouting', 'ingress'):
         raise ValueError('hook is invalid')
+    allowed_hooks_by_type = {
+        'filter': {'prerouting', 'input', 'forward', 'output', 'postrouting', 'ingress'},
+        'nat': {'prerouting', 'input', 'output', 'postrouting'},
+        'route': {'output'},
+    }
+    if hook_name not in allowed_hooks_by_type[chain_type]:
+        raise ValueError(f'hook "{hook_name}" is not allowed for chain_type "{chain_type}"')
+    if hook_name == 'ingress' and chain_type != 'filter':
+        raise ValueError('ingress hook is only valid for chain_type "filter"')
+    if hook_name == 'ingress' and device is None:
+        raise ValueError('device is required for ingress hook')
+    if hook_name != 'ingress' and device is not None:
+        raise ValueError('device can be set only for ingress hook')
+    if family == 'netdev':
+        if chain_type != 'filter' or hook_name != 'ingress':
+            raise ValueError('netdev family supports only chain_type=filter with hook=ingress')
+        if device is None:
+            raise ValueError('device is required for netdev family')
+    if family == 'bridge':
+        if chain_type != 'filter':
+            raise ValueError('bridge family supports only chain_type=filter')
+        if hook_name == 'ingress':
+            raise ValueError('bridge family does not support ingress hook in this manager')
     if policy not in ('accept', 'drop'):
         raise ValueError('policy must be accept|drop')
     if priority in FIREWALL_RESERVED_PRIORITIES:
@@ -1903,7 +2538,7 @@ def _normalize_firewall_table_item(payload):
 def upsert_firewall_table_service(payload):
     data = _read_firewall_tables_file()
     item = _normalize_firewall_table_item(payload)
-    if item['table_name'] in FIREWALL_DEFAULT_TABLE_DEFS:
+    if item['family'] == FIREWALL_TABLE_FAMILY and item['table_name'] in FIREWALL_DEFAULT_TABLE_DEFS:
         raise ValueError('built-in table names are reserved')
     out = []
     replaced = False
@@ -1915,19 +2550,21 @@ def upsert_firewall_table_service(payload):
             out.append(row)
     if not replaced:
         out.append(item)
-    # unique table+chain+hook+priority per custom table set
+    # unique family+table+chain+hook+priority per custom table set
     seen = set()
     for row in out:
-        sig = (row.get('table_name'), row.get('chain_name'), row.get('hook'), int(row.get('priority')))
+        sig = (
+            str((row.get('family') or FIREWALL_TABLE_FAMILY)).lower(),
+            row.get('table_name'),
+            row.get('chain_name'),
+            row.get('hook'),
+            int(row.get('priority')),
+        )
         if sig in seen:
             raise ValueError('duplicate chain/hook/priority in same table')
         seen.add(sig)
     data['tables'] = out
     _write_firewall_tables_file(data)
-    managed = _read_managed_tables_file().get('tables', [])
-    if item['table_name'] not in managed:
-        managed.append(item['table_name'])
-    _write_managed_tables_file({'tables': managed})
     apply_firewall_rules()
     return item
 
@@ -1940,20 +2577,6 @@ def delete_firewall_table_service(table_id):
     data['tables'] = [x for x in data['tables'] if x.get('id') != str(table_id)]
     _write_firewall_tables_file(data)
     apply_firewall_rules()
-    table_name = normalize_config_value(existing.get('table_name'))
-    if table_name:
-        res = subprocess.run(
-            ['nft', 'delete', 'table', FIREWALL_TABLE_FAMILY, str(table_name)],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        if res.returncode != 0:
-            stderr = (res.stderr or b'').decode('utf-8', 'ignore').strip()
-            raise RuntimeError(f'failed to delete runtime nft table "{table_name}": {stderr or res.returncode}')
-        managed = _read_managed_tables_file().get('tables', [])
-        managed = [x for x in managed if x != str(table_name).lower()]
-        _write_managed_tables_file({'tables': managed})
     return existing
 
 
@@ -3201,3 +3824,537 @@ def decrypt_private_key(encrypted_private_key):
         return "InvalidToken"
     except Exception:
         return "InvalidToken"
+
+
+def _read_json_file_or_default(path, default_payload):
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return dict(default_payload)
+
+
+def _write_json_file(path, payload):
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def _read_ipsec_collection(path):
+    data = _read_json_file_or_default(path, {'items': []})
+    items = data.get('items') if isinstance(data.get('items'), list) else []
+    return [x for x in items if isinstance(x, dict)]
+
+
+def _write_ipsec_collection(path, items):
+    _write_json_file(path, {'items': items})
+
+
+def _valid_name(value, field_name='name'):
+    val = normalize_config_value(value)
+    if val is None or not re.fullmatch(r'[A-Za-z0-9_.:-]+', str(val)):
+        raise ValueError(f'{field_name} is invalid')
+    return str(val)
+
+
+def _normalize_ip_list(value, field_name):
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f'{field_name} must be array')
+    out = []
+    for raw in value:
+        v = normalize_config_value(raw)
+        if v is None:
+            continue
+        out.append(str(v))
+    return out
+
+
+def _normalize_ts_list(value, field_name):
+    out = _normalize_ip_list(value, field_name)
+    for token in out:
+        try:
+            ipaddress.ip_network(token, strict=False)
+        except Exception:
+            raise ValueError(f'{field_name} contains invalid CIDR')
+    return out
+
+
+def _build_phase1_proposal_string(enc, hash_alg, dh_group):
+    e = _valid_name(enc, 'encryption').lower()
+    h = _valid_name(hash_alg, 'hash').lower()
+    d = _valid_name(dh_group, 'dh_group').lower()
+    return f'{e}-{h}-{d}'
+
+
+def _build_phase2_proposal_string(enc, auth_alg, pfs_group=None):
+    e = _valid_name(enc, 'encryption').lower()
+    a = _valid_name(auth_alg, 'auth').lower()
+    p = normalize_config_value(pfs_group)
+    if p is None:
+        return f'{e}-{a}'
+    return f'{e}-{a}-{_valid_name(p, "pfs_group").lower()}'
+
+
+def _secret_encrypt(value):
+    f = Fernet(encryption_key)
+    return f.encrypt(str(value).encode('utf-8')).decode('utf-8')
+
+
+def _secret_decrypt(value):
+    if value is None:
+        return None
+    token = value.encode('utf-8') if isinstance(value, str) else value
+    for key in (encryption_key, encryption_key_legacy):
+        try:
+            f = Fernet(key)
+            return f.decrypt(token).decode('utf-8')
+        except Exception:
+            continue
+    raise ValueError('secret decryption failed')
+
+
+def list_ipsec_peers_service():
+    return _read_ipsec_collection(IPSEC_PEERS_FILE)
+
+
+def list_ipsec_identities_service():
+    out = []
+    for row in _read_ipsec_collection(IPSEC_IDENTITIES_FILE):
+        item = dict(row)
+        item.pop('psk_encrypted', None)
+        item['has_psk'] = bool(row.get('psk_encrypted'))
+        out.append(item)
+    return out
+
+
+def list_ipsec_phase1_profiles_service():
+    return _read_ipsec_collection(IPSEC_PHASE1_PROFILES_FILE)
+
+
+def list_ipsec_phase2_proposals_service():
+    return _read_ipsec_collection(IPSEC_PHASE2_PROPOSALS_FILE)
+
+
+def list_ipsec_policies_service():
+    return _read_ipsec_collection(IPSEC_POLICIES_FILE)
+
+
+def _ensure_ipsec_peer_exists(peer_name):
+    if not any(x.get('name') == str(peer_name) for x in _read_ipsec_collection(IPSEC_PEERS_FILE)):
+        raise ValueError('peer not found')
+
+
+def _ensure_ipsec_phase1_exists(profile_name):
+    if not any(x.get('name') == str(profile_name) for x in _read_ipsec_collection(IPSEC_PHASE1_PROFILES_FILE)):
+        raise ValueError('phase1 profile not found')
+
+
+def _ensure_ipsec_phase2_exists(proposal_name):
+    if not any(x.get('name') == str(proposal_name) for x in _read_ipsec_collection(IPSEC_PHASE2_PROPOSALS_FILE)):
+        raise ValueError('phase2 proposal not found')
+
+
+def upsert_ipsec_peer_service(payload):
+    if not isinstance(payload, dict):
+        raise ValueError('peer payload must be object')
+    item = {
+        'name': _valid_name(payload.get('name')),
+        'remote_addrs': _normalize_ip_list(payload.get('remote_addrs'), 'remote_addrs'),
+        'local_addrs': _normalize_ip_list(payload.get('local_addrs'), 'local_addrs'),
+        'ike_version': 2,
+        'phase1_profile': _valid_name(payload.get('phase1_profile'), 'phase1_profile'),
+        'enabled': bool(payload.get('enabled', True)),
+        'dpd': bool(payload.get('dpd', True)),
+        'nat_t': bool(payload.get('nat_t', True)),
+        'send_initial_contact': bool(payload.get('send_initial_contact', True)),
+    }
+    if not item['remote_addrs']:
+        raise ValueError('remote_addrs is required')
+    _ensure_ipsec_phase1_exists(item['phase1_profile'])
+    items = _read_ipsec_collection(IPSEC_PEERS_FILE)
+    replaced = False
+    for i, row in enumerate(items):
+        if row.get('name') == item['name']:
+            items[i] = item
+            replaced = True
+            break
+    if not replaced:
+        items.append(item)
+    _write_ipsec_collection(IPSEC_PEERS_FILE, items)
+    return item
+
+
+def upsert_ipsec_identity_service(payload):
+    if not isinstance(payload, dict):
+        raise ValueError('identity payload must be object')
+    peer_name = _valid_name(payload.get('peer'), 'peer')
+    _ensure_ipsec_peer_exists(peer_name)
+    auth_method = str(payload.get('auth_method') or 'psk').lower()
+    if auth_method != 'psk':
+        raise ValueError('only psk auth_method is supported in v1')
+    local_id = _valid_name(payload.get('local_id'), 'local_id')
+    remote_id = _valid_name(payload.get('remote_id'), 'remote_id')
+    psk = normalize_config_value(payload.get('psk'))
+    items = _read_ipsec_collection(IPSEC_IDENTITIES_FILE)
+    previous = next((x for x in items if x.get('peer') == peer_name), None)
+    psk_encrypted = previous.get('psk_encrypted') if previous else None
+    if psk is not None:
+        psk_encrypted = _secret_encrypt(str(psk))
+    if not psk_encrypted:
+        raise ValueError('psk is required for new identity')
+    item = {
+        'peer': peer_name,
+        'auth_method': auth_method,
+        'local_id': local_id,
+        'remote_id': remote_id,
+        'psk_encrypted': psk_encrypted,
+    }
+    out = [x for x in items if x.get('peer') != peer_name]
+    out.append(item)
+    _write_ipsec_collection(IPSEC_IDENTITIES_FILE, out)
+    safe = dict(item)
+    safe.pop('psk_encrypted', None)
+    safe['has_psk'] = True
+    return safe
+
+
+def upsert_ipsec_phase1_profile_service(payload):
+    if not isinstance(payload, dict):
+        raise ValueError('phase1 profile payload must be object')
+    item = {
+        'name': _valid_name(payload.get('name')),
+        'encryption': _valid_name(payload.get('encryption'), 'encryption').lower(),
+        'hash': _valid_name(payload.get('hash'), 'hash').lower(),
+        'dh_group': _valid_name(payload.get('dh_group'), 'dh_group').lower(),
+        'lifetime': str(normalize_config_value(payload.get('lifetime')) or '1d'),
+        'proposal_check': str(normalize_config_value(payload.get('proposal_check')) or 'obey').lower(),
+    }
+    item['proposal_string'] = _build_phase1_proposal_string(item['encryption'], item['hash'], item['dh_group'])
+    items = _read_ipsec_collection(IPSEC_PHASE1_PROFILES_FILE)
+    out = [x for x in items if x.get('name') != item['name']]
+    out.append(item)
+    _write_ipsec_collection(IPSEC_PHASE1_PROFILES_FILE, out)
+    return item
+
+
+def upsert_ipsec_phase2_proposal_service(payload):
+    if not isinstance(payload, dict):
+        raise ValueError('phase2 proposal payload must be object')
+    pfs_raw = normalize_config_value(payload.get('pfs_group'))
+    item = {
+        'name': _valid_name(payload.get('name')),
+        'encryption': _valid_name(payload.get('encryption'), 'encryption').lower(),
+        'auth': _valid_name(payload.get('auth'), 'auth').lower(),
+        'pfs_group': _valid_name(pfs_raw, 'pfs_group').lower() if pfs_raw else None,
+        'lifetime': str(normalize_config_value(payload.get('lifetime')) or '1h'),
+    }
+    item['proposal_string'] = _build_phase2_proposal_string(item['encryption'], item['auth'], item.get('pfs_group'))
+    items = _read_ipsec_collection(IPSEC_PHASE2_PROPOSALS_FILE)
+    out = [x for x in items if x.get('name') != item['name']]
+    out.append(item)
+    _write_ipsec_collection(IPSEC_PHASE2_PROPOSALS_FILE, out)
+    return item
+
+
+def upsert_ipsec_policy_service(payload):
+    if not isinstance(payload, dict):
+        raise ValueError('policy payload must be object')
+    item = {
+        'name': _valid_name(payload.get('name')),
+        'peer': _valid_name(payload.get('peer'), 'peer'),
+        'local_ts': _normalize_ts_list(payload.get('local_ts'), 'local_ts'),
+        'remote_ts': _normalize_ts_list(payload.get('remote_ts'), 'remote_ts'),
+        'proposal': _valid_name(payload.get('proposal'), 'proposal'),
+        'action': str(normalize_config_value(payload.get('action')) or 'encrypt').lower(),
+        'level': str(normalize_config_value(payload.get('level')) or 'require').lower(),
+        'mode': str(normalize_config_value(payload.get('mode')) or 'tunnel').lower(),
+        'start_action': str(normalize_config_value(payload.get('start_action')) or 'start').lower(),
+        'enabled': bool(payload.get('enabled', True)),
+    }
+    _ensure_ipsec_peer_exists(item['peer'])
+    _ensure_ipsec_phase2_exists(item['proposal'])
+    if not item['local_ts'] or not item['remote_ts']:
+        raise ValueError('local_ts and remote_ts are required')
+    items = _read_ipsec_collection(IPSEC_POLICIES_FILE)
+    out = [x for x in items if x.get('name') != item['name']]
+    out.append(item)
+    _write_ipsec_collection(IPSEC_POLICIES_FILE, out)
+    return item
+
+
+def delete_ipsec_peer_service(name):
+    peer_name = str(name)
+    policies = _read_ipsec_collection(IPSEC_POLICIES_FILE)
+    if any(x.get('peer') == peer_name for x in policies):
+        raise ValueError('peer is referenced by policy')
+    peers = _read_ipsec_collection(IPSEC_PEERS_FILE)
+    existing = next((x for x in peers if x.get('name') == peer_name), None)
+    if existing is None:
+        raise LookupError('peer not found')
+    _write_ipsec_collection(IPSEC_PEERS_FILE, [x for x in peers if x.get('name') != peer_name])
+    ids = _read_ipsec_collection(IPSEC_IDENTITIES_FILE)
+    _write_ipsec_collection(IPSEC_IDENTITIES_FILE, [x for x in ids if x.get('peer') != peer_name])
+    return existing
+
+
+def delete_ipsec_policy_service(name):
+    policy_name = str(name)
+    items = _read_ipsec_collection(IPSEC_POLICIES_FILE)
+    existing = next((x for x in items if x.get('name') == policy_name), None)
+    if existing is None:
+        raise LookupError('policy not found')
+    _write_ipsec_collection(IPSEC_POLICIES_FILE, [x for x in items if x.get('name') != policy_name])
+    return existing
+
+
+def _log_ipsec_event(event_type, payload):
+    data = _read_json_file_or_default(IPSEC_EVENTS_FILE, {'items': []})
+    items = data.get('items') if isinstance(data.get('items'), list) else []
+    items.append({'t': int(time.time()), 'event': str(event_type), 'payload': payload})
+    items = items[-500:]
+    _write_json_file(IPSEC_EVENTS_FILE, {'items': items})
+
+
+def list_ipsec_events_service():
+    data = _read_json_file_or_default(IPSEC_EVENTS_FILE, {'items': []})
+    return data.get('items') if isinstance(data.get('items'), list) else []
+
+
+def _vici_session():
+    try:
+        import vici  # type: ignore
+        return vici.Session()
+    except Exception as exc:
+        raise RuntimeError(f'VICI unavailable: {exc}')
+
+
+def _collect_ipsec_refs():
+    peers = list_ipsec_peers_service()
+    identities = _read_ipsec_collection(IPSEC_IDENTITIES_FILE)
+    phase1 = {x['name']: x for x in list_ipsec_phase1_profiles_service()}
+    phase2 = {x['name']: x for x in list_ipsec_phase2_proposals_service()}
+    policies = list_ipsec_policies_service()
+    by_peer_identity = {x.get('peer'): x for x in identities}
+    by_peer_policies = {}
+    for p in policies:
+        by_peer_policies.setdefault(p.get('peer'), []).append(p)
+    out = []
+    for peer in peers:
+        profile = phase1.get(peer.get('phase1_profile'))
+        if profile is None:
+            raise ValueError(f"peer {peer.get('name')} references unknown phase1 profile")
+        identity = by_peer_identity.get(peer.get('name'))
+        if identity is None:
+            raise ValueError(f"peer {peer.get('name')} has no identity")
+        child_policies = by_peer_policies.get(peer.get('name'), [])
+        if not child_policies:
+            raise ValueError(f"peer {peer.get('name')} has no policies")
+        out.append((peer, identity, profile, child_policies, phase2))
+    return out
+
+
+def _build_vici_connection_for_peer(peer, identity, profile, policies, phase2_index):
+    children = {}
+    for policy in policies:
+        prop2 = phase2_index.get(policy.get('proposal'))
+        if prop2 is None:
+            raise ValueError(f"policy {policy.get('name')} references unknown phase2 proposal")
+        children[str(policy['name'])] = {
+            'local_ts': policy.get('local_ts', []),
+            'remote_ts': policy.get('remote_ts', []),
+            'esp_proposals': [str(prop2.get('proposal_string'))],
+            'start_action': str(policy.get('start_action') or 'start'),
+            'mode': str(policy.get('mode') or 'tunnel'),
+        }
+    return {
+        str(peer['name']): {
+            'version': '2',
+            'local_addrs': peer.get('local_addrs', []),
+            'remote_addrs': peer.get('remote_addrs', []),
+            'local': {
+                'auth': 'psk',
+                'id': str(identity.get('local_id') or ''),
+            },
+            'remote': {
+                'auth': 'psk',
+                'id': str(identity.get('remote_id') or ''),
+            },
+            'children': children,
+            'proposals': [str(profile.get('proposal_string'))],
+            'unique': 'replace',
+        }
+    }
+
+
+def _build_vici_secret_for_peer(peer, identity):
+    psk = _secret_decrypt(identity.get('psk_encrypted'))
+    return {
+        f"ike-{peer['name']}": {
+            'type': 'IKE',
+            'data': psk,
+            'owners': [str(identity.get('local_id') or ''), str(identity.get('remote_id') or '')],
+        }
+    }
+
+
+def _sanitize_vici_sas(raw):
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, list):
+        return {'items': raw}
+    return {'items': []}
+
+
+def _extract_active_peers_from_sas(sas):
+    out = []
+    if isinstance(sas, dict):
+        for k, v in sas.items():
+            if not isinstance(v, dict):
+                continue
+            out.append({
+                'status': 'up',
+                'peer': k,
+                'remote_address': v.get('remote-host') or v.get('remote-hosts') or '',
+                'ike_version': v.get('version') or '2',
+                'profile': v.get('name') or '',
+                'uptime': v.get('established') or '',
+                'rekey': v.get('rekey-time') or '',
+                'state': v.get('state') or 'ESTABLISHED',
+            })
+    return out
+
+
+def _extract_installed_sas_from_sas(sas):
+    out = []
+    if not isinstance(sas, dict):
+        return out
+    for _, ike_sa in sas.items():
+        if not isinstance(ike_sa, dict):
+            continue
+        children = ike_sa.get('child-sas')
+        if not isinstance(children, dict):
+            continue
+        for child_name, child in children.items():
+            if not isinstance(child, dict):
+                continue
+            out.append({
+                'state': child.get('state') or 'INSTALLED',
+                'child_sa': child_name,
+                'spi_in': child.get('spi-in') or '',
+                'spi_out': child.get('spi-out') or '',
+                'local_ts': child.get('local-ts') or [],
+                'remote_ts': child.get('remote-ts') or [],
+                'esp_proposal': child.get('proposal') or '',
+                'bytes_in': child.get('bytes-in') or 0,
+                'bytes_out': child.get('bytes-out') or 0,
+            })
+    return out
+
+
+def _run_ip_xfrm_best_effort():
+    out = {'state': '', 'policy': ''}
+    try:
+        state = subprocess.run(['ip', 'xfrm', 'state'], check=False, capture_output=True, text=True)
+        out['state'] = state.stdout or ''
+    except Exception:
+        pass
+    try:
+        policy = subprocess.run(['ip', 'xfrm', 'policy'], check=False, capture_output=True, text=True)
+        out['policy'] = policy.stdout or ''
+    except Exception:
+        pass
+    return out
+
+
+def list_ipsec_active_peers_service():
+    try:
+        session = _vici_session()
+        sas = _sanitize_vici_sas(session.list_sas())
+        return _extract_active_peers_from_sas(sas)
+    except Exception:
+        return []
+
+
+def list_ipsec_installed_sas_service():
+    try:
+        session = _vici_session()
+        sas = _sanitize_vici_sas(session.list_sas())
+        items = _extract_installed_sas_from_sas(sas)
+    except Exception:
+        items = []
+    xfrm = _run_ip_xfrm_best_effort()
+    return {'items': items, 'xfrm': xfrm}
+
+
+def load_ipsec_peer_service(peer_name):
+    target = str(peer_name)
+    refs = _collect_ipsec_refs()
+    peer_data = next((r for r in refs if r[0].get('name') == target), None)
+    if peer_data is None:
+        raise LookupError('peer not found')
+    peer, identity, profile, policies, phase2 = peer_data
+    conn_obj = _build_vici_connection_for_peer(peer, identity, profile, policies, phase2)
+    secret_obj = _build_vici_secret_for_peer(peer, identity)
+    session = _vici_session()
+    session.load_shared(secret_obj)
+    session.load_conn(conn_obj)
+    _log_ipsec_event('load_peer', {'peer': target})
+    return {'peer': target, 'loaded': True}
+
+
+def initiate_ipsec_policy_service(policy_name):
+    target = str(policy_name)
+    policy = next((x for x in list_ipsec_policies_service() if x.get('name') == target), None)
+    if policy is None:
+        raise LookupError('policy not found')
+    session = _vici_session()
+    session.initiate({'child': target, 'timeout': 30})
+    _log_ipsec_event('initiate', {'policy': target})
+    return {'policy': target, 'initiated': True}
+
+
+def terminate_ipsec_peer_service(peer_name):
+    target = str(peer_name)
+    session = _vici_session()
+    session.terminate({'ike': target, 'force': True})
+    _log_ipsec_event('terminate', {'peer': target})
+    return {'peer': target, 'terminated': True}
+
+
+def apply_ipsec_config_service():
+    refs = _collect_ipsec_refs()
+    loaded = []
+    initiated = []
+    warnings = []
+    session = _vici_session()
+    for peer, identity, profile, policies, phase2 in refs:
+        conn_obj = _build_vici_connection_for_peer(peer, identity, profile, policies, phase2)
+        secret_obj = _build_vici_secret_for_peer(peer, identity)
+        session.load_shared(secret_obj)
+        session.load_conn(conn_obj)
+        loaded.append(str(peer.get('name')))
+        for policy in policies:
+            if bool(policy.get('enabled', True)) and str(policy.get('start_action') or 'start') == 'start':
+                try:
+                    session.initiate({'child': str(policy.get('name')), 'timeout': 30})
+                    initiated.append(str(policy.get('name')))
+                except Exception as exc:
+                    warnings.append(f"initiate failed for {policy.get('name')}: {exc}")
+    sas = _sanitize_vici_sas(session.list_sas())
+    active = _extract_active_peers_from_sas(sas)
+    installed_items = _extract_installed_sas_from_sas(sas)
+    xfrm = _run_ip_xfrm_best_effort()
+    if not xfrm.get('state') and not xfrm.get('policy'):
+        warnings.append('xfrm probe unavailable')
+    _log_ipsec_event('apply', {'loaded_peers': loaded, 'initiated_policies': initiated})
+    return {
+        'loaded_peers': loaded,
+        'initiated_policies': initiated,
+        'active_peers': active,
+        'installed_sas': {'items': installed_items, 'xfrm': xfrm},
+        'warnings': warnings,
+    }

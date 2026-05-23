@@ -58,6 +58,11 @@ class _ManagerStub:
         self.api_key = "test-api-key"
         self.interfaces = []
         self.clients = []
+        self.ipsec_peers = []
+        self.ipsec_identities = []
+        self.ipsec_policies = []
+        self.ipsec_phase1_profiles = []
+        self.ipsec_phase2_proposals = []
         self._next_interface_id = 1
         self._next_client_id = 1
         self.c = _FakeCursor(self)
@@ -192,6 +197,94 @@ class _ManagerStub:
     def build_qr_svg(self, _content):
         return b"<svg xmlns='http://www.w3.org/2000/svg'><rect width='10' height='10'/></svg>"
 
+    def list_ipsec_peers_service(self):
+        return list(self.ipsec_peers)
+
+    def list_ipsec_identities_service(self):
+        return list(self.ipsec_identities)
+
+    def list_ipsec_policies_service(self):
+        return list(self.ipsec_policies)
+
+    def list_ipsec_phase1_profiles_service(self):
+        return list(self.ipsec_phase1_profiles)
+
+    def list_ipsec_phase2_proposals_service(self):
+        return list(self.ipsec_phase2_proposals)
+
+    def upsert_ipsec_phase1_profile_service(self, payload):
+        self.ipsec_phase1_profiles = [x for x in self.ipsec_phase1_profiles if x.get("name") != payload.get("name")]
+        row = dict(payload)
+        self.ipsec_phase1_profiles.append(row)
+        return row
+
+    def upsert_ipsec_phase2_proposal_service(self, payload):
+        self.ipsec_phase2_proposals = [x for x in self.ipsec_phase2_proposals if x.get("name") != payload.get("name")]
+        row = dict(payload)
+        self.ipsec_phase2_proposals.append(row)
+        return row
+
+    def upsert_ipsec_peer_service(self, payload):
+        self.ipsec_peers = [x for x in self.ipsec_peers if x.get("name") != payload.get("name")]
+        row = dict(payload)
+        self.ipsec_peers.append(row)
+        return row
+
+    def upsert_ipsec_identity_service(self, payload):
+        self.ipsec_identities = [x for x in self.ipsec_identities if x.get("peer") != payload.get("peer")]
+        row = dict(payload)
+        row.pop("psk", None)
+        row["has_psk"] = True
+        self.ipsec_identities.append(row)
+        return row
+
+    def upsert_ipsec_policy_service(self, payload):
+        self.ipsec_policies = [x for x in self.ipsec_policies if x.get("name") != payload.get("name")]
+        row = dict(payload)
+        self.ipsec_policies.append(row)
+        return row
+
+    def delete_ipsec_policy_service(self, name):
+        existing = next((x for x in self.ipsec_policies if x.get("name") == name), None)
+        if existing is None:
+            raise LookupError("policy not found")
+        self.ipsec_policies = [x for x in self.ipsec_policies if x.get("name") != name]
+        return existing
+
+    def delete_ipsec_peer_service(self, name):
+        existing = next((x for x in self.ipsec_peers if x.get("name") == name), None)
+        if existing is None:
+            raise LookupError("peer not found")
+        self.ipsec_peers = [x for x in self.ipsec_peers if x.get("name") != name]
+        return existing
+
+    def list_ipsec_active_peers_service(self):
+        return [{"peer": "peer-a", "state": "ESTABLISHED", "remote_address": "2.2.2.2"}]
+
+    def list_ipsec_installed_sas_service(self):
+        return {"items": [{"child_sa": "lan-to-lan", "state": "INSTALLED"}], "xfrm": {"state": "", "policy": ""}}
+
+    def list_ipsec_events_service(self):
+        return []
+
+    def apply_ipsec_config_service(self):
+        return {
+            "loaded_peers": [x.get("name") for x in self.ipsec_peers],
+            "initiated_policies": [x.get("name") for x in self.ipsec_policies],
+            "active_peers": [],
+            "installed_sas": {"items": []},
+            "warnings": [],
+        }
+
+    def load_ipsec_peer_service(self, peer_name):
+        return {"peer": peer_name, "loaded": True}
+
+    def initiate_ipsec_policy_service(self, policy_name):
+        return {"policy": policy_name, "initiated": True}
+
+    def terminate_ipsec_peer_service(self, peer_name):
+        return {"peer": peer_name, "terminated": True}
+
 
 class APITestCase(unittest.TestCase):
     @classmethod
@@ -203,7 +296,7 @@ class APITestCase(unittest.TestCase):
                 setattr(stub_module, name, getattr(cls._manager_stub, name))
         sys.modules["awg_core"] = stub_module
 
-        cls.awg_api = importlib.import_module("awg_api")
+        cls.awg_api = importlib.import_module("api_core")
         cls.awg_api.manager = cls._manager_stub
 
         sock = socket.socket()
@@ -245,6 +338,11 @@ class APITestCase(unittest.TestCase):
         self._manager_stub.api_key = "test-api-key"
         self._manager_stub.interfaces = []
         self._manager_stub.clients = []
+        self._manager_stub.ipsec_peers = []
+        self._manager_stub.ipsec_identities = []
+        self._manager_stub.ipsec_policies = []
+        self._manager_stub.ipsec_phase1_profiles = []
+        self._manager_stub.ipsec_phase2_proposals = []
         self._manager_stub._next_interface_id = 1
         self._manager_stub._next_client_id = 1
 
@@ -358,6 +456,52 @@ class APITestCase(unittest.TestCase):
         )
         self.assertEqual(status, 404)
         self.assertEqual(data["error"], "Interface not found")
+
+    def test_ipsec_crud_and_apply_routes(self):
+        status, _ = self._request(
+            "POST",
+            "/api/ipsec/phase1-profiles",
+            body={"name": "p1", "encryption": "aes256", "hash": "sha256", "dh_group": "modp2048", "lifetime": "1d"},
+            api_key=self._auth_key(),
+        )
+        self.assertEqual(status, 201)
+
+        status, _ = self._request(
+            "POST",
+            "/api/ipsec/phase2-proposals",
+            body={"name": "p2", "encryption": "aes256", "auth": "sha256", "pfs_group": "modp2048", "lifetime": "1h"},
+            api_key=self._auth_key(),
+        )
+        self.assertEqual(status, 201)
+
+        status, _ = self._request(
+            "POST",
+            "/api/ipsec/peers",
+            body={"name": "peer-a", "local_addrs": ["1.1.1.1"], "remote_addrs": ["2.2.2.2"], "phase1_profile": "p1"},
+            api_key=self._auth_key(),
+        )
+        self.assertEqual(status, 201)
+
+        status, data = self._request(
+            "POST",
+            "/api/ipsec/identities",
+            body={"peer": "peer-a", "auth_method": "psk", "local_id": "1.1.1.1", "remote_id": "2.2.2.2", "psk": "secret"},
+            api_key=self._auth_key(),
+        )
+        self.assertEqual(status, 201)
+        self.assertNotIn("psk", data.get("item", {}))
+
+        status, _ = self._request(
+            "POST",
+            "/api/ipsec/policies",
+            body={"name": "pol-a", "peer": "peer-a", "local_ts": ["10.0.0.0/24"], "remote_ts": ["10.1.0.0/24"], "proposal": "p2"},
+            api_key=self._auth_key(),
+        )
+        self.assertEqual(status, 201)
+
+        status, data = self._request("POST", "/api/ipsec/apply", body={}, api_key=self._auth_key())
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
 
 
 if __name__ == "__main__":

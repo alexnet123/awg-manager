@@ -51,11 +51,11 @@ test('statistics tab shows chart and series toggle works', async ({ page, reques
   await expect(editModal.getByText('Current rule traffic')).toBeVisible()
   await expect(editModal.locator('svg.recharts-surface')).toBeVisible()
 
-  const bytesBtn = editModal.getByRole('button', { name: 'Bytes/sec' })
+  const bytesBtn = editModal.getByRole('button', { name: 'Bit rate' })
   await bytesBtn.click()
-  await expect(editModal.locator('path[stroke=\"#60a5fa\"]')).toHaveCount(1)
+  await expect(editModal.locator('path[stroke=\"#2563eb\"]')).toHaveCount(1)
 
-  const packetsBtn = editModal.getByRole('button', { name: 'Packets/sec' })
+  const packetsBtn = editModal.getByRole('button', { name: 'Packet rate' })
   await packetsBtn.click()
   await expect(editModal.locator('path[stroke=\"#2563eb\"]')).toHaveCount(1)
 

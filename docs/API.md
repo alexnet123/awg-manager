@@ -266,16 +266,37 @@ Returns AWG Manager nftables state:
 - `rules` (stored managed rules)
 - `ruleset` (text output of `nft list table inet awg_manager`)
 
+`GET /firewall/rules?family=<family>&table=<table>`
+
+Returns managed rules list filtered by `family` and `table`.
+Examples:
+- `GET /firewall/rules?family=bridge&table=br_lan`
+- `GET /firewall/rules?family=inet&table=filter`
+
 `POST /firewall/rules`
 
 Creates one managed rule and applies rules immediately.
 Rule object includes table selector: `filter | nat | raw | mangle`.
-Supported fields:
+Supported fields (inet policy):
 - common: `family`, `table`, `chain`, `action`, `proto`, `src`, `dst`, `in_interface`, `out_interface`, `sport`, `dport`, `ct_state`, `comment`, `enabled`
 - nat: `nat_type` (`masquerade|snat|dnat|redirect`), `to_addr`, `to_port`
 - raw: `notrack`
 - mangle: `mark_set`, `ct_mark_set`
 - extra matching/statements: `log_prefix`, `log_level`, `limit_rate` (e.g. `10/second`), `counter`
+
+Bridge MVP (`family=bridge`, used by Firewall → Policy v2):
+- base: `family`, `table`, `chain`, `action`, `enabled`, `comment`
+- bridge/L2: `ibrname`, `obrname`, `ether_src`, `ether_dst`, `ether_type`, `vlan_id`
+- bridge L3/L4: `proto`, `sport`, `dport`, `ct_state`
+- ops: `counter`, `log_prefix`, `log_level`, `log_flags`, `log_group`, `log_snaplen`, `log_queue_threshold`
+
+Important:
+- for `family=bridge`, unsupported fields are rejected with a field-specific error.
+- `action=reject` is accepted only when selected bridge chain has hook `input` or `prerouting`.
+- `vlan_id` must be integer `1..4095`.
+- `ether_type` must be hex/integer Ethertype (`0x0000..0xffff` or `0..65535`).
+- `log_snaplen` and `log_queue_threshold` require `log_group`.
+- `log_group` and `log_flags` are mutually exclusive.
 
 `PUT /firewall/rules/{id}`
 
@@ -426,3 +447,45 @@ Error:
 - Client creation, update and deletion affect live runtime peer state.
 - The API uses the same encryption secret and database as the CLI.
 - Direct SVG output is generated with `segno`.
+
+### IPsec (strongSwan/VICI)
+
+Namespace:
+
+- `/api/ipsec/*`
+
+Configuration endpoints (draft storage):
+
+- `GET /api/ipsec/peers`
+- `POST /api/ipsec/peers`
+- `PUT /api/ipsec/peers/{name}`
+- `DELETE /api/ipsec/peers/{name}`
+- `GET /api/ipsec/identities`
+- `POST /api/ipsec/identities`
+- `GET /api/ipsec/policies`
+- `POST /api/ipsec/policies`
+- `PUT /api/ipsec/policies/{name}`
+- `DELETE /api/ipsec/policies/{name}`
+- `GET /api/ipsec/phase1-profiles`
+- `POST /api/ipsec/phase1-profiles`
+- `GET /api/ipsec/phase2-proposals`
+- `POST /api/ipsec/phase2-proposals`
+
+Runtime/actions:
+
+- `POST /api/ipsec/apply`
+- `POST /api/ipsec/load/{peer}`
+- `POST /api/ipsec/initiate/{policy}`
+- `POST /api/ipsec/terminate/{peer}`
+
+Read-only runtime state:
+
+- `GET /api/ipsec/active-peers`
+- `GET /api/ipsec/installed-sas`
+- `GET /api/ipsec/events`
+
+Security notes:
+
+- Frontend never talks to VICI directly.
+- PSK is not returned back after save; API returns `has_psk` marker.
+- Runtime mutations are done only via explicit `Apply` or action endpoints.

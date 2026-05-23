@@ -2,6 +2,17 @@
 
 Документ объясняет, как использовать меню **Firewall → Add Firewall Rule** в AWG Manager.
 
+## 0) Policy и Policy v2
+- Вкладка `policy` по дизайну работает только с **inet**.
+- Для non-inet семейств используйте **Firewall → policy v2**.
+- Текущий MVP в `policy v2`: `Family=bridge` и выбор таблицы в 2 шага: `Family -> Table`.
+- В `policy v2` в списке `Table` показываются только включённые custom-таблицы выбранного семейства.
+- В bridge `policy v2` поддерживаются: `ibrname/obrname`, `ether src/dst/type`, `vlan id`, `proto`, `sport`, `dport`, `ct state`, `counter` и расширенные параметры `log`.
+- Для bridge `reject` допускается только для цепочек с hook `input` или `prerouting`.
+- Для bridge `vlan id` допустим диапазон `1..4095`.
+- Для bridge `ether type` принимается Ethertype в hex/decimal: `0x0000..0xffff` или `0..65535`.
+- В bridge MVP для логирования `log_group` и `log_flags` взаимно исключают друг друга.
+
 ## 1) Таблицы правил и назначение
 - `filter`: разрешение/запрет трафика (`accept`, `drop`, `reject`, `jump`, `goto`, `return`)
 - `nat`: трансляция адресов/портов (`dnat`, `snat`, `masquerade`, `redirect`)
@@ -88,6 +99,8 @@
 - `tcp_flags` при протоколе не `tcp`.
 - `icmp_type/icmp_code` при протоколе не `icmp`.
 - `icmpv6_type/icmpv6_code` при протоколе не `icmpv6`.
+- `vlan id` вне диапазона `1..4095`.
+- `ether type` вне диапазона Ethertype.
 - неверный `ct_direction` (должен быть `original` или `reply`).
 - неверный формат `ct_expiration` (только `30s`, `1m`, `2h`, `1d` и т.п.).
 - некорректные форматы mark/meta токенов.

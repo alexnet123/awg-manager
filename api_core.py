@@ -8,6 +8,7 @@ from urllib.parse import urlparse, parse_qs
 
 import awg_core as manager
 import firewall_api
+import ipsec_api
 
 UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ui')
 WEBUI_DIST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'webui', 'dist')
@@ -193,6 +194,9 @@ class AWGManagerAPIHandler(BaseHTTPRequestHandler):
         if firewall_api.handle_get(path_parts, self._send_json):
             return
 
+        if ipsec_api.handle_get(path_parts, self._send_json):
+            return
+
         if path_parts == ['backup', 'download']:
             backup_bytes = manager.read_database_bytes()
             self._send_bytes(
@@ -327,6 +331,9 @@ class AWGManagerAPIHandler(BaseHTTPRequestHandler):
             if firewall_api.handle_post(path_parts, payload, self._send_json):
                 return
 
+            if ipsec_api.handle_post(path_parts, payload, self._send_json):
+                return
+
             if path_parts == ['backup', 'restore']:
                 db_base64 = payload.get('db_base64')
                 if not isinstance(db_base64, str) or not db_base64.strip():
@@ -364,6 +371,9 @@ class AWGManagerAPIHandler(BaseHTTPRequestHandler):
 
             if firewall_api.handle_put(path_parts, payload, self._send_json):
                 return
+
+            if ipsec_api.handle_put(path_parts, payload, self._send_json):
+                return
         except Exception as exc:
             self._handle_service_error(exc)
             return
@@ -389,6 +399,9 @@ class AWGManagerAPIHandler(BaseHTTPRequestHandler):
                 return
 
             if firewall_api.handle_delete(path_parts, self._send_json):
+                return
+
+            if ipsec_api.handle_delete(path_parts, self._send_json):
                 return
         except Exception as exc:
             self._handle_service_error(exc)

@@ -112,6 +112,9 @@
 Куда в UI:
 - новая вкладка `Objects` (с внутренними табами по типам).
 
+Детальное UI-описание простым языком:
+- [FIREWALL_OBJECTS_UI_PLAN.ru.md](FIREWALL_OBJECTS_UI_PLAN.ru.md)
+
 ---
 
 ## Этап C — AST-конструктор, до ~60–70%
@@ -244,4 +247,5 @@
 - [FIREWALL_ADD_RULE_LIBNFTABLES_GAP_MATRIX.ru.md](FIREWALL_ADD_RULE_LIBNFTABLES_GAP_MATRIX.ru.md)
 - [FIREWALL_ADD_RULE_FIELDS_INVENTORY.md](FIREWALL_ADD_RULE_FIELDS_INVENTORY.md)
 - [FIREWALL_ADD_RULE_TESTPLAN.md](FIREWALL_ADD_RULE_TESTPLAN.md)
+- [FIREWALL_OBJECTS_UI_PLAN.ru.md](FIREWALL_OBJECTS_UI_PLAN.ru.md)
 - [TESTS_CATALOG.ru.md](TESTS_CATALOG.ru.md)
