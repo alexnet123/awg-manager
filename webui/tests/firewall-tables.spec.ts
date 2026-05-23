@@ -108,7 +108,7 @@ test('firewall policy: click custom table and create rule in it', async ({ page 
   expect(created.ok).toBeTruthy()
   const createdId = created.json?.item?.id as string
 
-  await page.getByRole('tab', { name: 'policy' }).click()
+  await page.getByRole('tab', { name: 'policy', exact: true }).click()
   const picker = page.getByRole('combobox').first()
   await picker.click()
   await page.getByRole('option', { name: tableName }).click()
@@ -130,7 +130,7 @@ test('firewall policy: click custom table and create rule in it', async ({ page 
 test('firewall policy: custom table picker shows many tables and allows switching', async ({ page }) => {
   await login(page)
   await openFirewall(page)
-  await page.getByRole('tab', { name: 'policy' }).click()
+  await page.getByRole('tab', { name: 'policy', exact: true }).click()
 
   const prefix = unique('pg')
   const createdIds: string[] = []
@@ -152,7 +152,7 @@ test('firewall policy: custom table picker shows many tables and allows switchin
   await page.getByRole('button', { name: 'Refresh' }).first().click().catch(() => {})
   await page.reload()
   await openFirewall(page)
-  await page.getByRole('tab', { name: 'policy' }).click()
+  await page.getByRole('tab', { name: 'policy', exact: true }).click()
 
   const picker = page.getByRole('combobox').first()
   await picker.click()
@@ -225,29 +225,69 @@ test('firewall tables: same table name supports multiple chains + disable hides 
 
   await page.reload()
   await openFirewall(page)
-  await page.getByRole('tab', { name: 'policy' }).click()
-  const picker = page.getByRole('combobox').first()
-  await picker.click()
-  await expect(page.getByRole('option', { name: tableName })).toHaveCount(0)
+  await page.getByRole('tab', { name: 'policy', exact: true }).click()
+  await expect(page.getByRole('combobox')).toHaveCount(0)
+  await expect(page.getByText(tableName, { exact: true })).toHaveCount(0)
 
   await deleteTableViaApi(page, c1.json?.item?.id)
   await deleteTableViaApi(page, c2.json?.item?.id)
 })
 
-test('firewall tables: only inet family is accepted (api)', async ({ page }) => {
+test('firewall tables: invalid chain_type/hook/device combos are rejected by API', async ({ page }) => {
   await login(page)
   await openFirewall(page)
 
-  const tableName = unique('fam')
-  const bad = await createTableViaApi(page, {
+  const badRoute = await createTableViaApi(page, {
+    family: 'inet',
+    table_name: unique('bad_route'),
+    chain_name: 'bad1',
+    chain_type: 'route',
+    hook: 'input',
+    priority: uniquePriority(500),
+    policy: 'accept',
+  })
+  expect(badRoute.ok).toBeFalsy()
+
+  const badIngressNoDevice = await createTableViaApi(page, {
+    family: 'inet',
+    table_name: unique('bad_ingress'),
+    chain_name: 'bad2',
+    chain_type: 'filter',
+    hook: 'ingress',
+    priority: uniquePriority(501),
+    policy: 'accept',
+  })
+  expect(badIngressNoDevice.ok).toBeFalsy()
+
+  const badNonIngressWithDevice = await createTableViaApi(page, {
+    family: 'inet',
+    table_name: unique('bad_device'),
+    chain_name: 'bad3',
+    chain_type: 'filter',
+    hook: 'input',
+    device: 'eth0',
+    priority: uniquePriority(502),
+    policy: 'accept',
+  })
+  expect(badNonIngressWithDevice.ok).toBeFalsy()
+})
+
+test('firewall tables: non-inet families are accepted in table builder API', async ({ page }) => {
+  await login(page)
+  await openFirewall(page)
+
+  const tableName = unique('fam_ip')
+  const created = await createTableViaApi(page, {
     family: 'ip',
     table_name: tableName,
     chain_name: 'input',
     chain_type: 'filter',
     hook: 'input',
-    priority: -55,
+    priority: uniquePriority(700),
     policy: 'accept',
   })
-  expect(bad.ok).toBeFalsy()
-  expect([400, 422]).toContain(bad.status)
+  expect(created.ok).toBeTruthy()
+  const createdId = created.json?.item?.id as string
+  expect(created.json?.item?.family).toBe('ip')
+  await deleteTableViaApi(page, createdId)
 })

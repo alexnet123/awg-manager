@@ -2,6 +2,17 @@
 
 This guide explains how to use **Firewall → Add Firewall Rule** in AWG Manager.
 
+## 0) Policy vs Policy v2
+- `policy` tab is intentionally **inet-only** (classic flow).
+- For non-inet families, use **Firewall → policy v2**.
+- Current MVP in `policy v2`: `Family=bridge` with 2-step selector `Family -> Table`.
+- `Table` list in `policy v2` shows only enabled custom tables from selected family.
+- Bridge `policy v2` supports: `ibrname/obrname`, `ether src/dst/type`, `vlan id`, `proto`, `sport`, `dport`, `ct state`, `counter`, and extended `log` options.
+- Bridge `reject` is allowed only on chains with hook `input` or `prerouting`.
+- Bridge `vlan id` range is `1..4095`.
+- Bridge `ether type` accepts Ethertype as hex/integer: `0x0000..0xffff` or `0..65535`.
+- In bridge MVP logging, `log_group` and `log_flags` cannot be used together.
+
 ## 1) Rule tables and intent
 - `filter`: allow/deny traffic (`accept`, `drop`, `reject`, `jump`, `goto`, `return`)
 - `nat`: address/port translation (`dnat`, `snat`, `masquerade`, `redirect`)
@@ -88,6 +99,8 @@ Common rejects (expected):
 - `tcp_flags` with non-tcp protocol.
 - `icmp_type/icmp_code` with non-icmp protocol.
 - `icmpv6_type/icmpv6_code` with non-icmpv6 protocol.
+- `vlan id` outside `1..4095`.
+- `ether type` outside Ethertype range.
 - invalid `ct_direction` (must be `original` or `reply`).
 - invalid `ct_expiration` format (must be like `30s`, `1m`, `2h`, `1d`).
 - invalid mark/meta token formats.

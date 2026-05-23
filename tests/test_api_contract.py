@@ -203,7 +203,7 @@ class APITestCase(unittest.TestCase):
                 setattr(stub_module, name, getattr(cls._manager_stub, name))
         sys.modules["awg_core"] = stub_module
 
-        cls.awg_api = importlib.import_module("awg_api")
+        cls.awg_api = importlib.import_module("api_core")
         cls.awg_api.manager = cls._manager_stub
 
         sock = socket.socket()
