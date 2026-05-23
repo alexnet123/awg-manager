@@ -2,9 +2,20 @@
 
 ## Статус
 - Sprint 1 (B1+ hardening): завершён в `dev` (commit `230a16e`) — bridge-only `Policy v2`, strict validation, E2E/API gate, reboot-restore проверка на стенде `132.243.237.120`.
-- B2 (`limit/quota/named counter`, `ct helper/timeout/expectation`): отложен и будет отдельным этапом.
+- B2 (`limit/quota/named counter`, `ct helper/timeout/expectation`): в работе.
+  - готово: `counter_name`, `limit_name`, `quota_name`, `ct_helper_set`, `ct_timeout_set`;
+  - временно отключено для bridge: `ct_expectation_set` и объект `ct_expectation` (статус planned).
 
 ## Журнал этапов
+- 2026-05-23: старт B2:
+  - backend: включены `limit_rate` для `family=bridge`, именованные поля `counter_name/limit_name/quota_name`;
+  - backend: включены ссылки `ct_helper_set/ct_timeout_set/ct_expectation_set` с runtime-проверкой существования named objects в выбранной bridge-таблице;
+  - UI/API: в `Policy v2` добавлены поля B2 и взаимные ограничения (`counter` vs `counter_name`, `limit_rate` vs `limit_name`);
+  - тесты: добавлены e2e кейсы для `limit_rate` и ошибок отсутствующих named objects.
+- 2026-05-23: B2 уточнение по runtime:
+  - подтверждено, что `ct_expectation` в bridge-контексте на текущем ядре/стеке даёт `nft Invalid argument`;
+  - решение: в `Policy v2` для bridge оставить `ct_expectation` в состоянии planned (UI disabled + backend reject с явной ошибкой), чтобы не было ложного ощущения, что поле рабочее;
+  - рабочими остаются `ct_helper_set` и `ct_timeout_set`.
 - 2026-05-23: закрыт Sprint 1 (B1+) по bridge:
   - backend: ужесточены bridge-валидации (`vlan_id`, `ether_type`, `reject` hook constraints, лог-ограничения);
   - UI/API: `Policy` = inet-only, `Policy v2` = bridge-only (в рамках этапа);

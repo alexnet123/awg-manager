@@ -90,7 +90,8 @@
 - valid expressions appear in nft runtime in expected form
 
 6. Conntrack helpers/timeouts/expectations:
-- `ct_helper_set`, `ct_timeout_set`, `ct_expectation_set` can be saved
+- `ct_helper_set`, `ct_timeout_set` can be saved (bridge Policy v2)
+- `ct_expectation_set` for bridge is planned/disabled and must return clear validation error
 - unsupported context usage rejected (by chain/table support)
 - no silent drop of these fields in API payload or persistence
 
