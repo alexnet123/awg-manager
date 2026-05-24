@@ -273,6 +273,53 @@ Examples:
 - `GET /firewall/rules?family=bridge&table=br_lan`
 - `GET /firewall/rules?family=inet&table=filter`
 
+`GET /firewall/objects?family=<family>&table=<table>`
+
+Returns named nft objects available in selected table:
+- `counter`
+- `limit`
+- `quota`
+- `ct_helper`
+- `ct_timeout`
+- `ct_expectation` (for `bridge` currently planned/disabled)
+- `items` (managed objects persisted by AWG Manager for this table/family)
+
+Example:
+- `GET /firewall/objects?family=bridge&table=br_lan`
+
+`POST /firewall/objects`
+
+Creates/updates one managed named object and applies rules immediately.
+
+Required common fields:
+- `kind` (`counter|limit|quota|ct_helper|ct_timeout|ct_expectation`)
+- `family`
+- `table`
+- `name`
+
+Optional common fields:
+- `enabled` (default `true`)
+- `comment`
+
+Kind-specific payload:
+- `counter`: `packets`, `bytes`
+- `limit`: `rate`, `burst`, `over`
+- `quota`: `mode` (`over|until`), `bytes`, `used`
+- `ct_helper`: `helper_type`, `l4proto`, `l3proto`
+- `ct_timeout`: `l4proto`, `timeout_policy`, `l3proto`
+- `ct_expectation`: `l4proto`, `dport`, `timeout`, `size`, `l3proto`
+Note:
+- `ct_expectation` creation for `family=bridge` is currently disabled (planned).
+
+`PUT /firewall/objects/{id}`
+
+Updates managed named object by id and applies immediately.
+
+`DELETE /firewall/objects/{id}`
+
+Deletes managed named object by id and applies immediately.
+Deletion is rejected while object is referenced by existing firewall rule(s).
+
 `POST /firewall/rules`
 
 Creates one managed rule and applies rules immediately.
@@ -288,7 +335,8 @@ Bridge MVP (`family=bridge`, used by Firewall → Policy v2):
 - base: `family`, `table`, `chain`, `action`, `enabled`, `comment`
 - bridge/L2: `ibrname`, `obrname`, `ether_src`, `ether_dst`, `ether_type`, `vlan_id`
 - bridge L3/L4: `proto`, `sport`, `dport`, `ct_state`
-- ops: `counter`, `log_prefix`, `log_level`, `log_flags`, `log_group`, `log_snaplen`, `log_queue_threshold`
+- bridge meta/marks: `meta_pkttype`, `meta_iifgroup`, `meta_oifgroup`, `mark_match`, `ct_mark_match`
+- ops: `counter`, `counter_name`, `limit_rate`, `limit_name`, `quota_name`, `ct_helper_set`, `ct_timeout_set`, `log_prefix`, `log_level`, `log_flags`, `log_group`, `log_snaplen`, `log_queue_threshold`, `queue_num`, `queue_flags`
 
 Important:
 - for `family=bridge`, unsupported fields are rejected with a field-specific error.
@@ -297,6 +345,17 @@ Important:
 - `ether_type` must be hex/integer Ethertype (`0x0000..0xffff` or `0..65535`).
 - `log_snaplen` and `log_queue_threshold` require `log_group`.
 - `log_group` and `log_flags` are mutually exclusive.
+- `counter` and `counter_name` are mutually exclusive.
+- `limit_rate` and `limit_name` are mutually exclusive.
+- `counter_name`, `limit_name`, `quota_name`, `ct_helper_set`, `ct_timeout_set` require existing named objects in selected bridge table.
+- `ct_expectation_set` for `bridge` is currently disabled (planned).
+- `queue_num`/`queue_flags` are valid only when `action=queue`.
+- `queue_flags` supports only `bypass`, `fanout`.
+- `queue_flags` with `fanout` requires `queue_num` range (e.g. `0-3`).
+- bridge structured expert expressions (`fib_check`, `socket_match`, `rt_nexthop`, `ipv6_exthdrs`) are currently planned/disabled on this runtime and rejected by backend validation.
+- `dup_to`/`dup_dev` are currently planned for `family=bridge` on this runtime and rejected by backend validation.
+- `fwd_to`/`fwd_dev`/`fwd_family` are netdev-only (planned for future `Policy v2` families).
+- UI explicitly shows planned strategy notes for `structured expressions`, `dup`, and `fwd` in bridge rule editor to avoid false runtime expectations.
 
 `PUT /firewall/rules/{id}`
 
