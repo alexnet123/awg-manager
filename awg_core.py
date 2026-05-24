@@ -76,6 +76,7 @@ FIREWALL_RULES_FILE = os.path.join(bd_path, 'firewall_rules.json')
 FIREWALL_SETS_FILE = os.path.join(bd_path, 'firewall_sets.json')
 FIREWALL_MAPS_FILE = os.path.join(bd_path, 'firewall_maps.json')
 FIREWALL_TABLES_FILE = os.path.join(bd_path, 'firewall_tables.json')
+FIREWALL_OBJECTS_FILE = os.path.join(bd_path, 'firewall_objects.json')
 FIREWALL_MANAGED_TABLES_FILE = os.path.join(bd_path, 'firewall_managed_tables.json')
 FIREWALL_STATS_FILE = os.path.join(bd_path, 'firewall_stats.json')
 IPSEC_PEERS_FILE = os.path.join(bd_path, 'ipsec_peers.json')
@@ -86,6 +87,7 @@ IPSEC_POLICIES_FILE = os.path.join(bd_path, 'ipsec_policies.json')
 IPSEC_EVENTS_FILE = os.path.join(bd_path, 'ipsec_events.json')
 FIREWALL_TABLE_FAMILY = 'inet'
 FIREWALL_SUPPORTED_TABLE_FAMILIES = ('inet', 'ip', 'ip6', 'bridge', 'netdev')
+FIREWALL_NAMED_OBJECT_KINDS = ('counter', 'limit', 'quota', 'ct_helper', 'ct_timeout', 'ct_expectation')
 FIREWALL_TABLE_PREFIX = ''
 FIREWALL_SCHEMA = {
     'family': FIREWALL_TABLE_FAMILY,
@@ -116,7 +118,7 @@ FIREWALL_SCHEMA = {
             'supports': ['proto', 'src', 'dst', 'sport', 'dport', 'ct_state', 'in_interface', 'out_interface', 'action', 'counter', 'mark_set', 'ct_mark_set', 'log', 'limit_rate', 'user_id', 'hour', 'dscp', 'tcp_flags', 'icmp_type', 'icmp_code', 'icmpv6_type', 'icmpv6_code', 'meta_length', 'meta_priority', 'meta_cpu', 'meta_pkttype', 'meta_iiftype', 'meta_oiftype', 'meta_iifgroup', 'meta_oifgroup', 'mark_match', 'ct_mark_match', 'ct_status', 'ct_direction', 'ct_expiration', 'ct_helper_match', 'ct_label', 'ct_event', 'ct_original_saddr', 'ct_original_daddr', 'ct_reply_saddr', 'ct_reply_daddr', 'fib_check', 'socket_match', 'rt_nexthop', 'ipv6_exthdrs', 'vlan_id', 'ether_src', 'ether_dst', 'ether_type'],
         },
     },
-    'actions': ['accept', 'drop', 'reject', 'jump', 'goto', 'return'],
+    'actions': ['accept', 'drop', 'reject', 'jump', 'goto', 'return', 'queue'],
     'protos': ['tcp', 'udp', 'icmp', 'icmpv6'],
     'ct_states': ['established,related', 'new', 'invalid', 'related', 'established', 'untracked'],
 }
@@ -645,6 +647,32 @@ def _write_firewall_maps_file(data):
     _write_json_file(FIREWALL_MAPS_FILE, data)
 
 
+def _empty_named_objects_by_kind():
+    return {kind: set() for kind in FIREWALL_NAMED_OBJECT_KINDS}
+
+
+def _read_firewall_objects_file():
+    data = _read_json_file(FIREWALL_OBJECTS_FILE, {})
+    rows = data.get('objects', [])
+    if not isinstance(rows, list):
+        rows = []
+    out = []
+    for row in rows:
+        if isinstance(row, dict):
+            out.append(dict(row))
+    return {'objects': out}
+
+
+def _write_firewall_objects_file(data):
+    rows = data.get('objects', []) if isinstance(data, dict) else []
+    clean = []
+    if isinstance(rows, list):
+        for row in rows:
+            if isinstance(row, dict):
+                clean.append(dict(row))
+    _write_json_file(FIREWALL_OBJECTS_FILE, {'objects': clean})
+
+
 def _read_firewall_tables_file():
     data = _read_json_file(FIREWALL_TABLES_FILE, {})
     rows = data.get('tables', [])
@@ -726,6 +754,313 @@ def _list_runtime_tables():
     return sorted(set(out))
 
 
+def _load_table_objects_by_kind(family, table_name):
+    result = _empty_named_objects_by_kind()
+    res = subprocess.run(
+        ['nft', 'list', 'table', str(family), str(table_name)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if res.returncode != 0:
+        return result
+    patterns = {
+        'counter': re.compile(r'^\s*counter\s+([A-Za-z0-9_.:-]+)\s*\{'),
+        'limit': re.compile(r'^\s*limit\s+([A-Za-z0-9_.:-]+)\s*\{'),
+        'quota': re.compile(r'^\s*quota\s+([A-Za-z0-9_.:-]+)\s*\{'),
+        'ct_helper': re.compile(r'^\s*ct helper\s+([A-Za-z0-9_.:-]+)\s*\{'),
+        'ct_timeout': re.compile(r'^\s*ct timeout\s+([A-Za-z0-9_.:-]+)\s*\{'),
+        'ct_expectation': re.compile(r'^\s*ct expectation\s+([A-Za-z0-9_.:-]+)\s*\{'),
+    }
+    for line in (res.stdout or '').splitlines():
+        for kind, pattern in patterns.items():
+            match = pattern.match(line)
+            if match:
+                result[kind].add(str(match.group(1)).lower())
+    return result
+
+
+def _load_declared_table_objects_by_kind(family, table_name, enabled_only=True):
+    out = _empty_named_objects_by_kind()
+    objects_data = _read_firewall_objects_file()
+    normalized_family = str(family).lower()
+    normalized_table = str(table_name).lower()
+    for row in objects_data.get('objects', []):
+        row_family = str(row.get('family') or '').lower()
+        row_table = str(row.get('table') or '').lower()
+        row_kind = str(row.get('kind') or '').lower()
+        row_name = normalize_config_value(row.get('name'))
+        if row_family != normalized_family or row_table != normalized_table:
+            continue
+        if row_kind not in out:
+            continue
+        if enabled_only and not bool(row.get('enabled', True)):
+            continue
+        if row_name is None:
+            continue
+        out[row_kind].add(str(row_name).lower())
+    return out
+
+
+def _load_effective_table_objects_by_kind(family, table_name):
+    runtime_objects = _load_table_objects_by_kind(family, table_name)
+    declared_objects = _load_declared_table_objects_by_kind(family, table_name, enabled_only=True)
+    out = _empty_named_objects_by_kind()
+    for kind in FIREWALL_NAMED_OBJECT_KINDS:
+        out[kind] = set(runtime_objects.get(kind, set())) | set(declared_objects.get(kind, set()))
+    return out
+
+
+def _validate_named_object_table_exists(family, table_name):
+    table_defs = _collect_firewall_table_defs()
+    if (str(family).lower(), str(table_name).lower()) not in table_defs:
+        raise ValueError(f'table "{table_name}" is not active for family "{family}"')
+
+
+def _normalize_logical_bool(value):
+    if isinstance(value, bool):
+        return value
+    return str(value).lower() in ('1', 'true', 'yes', 'on')
+
+
+def _normalize_named_object_payload(payload):
+    if not isinstance(payload, dict):
+        raise ValueError('object payload must be object')
+    kind = (normalize_config_value(payload.get('kind')) or '').lower()
+    if kind not in FIREWALL_NAMED_OBJECT_KINDS:
+        raise ValueError('kind must be one of: counter, limit, quota, ct_helper, ct_timeout, ct_expectation')
+    family = (normalize_config_value(payload.get('family')) or FIREWALL_TABLE_FAMILY).lower()
+    if family not in FIREWALL_SUPPORTED_TABLE_FAMILIES:
+        raise ValueError('family must be one of: inet, ip, ip6, bridge, netdev')
+    if family == 'bridge' and kind == 'ct_expectation':
+        raise ValueError('ct_expectation is planned for family=bridge and is temporarily disabled')
+    table_name = normalize_config_value(payload.get('table'))
+    if table_name is None or not re.fullmatch(r'[A-Za-z0-9_.-]+', str(table_name)):
+        raise ValueError('table is invalid')
+    table_name = str(table_name).lower()
+    _validate_named_object_table_exists(family, table_name)
+    name = normalize_config_value(payload.get('name'))
+    if name is None or not re.fullmatch(r'[A-Za-z0-9_.:-]+', str(name)):
+        raise ValueError('name is invalid')
+    name = str(name).lower()
+    enabled = _normalize_logical_bool(payload.get('enabled', True))
+    comment = normalize_config_value(payload.get('comment'))
+    if comment is not None:
+        comment = str(comment).replace('"', "'")
+
+    config = {}
+    if kind == 'counter':
+        packets_raw = normalize_config_value(payload.get('packets'))
+        bytes_raw = normalize_config_value(payload.get('bytes'))
+        if packets_raw is not None:
+            if not re.fullmatch(r'[0-9]+', packets_raw):
+                raise ValueError('packets must be unsigned integer')
+            config['packets'] = int(packets_raw)
+        if bytes_raw is not None:
+            if not re.fullmatch(r'[0-9]+', bytes_raw):
+                raise ValueError('bytes must be unsigned integer')
+            config['bytes'] = int(bytes_raw)
+    elif kind == 'limit':
+        rate = normalize_config_value(payload.get('rate'))
+        if rate is None or not re.fullmatch(r'[0-9]+(?:\s+(?:bytes|kbytes|mbytes|gbytes))?/(second|minute|hour|day)', rate.lower()):
+            raise ValueError('rate must be like 10/second or 1024 bytes/second')
+        config['rate'] = rate.lower()
+        burst = normalize_config_value(payload.get('burst'))
+        if burst is not None:
+            if not re.fullmatch(r'[0-9]+(?:\s+(?:packets|bytes|kbytes|mbytes|gbytes))?', burst.lower()):
+                raise ValueError('burst is invalid')
+            config['burst'] = burst.lower()
+        config['over'] = _normalize_logical_bool(payload.get('over', False))
+    elif kind == 'quota':
+        mode = (normalize_config_value(payload.get('mode')) or 'over').lower()
+        if mode not in ('over', 'until'):
+            raise ValueError('mode must be over|until')
+        bytes_value = normalize_config_value(payload.get('bytes'))
+        if bytes_value is None or not re.fullmatch(r'[0-9]+\s+(bytes|kbytes|mbytes|gbytes)', bytes_value.lower()):
+            raise ValueError('bytes must be like "20 mbytes"')
+        config['mode'] = mode
+        config['bytes'] = bytes_value.lower()
+        used = normalize_config_value(payload.get('used'))
+        if used is not None:
+            if not re.fullmatch(r'[0-9]+\s+(bytes|kbytes|mbytes|gbytes)', used.lower()):
+                raise ValueError('used must be like "1 mbytes"')
+            config['used'] = used.lower()
+    elif kind == 'ct_helper':
+        helper_type = normalize_config_value(payload.get('helper_type'))
+        if helper_type is None or not re.fullmatch(r'[A-Za-z0-9_.:-]+', helper_type):
+            raise ValueError('helper_type is invalid')
+        l4proto = (normalize_config_value(payload.get('l4proto')) or '').lower()
+        if l4proto not in ('tcp', 'udp'):
+            raise ValueError('l4proto must be tcp|udp')
+        l3proto = normalize_config_value(payload.get('l3proto'))
+        if l3proto is not None:
+            l3proto = str(l3proto).lower()
+            if l3proto not in ('ip', 'ip6'):
+                raise ValueError('l3proto must be ip|ip6')
+        config['helper_type'] = helper_type.lower()
+        config['l4proto'] = l4proto
+        if l3proto is not None:
+            config['l3proto'] = l3proto
+    elif kind == 'ct_timeout':
+        l4proto = (normalize_config_value(payload.get('l4proto')) or '').lower()
+        if l4proto not in ('tcp', 'udp'):
+            raise ValueError('l4proto must be tcp|udp')
+        policy = normalize_config_value(payload.get('timeout_policy'))
+        if policy is None:
+            raise ValueError('timeout_policy is required')
+        policy = str(policy).strip().lower()
+        if len(policy) > 240:
+            raise ValueError('timeout_policy is too long')
+        if not re.fullmatch(r'[a-z0-9_:, .-]+', policy):
+            raise ValueError('timeout_policy contains invalid characters')
+        if ':' not in policy:
+            raise ValueError('timeout_policy must contain state:value pairs')
+        l3proto = normalize_config_value(payload.get('l3proto'))
+        if l3proto is not None:
+            l3proto = str(l3proto).lower()
+            if l3proto not in ('ip', 'ip6'):
+                raise ValueError('l3proto must be ip|ip6')
+        config['l4proto'] = l4proto
+        config['timeout_policy'] = policy
+        if l3proto is not None:
+            config['l3proto'] = l3proto
+    elif kind == 'ct_expectation':
+        l4proto = (normalize_config_value(payload.get('l4proto')) or '').lower()
+        if l4proto not in ('tcp', 'udp'):
+            raise ValueError('l4proto must be tcp|udp')
+        dport = normalize_config_value(payload.get('dport'))
+        if dport is None or not re.fullmatch(r'[0-9]{1,5}', dport):
+            raise ValueError('dport must be integer in range 1..65535')
+        if int(dport) < 1 or int(dport) > 65535:
+            raise ValueError('dport must be integer in range 1..65535')
+        timeout = normalize_nft_timeout(payload.get('timeout'))
+        if timeout is None:
+            raise ValueError('timeout is required')
+        size_raw = normalize_config_value(payload.get('size'))
+        if size_raw is None or not re.fullmatch(r'[0-9]+', size_raw):
+            raise ValueError('size must be unsigned integer')
+        if int(size_raw) < 1:
+            raise ValueError('size must be greater than zero')
+        l3proto = normalize_config_value(payload.get('l3proto'))
+        if l3proto is not None:
+            l3proto = str(l3proto).lower()
+            if l3proto not in ('ip', 'ip6'):
+                raise ValueError('l3proto must be ip|ip6')
+        config['l4proto'] = l4proto
+        config['dport'] = int(dport)
+        config['timeout'] = timeout
+        config['size'] = int(size_raw)
+        if l3proto is not None:
+            config['l3proto'] = l3proto
+
+    return {
+        'id': str(payload.get('id') or uuid.uuid4().hex),
+        'kind': kind,
+        'family': family,
+        'table': table_name,
+        'name': name,
+        'enabled': enabled,
+        'comment': comment,
+        'config': config,
+    }
+
+
+def _render_named_object_add_statement(item):
+    kind = item.get('kind')
+    family = item.get('family')
+    table_name = item.get('table')
+    name = item.get('name')
+    config = item.get('config') or {}
+    comment = normalize_config_value(item.get('comment'))
+    if kind == 'counter':
+        body_parts = []
+        packets = config.get('packets')
+        bytes_count = config.get('bytes')
+        if packets is not None or bytes_count is not None:
+            packets_value = int(packets or 0)
+            bytes_value = int(bytes_count or 0)
+            body_parts.append(f'packets {packets_value} bytes {bytes_value};')
+        if comment is not None:
+            body_parts.append(f'comment "{comment}";')
+        body_clause = f' {{ {" ".join(body_parts)} }}' if body_parts else ''
+        return f'add counter {family} {table_name} {name}{body_clause}'
+    if kind == 'limit':
+        rate = str(config.get('rate') or '')
+        burst = normalize_config_value(config.get('burst'))
+        over = bool(config.get('over', False))
+        body_parts = [f'rate {"over " if over else ""}{rate}']
+        if burst is not None:
+            burst_value = str(burst)
+            if re.fullmatch(r'[0-9]+', burst_value):
+                burst_value = f'{burst_value} packets'
+            body_parts.append(f'burst {burst_value}')
+        body = ' '.join(body_parts)
+        body_parts = [f'{body};']
+        if comment is not None:
+            body_parts.append(f'comment "{comment}";')
+        return f'add limit {family} {table_name} {name} {{ {" ".join(body_parts)} }}'
+    if kind == 'quota':
+        mode = str(config.get('mode') or 'over')
+        bytes_value = str(config.get('bytes') or '')
+        used = normalize_config_value(config.get('used'))
+        body_parts = [f'{mode} {bytes_value}']
+        if used is not None:
+            body_parts.append(f'used {used}')
+        body_parts = [f'{" ".join(body_parts)};']
+        if comment is not None:
+            body_parts.append(f'comment "{comment}";')
+        return f'add quota {family} {table_name} {name} {{ {" ".join(body_parts)} }}'
+    if kind == 'ct_helper':
+        helper_type = str(config.get('helper_type') or '')
+        l4proto = str(config.get('l4proto') or '')
+        l3proto = normalize_config_value(config.get('l3proto'))
+        body_parts = [f'type "{helper_type}" protocol {l4proto};']
+        if l3proto is not None:
+            body_parts.append(f'l3proto {l3proto};')
+        if comment is not None:
+            body_parts.append(f'comment "{comment}";')
+        return f'add ct helper {family} {table_name} {name} {{ {" ".join(body_parts)} }}'
+    if kind == 'ct_timeout':
+        l4proto = str(config.get('l4proto') or '')
+        timeout_policy = str(config.get('timeout_policy') or '')
+        l3proto = normalize_config_value(config.get('l3proto'))
+        body_parts = [f'protocol {l4proto};', f'policy = {{ {timeout_policy} }};']
+        if l3proto is not None:
+            body_parts.append(f'l3proto {l3proto};')
+        if comment is not None:
+            body_parts.append(f'comment "{comment}";')
+        return f'add ct timeout {family} {table_name} {name} {{ {" ".join(body_parts)} }}'
+    if kind == 'ct_expectation':
+        l4proto = str(config.get('l4proto') or '')
+        dport = int(config.get('dport') or 0)
+        timeout = str(config.get('timeout') or '')
+        size = int(config.get('size') or 0)
+        l3proto = normalize_config_value(config.get('l3proto'))
+        body_parts = [
+            f'protocol {l4proto};',
+            f'dport {dport};',
+            f'timeout {timeout};',
+            f'size {size};',
+        ]
+        if l3proto is not None:
+            body_parts.append(f'l3proto {l3proto};')
+        if comment is not None:
+            body_parts.append(f'comment "{comment}";')
+        return f'add ct expectation {family} {table_name} {name} {{ {" ".join(body_parts)} }}'
+    raise ValueError('unsupported object kind')
+
+
+def _ensure_named_object_exists(objects_by_kind, object_kind, object_name, field_name):
+    obj = str(object_name or '').strip().lower()
+    if not obj:
+        return
+    names = objects_by_kind.get(object_kind, set())
+    if obj not in names:
+        pretty = object_kind.replace('_', ' ')
+        raise ValueError(f'{field_name} references missing {pretty} object "{object_name}" in selected table')
+
+
 def _read_firewall_stats_file():
     data = _read_json_file(FIREWALL_STATS_FILE, {})
     return data if isinstance(data, dict) else {}
@@ -774,7 +1109,7 @@ def _collect_firewall_table_defs():
     return table_defs
 
 
-def _append_table_script_lines(script_lines, table_family, nft_table, table_defs, sets_data, maps_data, rules, include_runtime_objects=True):
+def _append_table_script_lines(script_lines, table_family, nft_table, table_defs, sets_data, maps_data, rules, named_objects_data, include_runtime_objects=True):
     table_name = f'{FIREWALL_TABLE_PREFIX}{nft_table}'
     script_lines.append(f'add table {table_family} {table_name}')
     for chain_info in table_defs.get((table_family, nft_table), []):
@@ -840,6 +1175,16 @@ def _append_table_script_lines(script_lines, table_family, nft_table, table_defs
                 decl_stmt, elems = built
                 script_lines.append(f'add map {table_family} {table_name} {item["name"]} {{ {decl_stmt} }}')
                 script_lines.append(f'add element {table_family} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
+    for item in named_objects_data.get('objects', []):
+        if not isinstance(item, dict):
+            continue
+        if not bool(item.get('enabled', True)):
+            continue
+        if str(item.get('family') or '').lower() != table_family:
+            continue
+        if str(item.get('table') or '').lower() != nft_table:
+            continue
+        script_lines.append(_render_named_object_add_statement(item))
     for rule in rules:
         if not rule.get('enabled', True):
             continue
@@ -852,7 +1197,7 @@ def _append_table_script_lines(script_lines, table_family, nft_table, table_defs
         script_lines.append(f'add rule {table_family} {table_name} {rule["chain"]} {rendered}')
 
 
-def _normalize_firewall_rule(payload):
+def _normalize_firewall_rule(payload, validate_runtime_objects=False):
     if not isinstance(payload, dict):
         raise ValueError('Rule payload must be an object')
 
@@ -930,6 +1275,16 @@ def _normalize_firewall_rule(payload):
     ct_helper_set = normalize_config_value(payload.get('ct_helper_set'))
     ct_timeout_set = normalize_config_value(payload.get('ct_timeout_set'))
     ct_expectation_set = normalize_config_value(payload.get('ct_expectation_set'))
+    counter_name = normalize_config_value(payload.get('counter_name'))
+    limit_name = normalize_config_value(payload.get('limit_name'))
+    quota_name = normalize_config_value(payload.get('quota_name'))
+    queue_num = normalize_config_value(payload.get('queue_num'))
+    queue_flags_raw = payload.get('queue_flags')
+    dup_to = normalize_config_value(payload.get('dup_to'))
+    dup_dev = normalize_config_value(payload.get('dup_dev'))
+    fwd_to = normalize_config_value(payload.get('fwd_to'))
+    fwd_dev = normalize_config_value(payload.get('fwd_dev'))
+    fwd_family = normalize_config_value(payload.get('fwd_family'))
     nat_random = payload.get('nat_random', False)
     nat_fully_random = payload.get('nat_fully_random', False)
     nat_persistent = payload.get('nat_persistent', False)
@@ -971,8 +1326,8 @@ def _normalize_firewall_rule(payload):
 
     if chain not in allowed_chains:
         raise ValueError(f'chain "{chain}" is not valid for table "{nft_table}"')
-    if action not in ('accept', 'drop', 'reject', 'jump', 'goto', 'return'):
-        raise ValueError('action must be one of: accept, drop, reject, jump, goto, return')
+    if action not in ('accept', 'drop', 'reject', 'jump', 'goto', 'return', 'queue'):
+        raise ValueError('action must be one of: accept, drop, reject, jump, goto, return, queue')
     if table_mode != 'filter' and action in ('jump', 'goto', 'return'):
         raise ValueError('jump/goto/return are currently supported only in filter table')
     if action in ('jump', 'goto'):
@@ -1007,6 +1362,84 @@ def _normalize_firewall_rule(payload):
         raise ValueError('dport requires proto tcp or udp')
     if sport is not None and proto not in ('tcp', 'udp'):
         raise ValueError('sport requires proto tcp or udp')
+    queue_flags = None
+    if queue_flags_raw is not None:
+        if isinstance(queue_flags_raw, list):
+            raw_parts = []
+            for token in queue_flags_raw:
+                if token is None:
+                    continue
+                raw_parts.extend([x for x in str(token).split(',') if x.strip()])
+        else:
+            raw_parts = [x for x in str(queue_flags_raw).split(',') if x.strip()]
+        allowed_queue_flags = {'bypass', 'fanout'}
+        normalized_queue_flags = []
+        for token in raw_parts:
+            normalized = str(token).strip().lower()
+            if normalized not in allowed_queue_flags:
+                raise ValueError('queue_flags supports only: bypass, fanout')
+            if normalized not in normalized_queue_flags:
+                normalized_queue_flags.append(normalized)
+        queue_flags = normalized_queue_flags if normalized_queue_flags else None
+    if queue_num is not None:
+        queue_num = str(queue_num).strip()
+        if not re.fullmatch(r'[0-9]{1,5}(-[0-9]{1,5})?', queue_num):
+            raise ValueError('queue_num must be like 0 or 0-3')
+        if '-' in queue_num:
+            left, right = queue_num.split('-', 1)
+            q1, q2 = int(left), int(right)
+            if q1 < 0 or q2 < 0 or q1 > 65535 or q2 > 65535 or q1 > q2:
+                raise ValueError('queue_num range must be within 0..65535 and start <= end')
+        else:
+            q = int(queue_num)
+            if q < 0 or q > 65535:
+                raise ValueError('queue_num must be in range 0..65535')
+    if action != 'queue' and (queue_num is not None or queue_flags is not None):
+        raise ValueError('queue_num/queue_flags are only valid when action=queue')
+    if action == 'queue' and table_mode != 'filter':
+        raise ValueError('action=queue is currently supported only in filter table')
+    if action == 'queue' and isinstance(queue_flags, list) and 'fanout' in queue_flags:
+        if queue_num is None or '-' not in str(queue_num):
+            raise ValueError('queue flag fanout requires queue_num range like 0-3')
+    if dup_to is not None:
+        try:
+            ipaddress.ip_address(str(dup_to))
+        except ValueError:
+            raise ValueError('dup_to must be a valid IPv4/IPv6 address')
+        dup_to = str(dup_to)
+    if dup_dev is not None:
+        if not re.fullmatch(r'[A-Za-z0-9_.:-]+', str(dup_dev)):
+            raise ValueError('dup_dev contains invalid characters')
+        dup_dev = str(dup_dev)
+    if dup_to is None and dup_dev is not None:
+        raise ValueError('dup_to is required when dup_dev is set')
+    if fwd_family is not None:
+        fwd_family = str(fwd_family).lower()
+        if fwd_family not in ('ip', 'ip6'):
+            raise ValueError('fwd_family must be ip or ip6')
+    if fwd_to is not None:
+        try:
+            parsed = ipaddress.ip_address(str(fwd_to))
+        except ValueError:
+            raise ValueError('fwd_to must be a valid IPv4/IPv6 address')
+        expected_family = 'ip6' if parsed.version == 6 else 'ip'
+        if fwd_family is None:
+            fwd_family = expected_family
+        elif fwd_family != expected_family:
+            raise ValueError('fwd_family does not match fwd_to address family')
+        fwd_to = str(fwd_to)
+    if fwd_dev is not None:
+        if not re.fullmatch(r'[A-Za-z0-9_.:-]+', str(fwd_dev)):
+            raise ValueError('fwd_dev contains invalid characters')
+        fwd_dev = str(fwd_dev)
+    if fwd_to is not None and fwd_dev is None:
+        raise ValueError('fwd_dev is required when fwd_to is set')
+    if fwd_dev is not None and fwd_to is None:
+        raise ValueError('fwd_to is required when fwd_dev is set')
+    if (fwd_to is not None or fwd_dev is not None or fwd_family is not None) and family != 'netdev':
+        raise ValueError('fwd_to/fwd_dev/fwd_family are supported only for family=netdev')
+    if family == 'bridge' and (dup_to is not None or dup_dev is not None):
+        raise ValueError('dup_to/dup_dev are planned for family=bridge and temporarily disabled on current nft runtime')
     if tcp_flags is not None and proto != 'tcp':
         raise ValueError('tcp_flags requires proto tcp')
     if (icmp_type is not None or icmp_code is not None) and proto != 'icmp':
@@ -1281,11 +1714,47 @@ def _normalize_firewall_rule(payload):
         ('ct_helper_set', ct_helper_set),
         ('ct_timeout_set', ct_timeout_set),
         ('ct_expectation_set', ct_expectation_set),
+        ('counter_name', counter_name),
+        ('limit_name', limit_name),
+        ('quota_name', quota_name),
     ):
         if val is not None and not re.fullmatch(r'[A-Za-z0-9_.-]+', str(val)):
             raise ValueError(f'{fld} contains invalid characters')
-    if ct_helper_set is not None or ct_timeout_set is not None or ct_expectation_set is not None:
-        raise ValueError('ct_helper_set/ct_timeout_set/ct_expectation_set require nft stateful ct objects and are not enabled yet')
+    if counter_name is not None and counter:
+        raise ValueError('counter_name and counter are mutually exclusive')
+    if limit_name is not None and limit_rate is not None:
+        raise ValueError('limit_name and limit_rate are mutually exclusive')
+    if family != 'bridge':
+        if ct_helper_set is not None or ct_timeout_set is not None or ct_expectation_set is not None:
+            raise ValueError('ct_helper_set/ct_timeout_set/ct_expectation_set are supported only for family=bridge in this sprint')
+        if counter_name is not None or limit_name is not None or quota_name is not None:
+            raise ValueError('counter_name/limit_name/quota_name are supported only for family=bridge in this sprint')
+    if family == 'bridge' and ct_expectation_set is not None:
+        raise ValueError('ct_expectation_set is planned for family=bridge and is temporarily disabled')
+    if family == 'bridge' and any((
+        fib_check is not None,
+        socket_match is not None,
+        rt_nexthop is not None,
+        ipv6_exthdrs is not None,
+    )):
+        raise ValueError('fib_check/socket_match/rt_nexthop/ipv6_exthdrs are planned for family=bridge and temporarily disabled on current nft runtime')
+    if validate_runtime_objects and family == 'bridge':
+        needs_named_objects = any((
+            ct_helper_set is not None,
+            ct_timeout_set is not None,
+            ct_expectation_set is not None,
+            counter_name is not None,
+            limit_name is not None,
+            quota_name is not None,
+        ))
+        if needs_named_objects:
+            objects_by_kind = _load_effective_table_objects_by_kind(family, nft_table)
+            _ensure_named_object_exists(objects_by_kind, 'ct_helper', ct_helper_set, 'ct_helper_set')
+            _ensure_named_object_exists(objects_by_kind, 'ct_timeout', ct_timeout_set, 'ct_timeout_set')
+            _ensure_named_object_exists(objects_by_kind, 'ct_expectation', ct_expectation_set, 'ct_expectation_set')
+            _ensure_named_object_exists(objects_by_kind, 'counter', counter_name, 'counter_name')
+            _ensure_named_object_exists(objects_by_kind, 'limit', limit_name, 'limit_name')
+            _ensure_named_object_exists(objects_by_kind, 'quota', quota_name, 'quota_name')
 
     if family == 'bridge':
         bridge_disallowed = (
@@ -1319,13 +1788,8 @@ def _normalize_firewall_rule(payload):
             ('meta_length', meta_length),
             ('meta_priority', meta_priority),
             ('meta_cpu', meta_cpu),
-            ('meta_pkttype', meta_pkttype),
             ('meta_iiftype', meta_iiftype),
             ('meta_oiftype', meta_oiftype),
-            ('meta_iifgroup', meta_iifgroup),
-            ('meta_oifgroup', meta_oifgroup),
-            ('mark_match', mark_match),
-            ('ct_mark_match', ct_mark_match),
             ('ct_status', ct_status),
             ('ct_direction', ct_direction),
             ('ct_expiration', ct_expiration),
@@ -1336,14 +1800,11 @@ def _normalize_firewall_rule(payload):
             ('ct_original_daddr', ct_original_daddr),
             ('ct_reply_saddr', ct_reply_saddr),
             ('ct_reply_daddr', ct_reply_daddr),
-            ('fib_check', fib_check),
-            ('socket_match', socket_match),
-            ('rt_nexthop', rt_nexthop),
-            ('ipv6_exthdrs', ipv6_exthdrs),
-            ('ct_helper_set', ct_helper_set),
-            ('ct_timeout_set', ct_timeout_set),
-            ('ct_expectation_set', ct_expectation_set),
-            ('limit_rate', limit_rate),
+            ('fwd_to', fwd_to),
+            ('fwd_dev', fwd_dev),
+            ('fwd_family', fwd_family),
+            ('dup_to', dup_to),
+            ('dup_dev', dup_dev),
         )
         for field_name, field_value in bridge_disallowed:
             if isinstance(field_value, bool):
@@ -1432,6 +1893,16 @@ def _normalize_firewall_rule(payload):
         'ct_timeout_set': ct_timeout_set,
         'ct_expectation_set': ct_expectation_set,
         'limit_rate': limit_rate,
+        'counter_name': counter_name,
+        'limit_name': limit_name,
+        'quota_name': quota_name,
+        'queue_num': queue_num,
+        'queue_flags': queue_flags,
+        'dup_to': dup_to,
+        'dup_dev': dup_dev,
+        'fwd_to': fwd_to,
+        'fwd_dev': fwd_dev,
+        'fwd_family': fwd_family,
         'counter': counter,
         'enabled': enabled,
     }
@@ -1513,6 +1984,10 @@ def _render_firewall_rule(rule, table_family='inet'):
         parts.append(f'{rule["proto"]} dport {_render_port_value(rule["dport"])}')
     if rule.get('limit_rate'):
         parts.append(f'limit rate {rule["limit_rate"]}')
+    if rule.get('limit_name'):
+        parts.append(f'limit name "{rule["limit_name"]}"')
+    if rule.get('quota_name'):
+        parts.append(f'quota name "{rule["quota_name"]}"')
     if rule.get('fib_expr'):
         parts.append(str(rule['fib_expr']))
     if rule.get('socket_expr'):
@@ -1608,6 +2083,8 @@ def _render_firewall_rule(rule, table_family='inet'):
         parts.append(' '.join(log_parts))
     if rule.get('counter'):
         parts.append('counter')
+    if rule.get('counter_name'):
+        parts.append(f'counter name "{rule["counter_name"]}"')
     if rule.get('notrack'):
         parts.append('notrack')
     if rule.get('nftrace'):
@@ -1622,6 +2099,17 @@ def _render_firewall_rule(rule, table_family='inet'):
         parts.append(f'ct timeout set "{rule["ct_timeout_set"]}"')
     if rule.get('ct_expectation_set'):
         parts.append(f'ct expectation set "{rule["ct_expectation_set"]}"')
+    if rule.get('dup_to'):
+        if rule.get('dup_dev'):
+            parts.append(f'dup to {rule["dup_to"]} device "{rule["dup_dev"]}"')
+        else:
+            parts.append(f'dup to {rule["dup_to"]}')
+    if rule.get('fwd_to'):
+        family = str(rule.get('fwd_family') or '').strip().lower()
+        if family in ('ip', 'ip6'):
+            parts.append(f'fwd {family} to {rule["fwd_to"]} device "{rule["fwd_dev"]}"')
+        else:
+            parts.append(f'fwd to {rule["fwd_to"]} device "{rule["fwd_dev"]}"')
     nat_type = rule.get('nat_type')
     if nat_type:
         nat_stmt = nat_type
@@ -1652,6 +2140,18 @@ def _render_firewall_rule(rule, table_family='inet'):
             parts.append(f'{action} {rule.get("target_chain")}')
         elif action == 'reject' and rule.get('reject_type'):
             parts.append(f'reject with {rule["reject_type"]}')
+        elif action == 'queue':
+            queue_stmt = 'queue'
+            if rule.get('queue_num'):
+                queue_stmt += f' num {rule["queue_num"]}'
+            flags = rule.get('queue_flags') or []
+            if isinstance(flags, list):
+                normalized_flags = [str(x).strip().lower() for x in flags if str(x).strip()]
+            else:
+                normalized_flags = [x.strip().lower() for x in str(flags).split(',') if x.strip()]
+            if normalized_flags:
+                queue_stmt += f' {",".join(normalized_flags)}'
+            parts.append(queue_stmt)
         else:
             parts.append(action)
     if rule['comment']:
@@ -1755,6 +2255,7 @@ def apply_firewall_rules():
     rules = list_firewall_rules_service()
     sets_data = _read_firewall_sets_file()
     maps_data = _read_firewall_maps_file()
+    named_objects_data = _read_firewall_objects_file()
     table_defs = _collect_firewall_table_defs()
     active_table_refs = set(table_defs.keys())
     managed_keys = _read_managed_tables_file().get('tables', [])
@@ -1800,6 +2301,7 @@ def apply_firewall_rules():
             sets_data,
             maps_data,
             rules,
+            named_objects_data,
             include_runtime_objects=(table_family == FIREWALL_TABLE_FAMILY),
         )
     script_text = '\n'.join(script_lines) + '\n'
@@ -1811,7 +2313,7 @@ def apply_firewall_rules():
 
 def create_firewall_rule_service(payload, apply_now=True):
     rules = list_firewall_rules_service()
-    rule = _normalize_firewall_rule(payload)
+    rule = _normalize_firewall_rule(payload, validate_runtime_objects=True)
     # Idempotency guard for concurrent duplicate creates from UI/API retries.
     # Keep one logical rule for the same effective payload.
     identity_keys = (
@@ -1830,6 +2332,8 @@ def create_firewall_rule_service(payload, apply_now=True):
         'mark_set', 'ct_mark_set', 'log_prefix', 'log_level', 'log_flags', 'log_group', 'log_snaplen', 'log_queue_threshold',
         'fib_expr', 'socket_expr', 'rt_expr', 'exthdr_expr',
         'ct_helper_set', 'ct_timeout_set', 'ct_expectation_set',
+        'counter_name', 'limit_name', 'quota_name',
+        'queue_num', 'queue_flags', 'dup_to', 'dup_dev', 'fwd_to', 'fwd_dev', 'fwd_family',
         'limit_rate', 'counter', 'enabled',
     )
     for existing in rules:
@@ -1857,7 +2361,7 @@ def update_firewall_rule_service(rule_id, payload, apply_now=True):
         raise LookupError('Firewall rule not found')
     merged = {**existing, **(payload or {})}
     merged['id'] = existing['id']
-    updated = _normalize_firewall_rule(merged)
+    updated = _normalize_firewall_rule(merged, validate_runtime_objects=True)
     out = [updated if r['id'] == existing['id'] else r for r in rules]
     _write_firewall_rules_file(out)
     try:
@@ -1961,6 +2465,7 @@ def reset_firewall_counters_service(table=None):
     rules = list_firewall_rules_service()
     sets_data = _read_firewall_sets_file()
     maps_data = _read_firewall_maps_file()
+    named_objects_data = _read_firewall_objects_file()
     table_defs = _collect_firewall_table_defs()
     runtime_reset_supported = False
     for nft_table in target_tables:
@@ -2029,6 +2534,7 @@ def reset_firewall_counters_service(table=None):
                 sets_data,
                 maps_data,
                 rules,
+                named_objects_data,
                 include_runtime_objects=True,
             )
             script_text = '\n'.join(script_lines) + '\n'
@@ -2467,6 +2973,178 @@ def list_firewall_tables_service():
     return {'builtin': builtin, 'custom': custom}
 
 
+def list_firewall_named_objects_service(family=None, table=None):
+    normalized_family = (normalize_config_value(family) or '').lower()
+    normalized_table = normalize_config_value(table)
+    if normalized_family not in FIREWALL_SUPPORTED_TABLE_FAMILIES:
+        raise ValueError('family must be one of: inet, ip, ip6, bridge, netdev')
+    if normalized_table is None or not re.fullmatch(r'[a-zA-Z0-9_.-]+', str(normalized_table)):
+        raise ValueError('table is invalid')
+    normalized_table = str(normalized_table).lower()
+    declared_items = []
+    for row in _read_firewall_objects_file().get('objects', []):
+        if str(row.get('family') or '').lower() != normalized_family:
+            continue
+        if str(row.get('table') or '').lower() != normalized_table:
+            continue
+        if str(row.get('kind') or '').lower() not in FIREWALL_NAMED_OBJECT_KINDS:
+            continue
+        declared_items.append(dict(row))
+    table_defs = _collect_firewall_table_defs()
+    if (normalized_family, normalized_table) not in table_defs:
+        return {
+            'family': normalized_family,
+            'table': normalized_table,
+            'counter': [],
+            'limit': [],
+            'quota': [],
+            'ct_helper': [],
+            'ct_timeout': [],
+            'ct_expectation': [],
+            'items': [],
+        }
+    objects_by_kind = _load_effective_table_objects_by_kind(normalized_family, normalized_table)
+    return {
+        'family': normalized_family,
+        'table': normalized_table,
+        'counter': sorted(objects_by_kind.get('counter', set())),
+        'limit': sorted(objects_by_kind.get('limit', set())),
+        'quota': sorted(objects_by_kind.get('quota', set())),
+        'ct_helper': sorted(objects_by_kind.get('ct_helper', set())),
+        'ct_timeout': sorted(objects_by_kind.get('ct_timeout', set())),
+        'ct_expectation': sorted(objects_by_kind.get('ct_expectation', set())),
+        'items': declared_items,
+    }
+
+
+def _firewall_rule_object_reference(rule, kind):
+    if kind == 'counter':
+        return normalize_config_value(rule.get('counter_name'))
+    if kind == 'limit':
+        return normalize_config_value(rule.get('limit_name'))
+    if kind == 'quota':
+        return normalize_config_value(rule.get('quota_name'))
+    if kind == 'ct_helper':
+        return normalize_config_value(rule.get('ct_helper_set'))
+    if kind == 'ct_timeout':
+        return normalize_config_value(rule.get('ct_timeout_set'))
+    if kind == 'ct_expectation':
+        return normalize_config_value(rule.get('ct_expectation_set'))
+    return None
+
+
+def _find_named_object_references(family, table_name, kind, name):
+    refs = []
+    for rule in list_firewall_rules_service():
+        if str(rule.get('family') or '').lower() != str(family).lower():
+            continue
+        if str(rule.get('table') or '').lower() != str(table_name).lower():
+            continue
+        ref_name = _firewall_rule_object_reference(rule, kind)
+        if ref_name is None:
+            continue
+        if str(ref_name).lower() == str(name).lower():
+            refs.append({'rule_id': str(rule.get('id') or ''), 'chain': str(rule.get('chain') or '')})
+    return refs
+
+
+def upsert_firewall_named_object_service(payload, apply_now=True):
+    objects_data = _read_firewall_objects_file()
+    previous_objects = [dict(row) for row in objects_data.get('objects', [])]
+    item = _normalize_named_object_payload(payload or {})
+    previous_row = next((row for row in objects_data.get('objects', []) if str(row.get('id') or '') == item['id']), None)
+    if previous_row is not None:
+        previous_refs = _find_named_object_references(
+            previous_row.get('family'),
+            previous_row.get('table'),
+            previous_row.get('kind'),
+            previous_row.get('name'),
+        )
+        changed_identity = any((
+            str(previous_row.get('family') or '').lower() != str(item.get('family') or '').lower(),
+            str(previous_row.get('table') or '').lower() != str(item.get('table') or '').lower(),
+            str(previous_row.get('kind') or '').lower() != str(item.get('kind') or '').lower(),
+            str(previous_row.get('name') or '').lower() != str(item.get('name') or '').lower(),
+        ))
+        disabling = bool(previous_row.get('enabled', True)) and not bool(item.get('enabled', True))
+        if previous_refs and (changed_identity or disabling):
+            raise ValueError(f'object is in use by {len(previous_refs)} firewall rule(s)')
+    out = []
+    replaced = False
+    for row in objects_data.get('objects', []):
+        if str(row.get('id') or '') == item['id']:
+            out.append(item)
+            replaced = True
+        else:
+            out.append(row)
+    if not replaced:
+        out.append(item)
+    # Unique name per family+table+kind.
+    seen = set()
+    for row in out:
+        signature = (
+            str(row.get('family') or '').lower(),
+            str(row.get('table') or '').lower(),
+            str(row.get('kind') or '').lower(),
+            str(row.get('name') or '').lower(),
+        )
+        if signature in seen:
+            raise ValueError('object name must be unique inside family/table/kind')
+        seen.add(signature)
+    objects_data['objects'] = out
+    _write_firewall_objects_file(objects_data)
+    try:
+        if apply_now:
+            apply_firewall_rules()
+    except Exception:
+        _write_firewall_objects_file({'objects': previous_objects})
+        raise
+    return item
+
+
+def create_firewall_named_object_service(payload, apply_now=True):
+    body = dict(payload or {})
+    requested_id = normalize_config_value(body.get('id'))
+    objects_data = _read_firewall_objects_file()
+    if requested_id is not None:
+        if any(str(x.get('id') or '') == str(requested_id) for x in objects_data.get('objects', [])):
+            raise ValueError('object id already exists')
+    return upsert_firewall_named_object_service(body, apply_now=apply_now)
+
+
+def update_firewall_named_object_service(object_id, payload, apply_now=True):
+    target_id = str(object_id)
+    objects_data = _read_firewall_objects_file()
+    existing = next((x for x in objects_data.get('objects', []) if str(x.get('id') or '') == target_id), None)
+    if existing is None:
+        raise LookupError('object not found')
+    body = dict(existing)
+    body.update(payload or {})
+    body['id'] = target_id
+    return upsert_firewall_named_object_service(body, apply_now=apply_now)
+
+
+def delete_firewall_named_object_service(object_id, apply_now=True):
+    objects_data = _read_firewall_objects_file()
+    previous_objects = [dict(row) for row in objects_data.get('objects', [])]
+    existing = next((x for x in objects_data.get('objects', []) if str(x.get('id') or '') == str(object_id)), None)
+    if existing is None:
+        raise LookupError('object not found')
+    refs = _find_named_object_references(existing.get('family'), existing.get('table'), existing.get('kind'), existing.get('name'))
+    if refs:
+        raise ValueError(f'object is in use by {len(refs)} firewall rule(s)')
+    next_objects = [x for x in objects_data.get('objects', []) if str(x.get('id') or '') != str(object_id)]
+    objects_data['objects'] = next_objects
+    _write_firewall_objects_file(objects_data)
+    try:
+        if apply_now:
+            apply_firewall_rules()
+    except Exception:
+        _write_firewall_objects_file({'objects': previous_objects})
+        raise
+    return existing
+
+
 def _normalize_firewall_table_item(payload):
     if not isinstance(payload, dict):
         raise ValueError('table payload must be object')
@@ -2576,6 +3254,19 @@ def delete_firewall_table_service(table_id):
         raise LookupError('table not found')
     data['tables'] = [x for x in data['tables'] if x.get('id') != str(table_id)]
     _write_firewall_tables_file(data)
+    objects_data = _read_firewall_objects_file()
+    existing_family = str(existing.get('family') or FIREWALL_TABLE_FAMILY).lower()
+    existing_table = str(existing.get('table_name') or '').lower()
+    next_objects = [
+        row for row in objects_data.get('objects', [])
+        if not (
+            str(row.get('family') or '').lower() == existing_family
+            and str(row.get('table') or '').lower() == existing_table
+        )
+    ]
+    if len(next_objects) != len(objects_data.get('objects', [])):
+        objects_data['objects'] = next_objects
+        _write_firewall_objects_file(objects_data)
     apply_firewall_rules()
     return existing
 

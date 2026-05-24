@@ -2,6 +2,7 @@ import * as React from 'react'
 import { Plus, X } from 'lucide-react'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -86,6 +87,13 @@ const defaultRule: Partial<FirewallRule> = {
   counter_name: null,
   limit_name: null,
   quota_name: null,
+  queue_num: null,
+  queue_flags: null,
+  dup_to: null,
+  dup_dev: null,
+  fwd_to: null,
+  fwd_dev: null,
+  fwd_family: null,
   limit_rate: null,
   counter: false,
 }
@@ -153,14 +161,40 @@ function PlannedField(props: { label: string; placeholder: string }) {
   )
 }
 
-function formatPolicyV2RuleObjectBinding(rule: FirewallRule) {
+type PolicyV2ObjectBinding = { kind: 'counter' | 'limit' | 'quota' | 'ct_helper' | 'ct_timeout'; name: string; label: string }
+
+function hasPolicyV2RuleObjectBinding(rule: Partial<FirewallRule>) {
+  return getPolicyV2RuleObjectBindings(rule).length > 0
+}
+
+function getPolicyV2RuleObjectBindings(rule: Partial<FirewallRule>): PolicyV2ObjectBinding[] {
+  const parts: PolicyV2ObjectBinding[] = []
+  if (rule.counter_name) parts.push({ kind: 'counter', name: rule.counter_name, label: `counter:${rule.counter_name}` })
+  if (rule.limit_name) parts.push({ kind: 'limit', name: rule.limit_name, label: `limit:${rule.limit_name}` })
+  if (rule.quota_name) parts.push({ kind: 'quota', name: rule.quota_name, label: `quota:${rule.quota_name}` })
+  if (rule.ct_helper_set) parts.push({ kind: 'ct_helper', name: rule.ct_helper_set, label: `ct-helper:${rule.ct_helper_set}` })
+  if (rule.ct_timeout_set) parts.push({ kind: 'ct_timeout', name: rule.ct_timeout_set, label: `ct-timeout:${rule.ct_timeout_set}` })
+  return parts
+}
+
+function buildPolicyV2ObjectUsageKey(kind: string, name: string) {
+  return `${String(kind || '').trim().toLowerCase()}:${String(name || '').trim().toLowerCase()}`
+}
+
+function buildPolicyV2BridgeExprSummary(rule: Partial<FirewallRule>) {
   const parts: string[] = []
-  if (rule.counter_name) parts.push(`counter:${rule.counter_name}`)
-  if (rule.limit_name) parts.push(`limit:${rule.limit_name}`)
-  if (rule.quota_name) parts.push(`quota:${rule.quota_name}`)
-  if (rule.ct_helper_set) parts.push(`ct-helper:${rule.ct_helper_set}`)
-  if (rule.ct_timeout_set) parts.push(`ct-timeout:${rule.ct_timeout_set}`)
-  return parts.length ? parts.join(', ') : '—'
+  if (rule.fib_check) parts.push(`fib:${rule.fib_check}`)
+  if (rule.socket_match) parts.push(`socket:${rule.socket_match}`)
+  if (rule.rt_nexthop) parts.push(`rt:${rule.rt_nexthop}`)
+  if (rule.ipv6_exthdrs) parts.push(`exthdr:${rule.ipv6_exthdrs}`)
+  return parts.length ? parts.join(' | ') : '—'
+}
+
+function ruleHasPolicyV2ObjectUsageKey(rule: FirewallRule, usageKey: string) {
+  if (!usageKey) return true
+  const key = usageKey.trim().toLowerCase()
+  if (!key) return true
+  return getPolicyV2RuleObjectBindings(rule).some((x) => buildPolicyV2ObjectUsageKey(x.kind, x.name) === key)
 }
 
 type FirewallPolicyTab = 'filter' | 'nat' | 'raw' | 'mangle'
@@ -175,6 +209,8 @@ type TableHook = 'prerouting' | 'input' | 'forward' | 'output' | 'postrouting' |
 type TableFamily = 'inet' | 'ip' | 'ip6' | 'bridge' | 'netdev'
 type PolicyV2Family = 'bridge' | 'ip' | 'ip6' | 'netdev'
 type PolicyV2DataTab = 'rules' | 'objects'
+type PolicyV2RulesFilter = 'all' | 'with_objects' | 'without_objects'
+type PolicyV2ObjectsFilter = 'all' | 'used' | 'unused'
 
 type PolicyV2ObjectForm = {
   id: string | null
@@ -208,6 +244,15 @@ const defaultBridgeRule: Partial<FirewallRule> = {
   sport: null,
   dport: null,
   ct_state: null,
+  meta_pkttype: null,
+  meta_iifgroup: null,
+  meta_oifgroup: null,
+  mark_match: null,
+  ct_mark_match: null,
+  fib_check: null,
+  socket_match: null,
+  rt_nexthop: null,
+  ipv6_exthdrs: null,
   enabled: true,
   comment: '',
   ibrname: null,
@@ -223,6 +268,13 @@ const defaultBridgeRule: Partial<FirewallRule> = {
   counter_name: null,
   limit_name: null,
   quota_name: null,
+  queue_num: null,
+  queue_flags: null,
+  dup_to: null,
+  dup_dev: null,
+  fwd_to: null,
+  fwd_dev: null,
+  fwd_family: null,
   counter: false,
   log_prefix: null,
   log_level: null,
@@ -335,6 +387,8 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [activePolicyV2TableName, setActivePolicyV2TableName] = React.useState<string>('')
   const [policyV2DataTab, setPolicyV2DataTab] = React.useState<PolicyV2DataTab>('rules')
   const [policyV2Rules, setPolicyV2Rules] = React.useState<FirewallRule[]>([])
+  const [policyV2RulesFilter, setPolicyV2RulesFilter] = React.useState<PolicyV2RulesFilter>('all')
+  const [policyV2RuleObjectFilterKey, setPolicyV2RuleObjectFilterKey] = React.useState<string | null>(null)
   const [selectedPolicyV2RuleIds, setSelectedPolicyV2RuleIds] = React.useState<string[]>([])
   const [policyV2RuleAnchorId, setPolicyV2RuleAnchorId] = React.useState<string | null>(null)
   const [policyV2EditorOpen, setPolicyV2EditorOpen] = React.useState(false)
@@ -346,6 +400,8 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [editingPolicyV2ObjectId, setEditingPolicyV2ObjectId] = React.useState<string | null>(null)
   const [selectedPolicyV2ObjectIds, setSelectedPolicyV2ObjectIds] = React.useState<string[]>([])
   const [policyV2ObjectAnchorId, setPolicyV2ObjectAnchorId] = React.useState<string | null>(null)
+  const [policyV2ObjectsFilter, setPolicyV2ObjectsFilter] = React.useState<PolicyV2ObjectsFilter>('all')
+  const [policyV2ObjectFocusKey, setPolicyV2ObjectFocusKey] = React.useState<string | null>(null)
   const [activePolicyTab, setActivePolicyTab] = React.useState<FirewallPolicyTab>('filter')
   const [activeRuleTableName, setActiveRuleTableName] = React.useState<string>('filter')
   const [selectedRuleIds, setSelectedRuleIds] = React.useState<string[]>([])
@@ -1162,6 +1218,80 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     }),
     [policyV2Objects],
   )
+  const policyV2ObjectUsageByKey = React.useMemo(() => {
+    const out: Record<string, { count: number; samples: string[] }> = {}
+    const pushUsage = (kind: string, name: string | null | undefined, sample: string) => {
+      if (!name) return
+      const key = buildPolicyV2ObjectUsageKey(kind, name)
+      if (!out[key]) out[key] = { count: 0, samples: [] }
+      out[key].count += 1
+      if (!out[key].samples.includes(sample) && out[key].samples.length < 3) out[key].samples.push(sample)
+    }
+    for (const rule of policyV2Rules) {
+      const sample = `${rule.chain || 'chain'}:${rule.proto || 'any'}:${rule.dport || '—'}`
+      pushUsage('counter', rule.counter_name, sample)
+      pushUsage('limit', rule.limit_name, sample)
+      pushUsage('quota', rule.quota_name, sample)
+      pushUsage('ct_helper', rule.ct_helper_set, sample)
+      pushUsage('ct_timeout', rule.ct_timeout_set, sample)
+    }
+    return out
+  }, [policyV2Rules])
+  const policyV2FilteredObjects = React.useMemo(() => {
+    let rows = policyV2ManagedObjects
+    if (policyV2ObjectsFilter !== 'all') {
+      rows = rows.filter((obj) => {
+        const key = buildPolicyV2ObjectUsageKey(obj.kind, obj.name)
+        const isUsed = Boolean(policyV2ObjectUsageByKey[key]?.count)
+        return policyV2ObjectsFilter === 'used' ? isUsed : !isUsed
+      })
+    }
+    if (policyV2ObjectFocusKey) {
+      rows = rows.filter((obj) => buildPolicyV2ObjectUsageKey(obj.kind, obj.name) === policyV2ObjectFocusKey)
+    }
+    return rows
+  }, [policyV2ManagedObjects, policyV2ObjectsFilter, policyV2ObjectUsageByKey, policyV2ObjectFocusKey])
+  const policyV2FilteredRules = React.useMemo(() => {
+    let rows = policyV2Rules
+    if (policyV2RulesFilter === 'with_objects') rows = rows.filter(hasPolicyV2RuleObjectBinding)
+    else if (policyV2RulesFilter === 'without_objects') rows = rows.filter((rule) => !hasPolicyV2RuleObjectBinding(rule))
+    if (policyV2RuleObjectFilterKey) rows = rows.filter((rule) => ruleHasPolicyV2ObjectUsageKey(rule, policyV2RuleObjectFilterKey))
+    return rows
+  }, [policyV2Rules, policyV2RulesFilter, policyV2RuleObjectFilterKey])
+  const policyV2RulesWithObjectsCount = React.useMemo(
+    () => policyV2Rules.filter(hasPolicyV2RuleObjectBinding).length,
+    [policyV2Rules],
+  )
+  const policyV2RulesWithoutObjectsCount = React.useMemo(
+    () => policyV2Rules.filter((rule) => !hasPolicyV2RuleObjectBinding(rule)).length,
+    [policyV2Rules],
+  )
+  const policyV2ObjectsUsedCount = React.useMemo(
+    () => policyV2ManagedObjects.filter((obj) => Boolean(policyV2ObjectUsageByKey[buildPolicyV2ObjectUsageKey(obj.kind, obj.name)]?.count)).length,
+    [policyV2ManagedObjects, policyV2ObjectUsageByKey],
+  )
+  const policyV2ObjectsFreeCount = Math.max(0, policyV2ManagedObjects.length - policyV2ObjectsUsedCount)
+  const policyV2FormObjectBindings = React.useMemo(
+    () => getPolicyV2RuleObjectBindings(policyV2Form),
+    [policyV2Form.counter_name, policyV2Form.limit_name, policyV2Form.quota_name, policyV2Form.ct_helper_set, policyV2Form.ct_timeout_set],
+  )
+
+  React.useEffect(() => {
+    if (policyV2ObjectFocusKey && !policyV2ManagedObjects.some((obj) => buildPolicyV2ObjectUsageKey(obj.kind, obj.name) === policyV2ObjectFocusKey)) {
+      setPolicyV2ObjectFocusKey(null)
+    }
+  }, [policyV2ObjectFocusKey, policyV2ManagedObjects])
+  React.useEffect(() => {
+    if (!policyV2RuleObjectFilterKey) return
+    const exists = policyV2Rules.some((rule) => ruleHasPolicyV2ObjectUsageKey(rule, policyV2RuleObjectFilterKey))
+    if (!exists) setPolicyV2RuleObjectFilterKey(null)
+  }, [policyV2RuleObjectFilterKey, policyV2Rules])
+
+  React.useEffect(() => {
+    const visibleIds = new Set(policyV2FilteredRules.map((row) => row.id))
+    setSelectedPolicyV2RuleIds((prev) => prev.filter((id) => visibleIds.has(id)))
+    if (policyV2RuleAnchorId && !visibleIds.has(policyV2RuleAnchorId)) setPolicyV2RuleAnchorId(null)
+  }, [policyV2FilteredRules, policyV2RuleAnchorId])
 
   React.useEffect(() => {
     if (['filter', 'nat', 'raw', 'mangle'].includes(activeRuleTableName)) return
@@ -1174,6 +1304,8 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
       setActivePolicyV2TableName('')
       setPolicyV2Rules([])
       setPolicyV2Objects(null)
+      setPolicyV2RuleObjectFilterKey(null)
+      setPolicyV2ObjectFocusKey(null)
       setSelectedPolicyV2RuleIds([])
       return
     }
@@ -1181,11 +1313,15 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
       setActivePolicyV2TableName('')
       setPolicyV2Rules([])
       setPolicyV2Objects(null)
+      setPolicyV2RuleObjectFilterKey(null)
+      setPolicyV2ObjectFocusKey(null)
       setSelectedPolicyV2RuleIds([])
       return
     }
     if (!activePolicyV2TableName || !policyV2TableNames.includes(activePolicyV2TableName)) {
       setActivePolicyV2TableName(policyV2TableNames[0])
+      setPolicyV2RuleObjectFilterKey(null)
+      setPolicyV2ObjectFocusKey(null)
       setSelectedPolicyV2RuleIds([])
     }
   }, [activePolicyV2Family, activePolicyV2TableName, policyV2TableNames])
@@ -1216,8 +1352,12 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     }
     if (action !== 'jump' && action !== 'goto' && policyV2Form.target_chain) {
       setPolicyV2Form((p) => ({ ...p, target_chain: null }))
+      return
     }
-  }, [policyV2EditorOpen, policyV2Form.action, policyV2Form.reject_type, policyV2Form.target_chain])
+    if (action !== 'queue' && (policyV2Form.queue_num || (Array.isArray(policyV2Form.queue_flags) && policyV2Form.queue_flags.length))) {
+      setPolicyV2Form((p) => ({ ...p, queue_num: null, queue_flags: null }))
+    }
+  }, [policyV2EditorOpen, policyV2Form.action, policyV2Form.reject_type, policyV2Form.target_chain, policyV2Form.queue_num, policyV2Form.queue_flags])
 
   React.useEffect(() => {
     if (!policyV2EditorOpen) return
@@ -1251,9 +1391,22 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   }, [policyV2EditorOpen, policyV2Form.counter, policyV2Form.counter_name])
 
   React.useEffect(() => {
+    if (!policyV2EditorOpen) return
+    if (policyV2Form.fib_check || policyV2Form.socket_match || policyV2Form.rt_nexthop || policyV2Form.ipv6_exthdrs) {
+      setPolicyV2Form((p) => ({ ...p, fib_check: null, socket_match: null, rt_nexthop: null, ipv6_exthdrs: null }))
+    }
+  }, [policyV2EditorOpen, policyV2Form.fib_check, policyV2Form.socket_match, policyV2Form.rt_nexthop, policyV2Form.ipv6_exthdrs])
+
+  React.useEffect(() => {
     setSelectedPolicyV2ObjectIds((prev) => prev.filter((id) => policyV2ManagedObjects.some((row) => row.id === id)))
     setPolicyV2ObjectAnchorId((prev) => (prev && policyV2ManagedObjects.some((row) => row.id === prev) ? prev : null))
   }, [policyV2ManagedObjects])
+
+  React.useEffect(() => {
+    const visibleIds = new Set(policyV2FilteredObjects.map((row) => row.id))
+    setSelectedPolicyV2ObjectIds((prev) => prev.filter((id) => visibleIds.has(id)))
+    if (policyV2ObjectAnchorId && !visibleIds.has(policyV2ObjectAnchorId)) setPolicyV2ObjectAnchorId(null)
+  }, [policyV2FilteredObjects, policyV2ObjectAnchorId])
 
   const allSetItems: Array<FirewallSetItem & { kind: 'addr' | 'port' | 'iface' }> = [
     ...setsState.addr.map((x) => ({ ...x, kind: 'addr' as const })),
@@ -1768,7 +1921,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     }
   }
 
-  function openCreatePolicyV2Window() {
+  function openCreatePolicyV2Window(prefill?: Partial<FirewallRule>) {
     if (activePolicyV2Family !== 'bridge') {
       setError('MVP supports only bridge family in Policy v2 right now.')
       return
@@ -1783,6 +1936,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
       family: 'bridge',
       table: activePolicyV2TableName,
       chain: policyV2ChainOptions[0] || 'forward',
+      ...(prefill || {}),
     })
     setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 560) / 2) - 40) })
     setPolicyV2EditorOpen(true)
@@ -1800,6 +1954,15 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
       sport: rule.sport || null,
       dport: rule.dport || null,
       ct_state: rule.ct_state || null,
+      meta_pkttype: rule.meta_pkttype || null,
+      meta_iifgroup: rule.meta_iifgroup || null,
+      meta_oifgroup: rule.meta_oifgroup || null,
+      mark_match: rule.mark_match || null,
+      ct_mark_match: rule.ct_mark_match || null,
+      fib_check: rule.fib_check || null,
+      socket_match: rule.socket_match || null,
+      rt_nexthop: rule.rt_nexthop || null,
+      ipv6_exthdrs: rule.ipv6_exthdrs || null,
       enabled: rule.enabled,
       comment: rule.comment || null,
       ibrname: rule.ibrname || null,
@@ -1822,6 +1985,13 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
       counter_name: rule.counter_name || null,
       limit_name: rule.limit_name || null,
       quota_name: rule.quota_name || null,
+      queue_num: rule.queue_num || null,
+      queue_flags: Array.isArray(rule.queue_flags) ? rule.queue_flags : (rule.queue_flags ? [String(rule.queue_flags) as any] : null),
+      dup_to: rule.dup_to || null,
+      dup_dev: rule.dup_dev || null,
+      fwd_to: rule.fwd_to || null,
+      fwd_dev: rule.fwd_dev || null,
+      fwd_family: rule.fwd_family || null,
       target_chain: rule.target_chain || null,
       reject_type: rule.reject_type || null,
     })
@@ -2088,6 +2258,106 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     }
   }
 
+  function onFilterRulesByObject(kind: string, name: string) {
+    if (!kind || !name) return
+    const key = buildPolicyV2ObjectUsageKey(kind, name)
+    setPolicyV2DataTab('rules')
+    setPolicyV2RulesFilter('with_objects')
+    setPolicyV2RuleObjectFilterKey(key)
+    setSelectedPolicyV2RuleIds([])
+    setPolicyV2RuleAnchorId(null)
+  }
+
+  function onFilterObjectsByRuleBinding(kind: string, name: string) {
+    if (!kind || !name) return
+    const key = buildPolicyV2ObjectUsageKey(kind, name)
+    setPolicyV2DataTab('objects')
+    setPolicyV2ObjectsFilter('all')
+    setPolicyV2ObjectFocusKey(key)
+    setSelectedPolicyV2ObjectIds([])
+    setPolicyV2ObjectAnchorId(null)
+  }
+
+  function onCreateRuleWithObject(kind: string, name: string) {
+    if (!kind || !name) return
+    const normalizedKind = kind.trim().toLowerCase()
+    const objectName = name.trim()
+    if (!objectName) return
+    if (normalizedKind === 'ct_expectation') {
+      setError('ct_expectation is planned for family=bridge and temporarily disabled.')
+      return
+    }
+    const prefill: Partial<FirewallRule> = {}
+    if (normalizedKind === 'counter') prefill.counter_name = objectName
+    else if (normalizedKind === 'limit') prefill.limit_name = objectName
+    else if (normalizedKind === 'quota') prefill.quota_name = objectName
+    else if (normalizedKind === 'ct_helper') prefill.ct_helper_set = objectName
+    else if (normalizedKind === 'ct_timeout') prefill.ct_timeout_set = objectName
+    else {
+      setError(`Unsupported object kind for bridge rule binding: ${kind}`)
+      return
+    }
+    setPolicyV2DataTab('rules')
+    setPolicyV2RulesFilter('with_objects')
+    setPolicyV2RuleObjectFilterKey(buildPolicyV2ObjectUsageKey(normalizedKind, objectName))
+    setSelectedPolicyV2RuleIds([])
+    setPolicyV2RuleAnchorId(null)
+    openCreatePolicyV2Window(prefill)
+  }
+
+  function onCreateRuleFromSelectedObjects() {
+    if (!selectedPolicyV2Objects.length) return
+    const prefill: Partial<FirewallRule> = {}
+    const seenKinds = new Set<string>()
+    for (const obj of selectedPolicyV2Objects) {
+      const kind = String(obj.kind || '').trim().toLowerCase()
+      const name = String(obj.name || '').trim()
+      if (!kind || !name) continue
+      if (kind === 'ct_expectation') {
+        setError('ct_expectation is planned for family=bridge and temporarily disabled.')
+        return
+      }
+      if (seenKinds.has(kind)) {
+        setError(`Select only one object per kind. Duplicate kind: ${kind}`)
+        return
+      }
+      seenKinds.add(kind)
+      if (kind === 'counter') prefill.counter_name = name
+      else if (kind === 'limit') prefill.limit_name = name
+      else if (kind === 'quota') prefill.quota_name = name
+      else if (kind === 'ct_helper') prefill.ct_helper_set = name
+      else if (kind === 'ct_timeout') prefill.ct_timeout_set = name
+    }
+    if (!Object.keys(prefill).length) {
+      setError('Selected objects cannot be converted to bridge rule bindings.')
+      return
+    }
+    setPolicyV2DataTab('rules')
+    setPolicyV2RulesFilter('with_objects')
+    setPolicyV2RuleObjectFilterKey(null)
+    setSelectedPolicyV2RuleIds([])
+    setPolicyV2RuleAnchorId(null)
+    openCreatePolicyV2Window(prefill)
+  }
+
+  function onOpenBindingObjectFromEditor(binding: PolicyV2ObjectBinding) {
+    setPolicyV2EditorOpen(false)
+    setEditingPolicyV2RuleId(null)
+    onFilterObjectsByRuleBinding(binding.kind, binding.name)
+  }
+
+  function onUnbindObjectInEditor(binding: PolicyV2ObjectBinding) {
+    setPolicyV2Form((prev) => {
+      const next = { ...prev }
+      if (binding.kind === 'counter') next.counter_name = null
+      else if (binding.kind === 'limit') next.limit_name = null
+      else if (binding.kind === 'quota') next.quota_name = null
+      else if (binding.kind === 'ct_helper') next.ct_helper_set = null
+      else if (binding.kind === 'ct_timeout') next.ct_timeout_set = null
+      return next
+    })
+  }
+
   return (
     <div className='flex h-full min-h-0 w-full flex-col gap-2 overflow-x-hidden'>
       <div><h2 className='text-lg font-semibold tracking-tight'>Firewall</h2></div>
@@ -2258,11 +2528,46 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
               </Tabs>
               {policyV2DataTab === 'rules' ? (
                 <>
-                  <div className='flex gap-2'>
-                    <Button size='sm' onClick={openCreatePolicyV2Window} disabled={isBusy || !activePolicyV2TableName}><Plus />Add</Button>
+                  <div className='flex items-center gap-2'>
+                    <Button size='sm' onClick={() => openCreatePolicyV2Window()} disabled={isBusy || !activePolicyV2TableName}><Plus />Add</Button>
                     <Button size='sm' variant='destructive' disabled={isBusy || !selectedPolicyV2RuleIds.length} onClick={() => void onDeleteSelectedPolicyV2Rules()}>Del</Button>
                     <Button size='sm' variant='outline' disabled={isBusy || !selectedPolicyV2RuleIds.length} onClick={() => void onSetEnabledSelectedPolicyV2Rules(false)}>Disable</Button>
                     <Button size='sm' disabled={isBusy || !selectedPolicyV2RuleIds.length} onClick={() => void onSetEnabledSelectedPolicyV2Rules(true)}>Enable</Button>
+                    <div className='ml-1 inline-flex h-9 items-center rounded-md border bg-muted p-1'>
+                      <button
+                        type='button'
+                        className={`rounded px-2 py-1 text-xs ${policyV2RulesFilter === 'all' ? 'bg-background shadow-sm' : 'text-muted-foreground'}`}
+                        onClick={() => setPolicyV2RulesFilter('all')}
+                      >
+                        all
+                      </button>
+                      <button
+                        type='button'
+                        className={`rounded px-2 py-1 text-xs ${policyV2RulesFilter === 'with_objects' ? 'bg-background shadow-sm' : 'text-muted-foreground'}`}
+                        onClick={() => setPolicyV2RulesFilter('with_objects')}
+                      >
+                        with objects ({policyV2RulesWithObjectsCount})
+                      </button>
+                      <button
+                        type='button'
+                        className={`rounded px-2 py-1 text-xs ${policyV2RulesFilter === 'without_objects' ? 'bg-background shadow-sm' : 'text-muted-foreground'}`}
+                        onClick={() => setPolicyV2RulesFilter('without_objects')}
+                      >
+                        no objects ({policyV2RulesWithoutObjectsCount})
+                      </button>
+                    </div>
+                    {policyV2RuleObjectFilterKey ? (
+                      <div className='ml-1 inline-flex h-9 items-center gap-1 rounded-md border border-blue-300 bg-blue-50 px-2 text-xs text-blue-900'>
+                        <span className='truncate max-w-[220px]'>object: {policyV2RuleObjectFilterKey}</span>
+                        <button
+                          type='button'
+                          className='rounded border border-blue-300 bg-background px-1.5 py-0.5 text-[11px] hover:bg-muted'
+                          onClick={() => setPolicyV2RuleObjectFilterKey(null)}
+                        >
+                          clear
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                   <div className='min-h-0 min-w-0 w-full flex-1 overflow-auto rounded-xl border'>
                     <Table>
@@ -2275,6 +2580,9 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                           <TableHead>DPort</TableHead>
                           <TableHead>Ct state</TableHead>
                           <TableHead>Object</TableHead>
+                          <TableHead>Expr</TableHead>
+                          <TableHead>Queue</TableHead>
+                          <TableHead>Dup</TableHead>
                           <TableHead>ibrname</TableHead>
                           <TableHead>obrname</TableHead>
                           <TableHead>ether src</TableHead>
@@ -2286,7 +2594,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {policyV2Rules.map((row) => (
+                        {policyV2FilteredRules.map((row) => (
                           <TableRow
                             key={row.id}
                             className={`${row.comment ? 'h-9' : 'h-7'} cursor-default select-none border-b hover:bg-blue-100/80 dark:hover:bg-blue-900/35 ${selectedPolicyV2RuleIds.includes(row.id) ? 'bg-blue-100/80 dark:bg-blue-900/35' : ''} ${!row.enabled ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
@@ -2294,7 +2602,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                               if (e.shiftKey) e.preventDefault()
                             }}
                             onClick={(e) => {
-                              const ordered = policyV2Rules.map((x) => x.id)
+                              const ordered = policyV2FilteredRules.map((x) => x.id)
                               const next = computeSelection(ordered, selectedPolicyV2RuleIds, policyV2RuleAnchorId, row.id, e)
                               setSelectedPolicyV2RuleIds(next.selected)
                               setPolicyV2RuleAnchorId(next.anchor)
@@ -2314,7 +2622,54 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                             <TableCell className={row.comment ? 'align-bottom pb-0.5 pt-2' : undefined}><span className={row.comment ? 'block pt-1' : ''}>{row.sport || '—'}</span></TableCell>
                             <TableCell className={row.comment ? 'align-bottom pb-0.5 pt-2' : undefined}><span className={row.comment ? 'block pt-1' : ''}>{row.dport || '—'}</span></TableCell>
                             <TableCell className={row.comment ? 'align-bottom pb-0.5 pt-2' : undefined}><span className={row.comment ? 'block pt-1' : ''}>{row.ct_state || '—'}</span></TableCell>
-                            <TableCell className={row.comment ? 'align-bottom pb-0.5 pt-2' : undefined}><span className={row.comment ? 'block pt-1' : ''}>{formatPolicyV2RuleObjectBinding(row)}</span></TableCell>
+                            <TableCell className={row.comment ? 'align-bottom pb-0.5 pt-2' : undefined}>
+                              <span className={row.comment ? 'block pt-1' : ''}>
+                                {(() => {
+                                  const bindings = getPolicyV2RuleObjectBindings(row)
+                                  if (!bindings.length) {
+                                    return <Badge variant='outline' className='h-4 px-1.5 text-[10px] text-muted-foreground'>free</Badge>
+                                  }
+                                  return (
+                                    <span className='inline-flex flex-wrap items-center gap-1'>
+                                      <Badge variant='secondary' className='h-4 px-1.5 text-[10px]'>linked:{bindings.length}</Badge>
+                                      {bindings.map((binding) => (
+                                        <button
+                                          key={`${row.id}:${binding.kind}:${binding.name}`}
+                                          type='button'
+                                          className='rounded border border-blue-300 bg-blue-50 px-1.5 py-0.5 text-[10px] leading-none text-blue-900 hover:bg-blue-100'
+                                          title='Open object in Policy v2 → objects'
+                                          onClick={(e) => {
+                                            e.stopPropagation()
+                                            onFilterObjectsByRuleBinding(binding.kind, binding.name)
+                                          }}
+                                        >
+                                          {binding.label}
+                                        </button>
+                                      ))}
+                                    </span>
+                                  )
+                                })()}
+                              </span>
+                            </TableCell>
+                            <TableCell className={row.comment ? 'align-bottom pb-0.5 pt-2' : undefined}>
+                              <span className={row.comment ? 'block pt-1' : ''}>
+                                {buildPolicyV2BridgeExprSummary(row)}
+                              </span>
+                            </TableCell>
+                            <TableCell className={row.comment ? 'align-bottom pb-0.5 pt-2' : undefined}>
+                              <span className={row.comment ? 'block pt-1' : ''}>
+                                {row.action === 'queue'
+                                  ? `to ${row.queue_num || '0'}${Array.isArray(row.queue_flags) && row.queue_flags.length ? ` (${row.queue_flags.join(',')})` : ''}`
+                                  : '—'}
+                              </span>
+                            </TableCell>
+                            <TableCell className={row.comment ? 'align-bottom pb-0.5 pt-2' : undefined}>
+                              <span className={row.comment ? 'block pt-1' : ''}>
+                                {row.dup_to
+                                  ? `${row.dup_to}${row.dup_dev ? ` via ${row.dup_dev}` : ''}`
+                                  : '—'}
+                              </span>
+                            </TableCell>
                             <TableCell className={row.comment ? 'align-bottom pb-0.5 pt-2' : undefined}><span className={row.comment ? 'block pt-1' : ''}>{row.ibrname || '—'}</span></TableCell>
                             <TableCell className={row.comment ? 'align-bottom pb-0.5 pt-2' : undefined}><span className={row.comment ? 'block pt-1' : ''}>{row.obrname || '—'}</span></TableCell>
                             <TableCell className={row.comment ? 'align-bottom pb-0.5 pt-2' : undefined}><span className={row.comment ? 'block pt-1' : ''}>{row.ether_src || '—'}</span></TableCell>
@@ -2325,16 +2680,58 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                             <TableCell className={`${row.comment ? 'align-bottom pb-0.5 pt-2' : ''} whitespace-nowrap`}><span className={row.comment ? 'block pt-1' : ''}>{formatCounter(row.runtime_bytes)}</span></TableCell>
                           </TableRow>
                         ))}
-                        {!policyV2Rules.length ? <TableRow><TableCell colSpan={15} className='py-6 text-center text-xs text-muted-foreground'>No bridge rules in selected table.</TableCell></TableRow> : null}
+                        {!policyV2FilteredRules.length ? (
+                          <TableRow>
+                            <TableCell colSpan={18} className='py-6 text-center text-xs text-muted-foreground'>
+                              {policyV2Rules.length ? 'No rules match current filter.' : 'No bridge rules in selected table.'}
+                            </TableCell>
+                          </TableRow>
+                        ) : null}
                       </TableBody>
                     </Table>
                   </div>
                 </>
               ) : (
                 <>
-                  <div className='flex gap-2'>
+                  <div className='flex items-center gap-2'>
                     <Button size='sm' onClick={openCreatePolicyV2ObjectWindow} disabled={isBusy || !activePolicyV2TableName}><Plus />Add</Button>
+                    <Button size='sm' variant='outline' disabled={isBusy || !selectedPolicyV2ObjectIds.length || !activePolicyV2TableName} onClick={() => onCreateRuleFromSelectedObjects()}>Use in rule</Button>
                     <Button size='sm' variant='destructive' disabled={isBusy || !selectedPolicyV2ObjectIds.length} onClick={() => void onDeleteSelectedPolicyV2Objects()}>Del</Button>
+                    <div className='ml-1 inline-flex h-9 items-center rounded-md border bg-muted p-1'>
+                      <button
+                        type='button'
+                        className={`rounded px-2 py-1 text-xs ${policyV2ObjectsFilter === 'all' ? 'bg-background shadow-sm' : 'text-muted-foreground'}`}
+                        onClick={() => setPolicyV2ObjectsFilter('all')}
+                      >
+                        all
+                      </button>
+                      <button
+                        type='button'
+                        className={`rounded px-2 py-1 text-xs ${policyV2ObjectsFilter === 'used' ? 'bg-background shadow-sm' : 'text-muted-foreground'}`}
+                        onClick={() => setPolicyV2ObjectsFilter('used')}
+                      >
+                        in use ({policyV2ObjectsUsedCount})
+                      </button>
+                      <button
+                        type='button'
+                        className={`rounded px-2 py-1 text-xs ${policyV2ObjectsFilter === 'unused' ? 'bg-background shadow-sm' : 'text-muted-foreground'}`}
+                        onClick={() => setPolicyV2ObjectsFilter('unused')}
+                      >
+                        free ({policyV2ObjectsFreeCount})
+                      </button>
+                    </div>
+                    {policyV2ObjectFocusKey ? (
+                      <div className='ml-1 inline-flex h-9 items-center gap-1 rounded-md border border-blue-300 bg-blue-50 px-2 text-xs text-blue-900'>
+                        <span className='truncate max-w-[220px]'>object: {policyV2ObjectFocusKey}</span>
+                        <button
+                          type='button'
+                          className='rounded border border-blue-300 bg-background px-1.5 py-0.5 text-[11px] hover:bg-muted'
+                          onClick={() => setPolicyV2ObjectFocusKey(null)}
+                        >
+                          clear
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                   <div className='rounded-md border border-amber-300/60 bg-amber-50/70 px-3 py-2 text-[11px] text-amber-900'>
                     Objects are bound to selected bridge table and can be referenced from bridge rules.
@@ -2355,35 +2752,89 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                         <TableRow>
                           <TableHead>Kind</TableHead>
                           <TableHead>Name</TableHead>
+                          <TableHead>Used by</TableHead>
                           <TableHead>Config</TableHead>
                           <TableHead>Comment</TableHead>
                           <TableHead>Status</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {policyV2ManagedObjects.map((row) => (
-                          <TableRow
-                            key={row.id}
-                            className={`h-7 cursor-default select-none border-b hover:bg-blue-100/80 dark:hover:bg-blue-900/35 ${selectedPolicyV2ObjectIds.includes(row.id) ? 'bg-blue-100/80 dark:bg-blue-900/35' : ''} ${!row.enabled ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
-                            onMouseDown={(e) => {
-                              if (e.shiftKey) e.preventDefault()
-                            }}
-                            onClick={(e) => {
-                              const ordered = policyV2ManagedObjects.map((x) => x.id)
-                              const next = computeSelection(ordered, selectedPolicyV2ObjectIds, policyV2ObjectAnchorId, row.id, e)
-                              setSelectedPolicyV2ObjectIds(next.selected)
-                              setPolicyV2ObjectAnchorId(next.anchor)
-                            }}
-                            onDoubleClick={() => openEditPolicyV2ObjectWindow(row)}
-                          >
-                            <TableCell>{row.kind}</TableCell>
-                            <TableCell>{row.name}</TableCell>
-                            <TableCell className='max-w-[520px] truncate'>{formatPolicyV2ObjectSummary(row)}</TableCell>
-                            <TableCell>{row.comment || '—'}</TableCell>
-                            <TableCell>{row.enabled ? 'enabled' : 'disabled'}</TableCell>
+                        {policyV2FilteredObjects.map((row) => {
+                          const usageKey = buildPolicyV2ObjectUsageKey(row.kind, row.name)
+                          const usage = policyV2ObjectUsageByKey[usageKey]
+                          const usageSummary = usage?.count ? `${usage.count} rule(s)${usage.samples.length ? ` (${usage.samples.join(', ')})` : ''}` : null
+                          return (
+                            <TableRow
+                              key={row.id}
+                              className={`h-7 cursor-default select-none border-b hover:bg-blue-100/80 dark:hover:bg-blue-900/35 ${selectedPolicyV2ObjectIds.includes(row.id) ? 'bg-blue-100/80 dark:bg-blue-900/35' : ''} ${!row.enabled ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`}
+                              onMouseDown={(e) => {
+                                if (e.shiftKey) e.preventDefault()
+                              }}
+                              onClick={(e) => {
+                                const ordered = policyV2FilteredObjects.map((x) => x.id)
+                                const next = computeSelection(ordered, selectedPolicyV2ObjectIds, policyV2ObjectAnchorId, row.id, e)
+                                setSelectedPolicyV2ObjectIds(next.selected)
+                                setPolicyV2ObjectAnchorId(next.anchor)
+                              }}
+                              onDoubleClick={() => openEditPolicyV2ObjectWindow(row)}
+                            >
+                              <TableCell>{row.kind}</TableCell>
+                              <TableCell>{row.name}</TableCell>
+                              <TableCell className='max-w-[360px]'>
+                                <div className='flex items-center gap-2'>
+                                  <Badge
+                                    variant={usageSummary ? 'secondary' : 'outline'}
+                                    className={`h-4 px-1.5 text-[10px] ${usageSummary ? '' : 'text-muted-foreground'}`}
+                                  >
+                                    {usageSummary ? `used:${usage?.count || 0}` : 'free'}
+                                  </Badge>
+                                  <div className='min-w-0 flex-1 truncate'>
+                                    {usageSummary ? (
+                                      <button
+                                        type='button'
+                                        className='max-w-full truncate text-left text-blue-700 underline-offset-2 hover:underline'
+                                        title='Filter rules by this object'
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          onFilterRulesByObject(row.kind, row.name)
+                                        }}
+                                      >
+                                        {usageSummary}
+                                      </button>
+                                    ) : '—'}
+                                  </div>
+                                  <button
+                                    type='button'
+                                    className='shrink-0 rounded border border-blue-300 bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-900 hover:bg-blue-100'
+                                    title='Create bridge rule and prefill this object'
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      onCreateRuleWithObject(row.kind, row.name)
+                                    }}
+                                  >
+                                    use
+                                  </button>
+                                </div>
+                              </TableCell>
+                              <TableCell className='max-w-[520px] truncate'>{formatPolicyV2ObjectSummary(row)}</TableCell>
+                              <TableCell>{row.comment || '—'}</TableCell>
+                              <TableCell>
+                                <div className='inline-flex flex-wrap items-center gap-1'>
+                                  <Badge variant={row.enabled ? 'secondary' : 'outline'} className='h-4 px-1.5 text-[10px]'>
+                                    {row.enabled ? 'enabled' : 'disabled'}
+                                  </Badge>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          )
+                        })}
+                        {!policyV2FilteredObjects.length ? (
+                          <TableRow>
+                            <TableCell colSpan={6} className='py-6 text-center text-xs text-muted-foreground'>
+                              {policyV2ManagedObjects.length ? 'No objects match current filter.' : 'No managed objects in selected bridge table.'}
+                            </TableCell>
                           </TableRow>
-                        ))}
-                        {!policyV2ManagedObjects.length ? <TableRow><TableCell colSpan={5} className='py-6 text-center text-xs text-muted-foreground'>No managed objects in selected bridge table.</TableCell></TableRow> : null}
+                        ) : null}
                       </TableBody>
                     </Table>
                   </div>
@@ -3359,6 +3810,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                       <option value='jump'>jump</option>
                       <option value='goto'>goto</option>
                       <option value='return'>return</option>
+                      <option value='queue'>queue</option>
                     </select>
                   </div>
                   <div className='space-y-1.5'>
@@ -3391,6 +3843,38 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                   <Label>Comment</Label>
                   <Input className='h-7' placeholder='Optional comment' value={policyV2Form.comment || ''} onChange={(e) => setPolicyV2Form((p) => ({ ...p, comment: e.target.value || null }))} />
                 </div>
+                {(editingPolicyV2RuleId || policyV2FormObjectBindings.length) ? (
+                  <div className='space-y-1.5 rounded-md border border-blue-200 bg-blue-50/50 p-2'>
+                    <div className='text-[11px] font-semibold text-blue-900'>Linked objects (quick actions)</div>
+                    {policyV2FormObjectBindings.length ? (
+                      <div className='flex flex-wrap gap-1.5'>
+                        {policyV2FormObjectBindings.map((binding) => (
+                          <div key={`editor-binding-${binding.kind}-${binding.name}`} className='inline-flex items-center gap-1 rounded border border-blue-300 bg-background px-1.5 py-0.5'>
+                            <span className='text-[10px] text-blue-900'>{binding.label}</span>
+                            <button
+                              type='button'
+                              className='rounded border border-blue-300 bg-blue-50 px-1 text-[10px] leading-none text-blue-900 hover:bg-blue-100'
+                              title='Open object in Policy v2 → objects'
+                              onClick={() => onOpenBindingObjectFromEditor(binding)}
+                            >
+                              open
+                            </button>
+                            <button
+                              type='button'
+                              className='rounded border border-amber-300 bg-amber-50 px-1 text-[10px] leading-none text-amber-900 hover:bg-amber-100'
+                              title='Unlink object from this rule'
+                              onClick={() => onUnbindObjectInEditor(binding)}
+                            >
+                              unlink
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className='text-[10px] text-muted-foreground'>No named objects linked yet.</div>
+                    )}
+                  </div>
+                ) : null}
                 </div>
                 <div className='rounded-md border p-2.5'>
                   <div className='mb-2 text-[11px] font-semibold text-muted-foreground'>L2 / L3 / L4 match</div>
@@ -3434,6 +3918,48 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                       <option value='untracked'>untracked</option>
                     </select>
                   </ToggleLine>
+                </div>
+                <div className='grid grid-cols-2 gap-2'>
+                  <ToggleLine label='meta pkttype' enabled={!!policyV2Form.meta_pkttype} inactiveHint='host / broadcast / multicast / other' onToggle={() => setPolicyV2Form((p) => ({ ...p, meta_pkttype: p.meta_pkttype ? null : 'host' }))}>
+                    <select
+                      className='h-7 w-full rounded-md border bg-background px-2.5 text-xs'
+                      value={policyV2Form.meta_pkttype || 'host'}
+                      onChange={(e) => setPolicyV2Form((p) => ({ ...p, meta_pkttype: e.target.value || null }))}
+                    >
+                      <option value='host'>host</option>
+                      <option value='broadcast'>broadcast</option>
+                      <option value='multicast'>multicast</option>
+                      <option value='other'>other</option>
+                    </select>
+                  </ToggleLine>
+                  <ToggleLine label='meta iifgroup' enabled={!!policyV2Form.meta_iifgroup} inactiveHint='10' onToggle={() => setPolicyV2Form((p) => ({ ...p, meta_iifgroup: p.meta_iifgroup ? null : '10' }))}>
+                    <Input className='h-7' placeholder='10' value={policyV2Form.meta_iifgroup || ''} onChange={(e) => setPolicyV2Form((p) => ({ ...p, meta_iifgroup: e.target.value || null }))} />
+                  </ToggleLine>
+                </div>
+                <div className='grid grid-cols-2 gap-2'>
+                  <ToggleLine label='meta oifgroup' enabled={!!policyV2Form.meta_oifgroup} inactiveHint='10' onToggle={() => setPolicyV2Form((p) => ({ ...p, meta_oifgroup: p.meta_oifgroup ? null : '10' }))}>
+                    <Input className='h-7' placeholder='10' value={policyV2Form.meta_oifgroup || ''} onChange={(e) => setPolicyV2Form((p) => ({ ...p, meta_oifgroup: e.target.value || null }))} />
+                  </ToggleLine>
+                  <ToggleLine label='mark match' enabled={!!policyV2Form.mark_match} inactiveHint='0x1 or 1' onToggle={() => setPolicyV2Form((p) => ({ ...p, mark_match: p.mark_match ? null : '0x1' }))}>
+                    <Input className='h-7' placeholder='0x1 or 1' value={policyV2Form.mark_match || ''} onChange={(e) => setPolicyV2Form((p) => ({ ...p, mark_match: e.target.value || null }))} />
+                  </ToggleLine>
+                </div>
+                <div className='grid grid-cols-2 gap-2'>
+                  <ToggleLine label='ct mark match' enabled={!!policyV2Form.ct_mark_match} inactiveHint='0x1 or 1' onToggle={() => setPolicyV2Form((p) => ({ ...p, ct_mark_match: p.ct_mark_match ? null : '0x1' }))}>
+                    <Input className='h-7' placeholder='0x1 or 1' value={policyV2Form.ct_mark_match || ''} onChange={(e) => setPolicyV2Form((p) => ({ ...p, ct_mark_match: e.target.value || null }))} />
+                  </ToggleLine>
+                  <div />
+                </div>
+                <div className='mt-1 rounded-md border border-blue-300/60 bg-blue-50/60 px-2.5 py-1.5 text-[10px] text-blue-900'>
+                  Structured expert expressions (`fib_check`, `socket_match`, `rt_nexthop`, `ipv6_exthdrs`) are planned for bridge and temporarily disabled on current runtime.
+                </div>
+                <div className='grid grid-cols-2 gap-2'>
+                  <PlannedField label='fib check' placeholder='planned for bridge runtime' />
+                  <PlannedField label='socket match' placeholder='planned for bridge runtime' />
+                </div>
+                <div className='grid grid-cols-2 gap-2'>
+                  <PlannedField label='rt nexthop' placeholder='planned for bridge runtime' />
+                  <PlannedField label='ipv6 exthdrs' placeholder='planned for bridge runtime' />
                 </div>
                 <div className='grid grid-cols-2 gap-2'>
                   <ToggleLine
@@ -3487,6 +4013,53 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
                 ) : null}
                 <div className='mb-2 rounded-md border border-amber-300/60 bg-amber-50/70 px-2.5 py-1.5 text-[10px] text-amber-900'>
                   `ct expectation` is planned for bridge and temporarily disabled.
+                </div>
+                <div className='grid grid-cols-2 gap-2'>
+                  <ToggleLine
+                    label='queue num'
+                    enabled={policyV2Form.action === 'queue' && !!policyV2Form.queue_num}
+                    inactiveHint='0 or 0-3'
+                    disabled={policyV2Form.action !== 'queue'}
+                    onToggle={() => setPolicyV2Form((p) => ({ ...p, queue_num: p.queue_num ? null : '0' }))}
+                  >
+                    <Input className='h-7' placeholder='0 or 0-3' value={policyV2Form.queue_num || ''} onChange={(e) => setPolicyV2Form((p) => ({ ...p, queue_num: e.target.value || null }))} />
+                  </ToggleLine>
+                  <ToggleLine
+                    label='queue flags'
+                    enabled={policyV2Form.action === 'queue' && Array.isArray(policyV2Form.queue_flags) && policyV2Form.queue_flags.length > 0}
+                    inactiveHint='bypass, fanout'
+                    disabled={policyV2Form.action !== 'queue'}
+                    onToggle={() => setPolicyV2Form((p) => ({ ...p, queue_flags: Array.isArray(p.queue_flags) && p.queue_flags.length ? null : ['bypass'] }))}
+                  >
+                    <Input
+                      className='h-7'
+                      placeholder='bypass, fanout'
+                      value={Array.isArray(policyV2Form.queue_flags) ? policyV2Form.queue_flags.join(', ') : ''}
+                      onChange={(e) => {
+                        const next = e.target.value
+                          .split(',')
+                          .map((x) => x.trim().toLowerCase())
+                          .filter(Boolean)
+                        setPolicyV2Form((p) => ({ ...p, queue_flags: next.length ? (next as any) : null }))
+                      }}
+                    />
+                  </ToggleLine>
+                </div>
+                {policyV2Form.action !== 'queue' ? (
+                  <div className='text-[10px] text-muted-foreground'>Set action `queue` to enable queue fields.</div>
+                ) : null}
+                <div className='rounded-md border border-blue-300/60 bg-blue-50/60 px-2.5 py-1.5 text-[10px] text-blue-900'>
+                  `dup` is kept planned for bridge on current runtime and is rejected by backend validation.
+                  <br />
+                  `fwd` is netdev-only and will stay outside bridge policy v2 until multi-family expansion.
+                </div>
+                <div className='grid grid-cols-2 gap-2'>
+                  <PlannedField label='dup to' placeholder='planned for bridge runtime' />
+                  <PlannedField label='dup dev' placeholder='planned for bridge runtime' />
+                </div>
+                <div className='grid grid-cols-2 gap-2'>
+                  <PlannedField label='fwd to' placeholder='netdev-only (planned)' />
+                  <PlannedField label='fwd dev' placeholder='netdev-only (planned)' />
                 </div>
                 <div className='grid grid-cols-2 gap-2'>
                   <label className='flex items-center gap-2 rounded-md border p-2 text-xs'>

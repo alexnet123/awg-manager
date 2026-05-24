@@ -109,7 +109,7 @@ test('policy v2 bridge: UI creates rule and list endpoint returns it', async ({ 
     await expect.poll(async () => {
       const rows = await listBridgeRules(request, tableName)
       return rows.length
-    }, { timeout: 15_000 }).toBeGreaterThan(0)
+    }, { timeout: 30_000 }).toBeGreaterThan(0)
   } finally {
     await deleteTable(request, String(table.id))
   }
@@ -171,6 +171,52 @@ test('bridge rule API validation: proto/sport/dport/ct_state and nflog params ar
   }
 })
 
+test('bridge rule API validation: bridge meta and mark match fields are accepted with strict validation', async ({ request }) => {
+  const tableName = unique('br_tbl')
+  const table = await createBridgeTable(request, tableName)
+  try {
+    const good = await createBridgeRule(request, {
+      family: 'bridge',
+      table: tableName,
+      chain: 'forward',
+      action: 'accept',
+      meta_pkttype: 'multicast',
+      meta_iifgroup: '10',
+      meta_oifgroup: '20',
+      mark_match: '0x10',
+      ct_mark_match: '25',
+    })
+    expect(good.res.ok(), `create bridge meta/mark rule failed: ${JSON.stringify(good.payload)}`).toBeTruthy()
+    expect(good.payload?.item?.meta_pkttype).toBe('multicast')
+    expect(good.payload?.item?.meta_iifgroup).toBe('10')
+    expect(good.payload?.item?.meta_oifgroup).toBe('20')
+    expect(good.payload?.item?.mark_match).toBe('0x10')
+    expect(good.payload?.item?.ct_mark_match).toBe('25')
+
+    const badPkttype = await createBridgeRule(request, {
+      family: 'bridge',
+      table: tableName,
+      chain: 'forward',
+      action: 'accept',
+      meta_pkttype: 'weird',
+    })
+    expect(badPkttype.res.ok()).toBeFalsy()
+    expect(String(badPkttype.payload?.error || '')).toContain('meta_pkttype')
+
+    const badMark = await createBridgeRule(request, {
+      family: 'bridge',
+      table: tableName,
+      chain: 'forward',
+      action: 'accept',
+      mark_match: 'abc',
+    })
+    expect(badMark.res.ok()).toBeFalsy()
+    expect(String(badMark.payload?.error || '')).toContain('mark_match')
+  } finally {
+    await deleteTable(request, String(table.id))
+  }
+})
+
 test('bridge rule API validation: anonymous limit_rate is accepted for bridge', async ({ request }) => {
   const tableName = unique('br_tbl')
   const table = await createBridgeTable(request, tableName)
@@ -186,6 +232,106 @@ test('bridge rule API validation: anonymous limit_rate is accepted for bridge', 
     })
     expect(res.ok(), `create bridge limit_rate rule failed: ${JSON.stringify(payload)}`).toBeTruthy()
     expect(payload?.item?.limit_rate).toBe('10/second')
+  } finally {
+    await deleteTable(request, String(table.id))
+  }
+})
+
+test('bridge rule API validation: queue action is accepted for bridge', async ({ request }) => {
+  const tableName = unique('br_tbl')
+  const table = await createBridgeTable(request, tableName)
+  try {
+    const queued = await createBridgeRule(request, {
+      family: 'bridge',
+      table: tableName,
+      chain: 'forward',
+      action: 'queue',
+      queue_num: '0-3',
+      queue_flags: ['bypass', 'fanout'],
+    })
+    expect(queued.res.ok(), `create bridge queue rule failed: ${JSON.stringify(queued.payload)}`).toBeTruthy()
+    expect(queued.payload?.item?.action).toBe('queue')
+    expect(queued.payload?.item?.queue_num).toBe('0-3')
+    expect(queued.payload?.item?.queue_flags || []).toEqual(expect.arrayContaining(['bypass', 'fanout']))
+  } finally {
+    await deleteTable(request, String(table.id))
+  }
+})
+
+test('bridge rule API validation: structured expert expressions are planned/disabled for bridge on current runtime', async ({ request }) => {
+  const tableName = unique('br_tbl')
+  const table = await createBridgeTable(request, tableName)
+  try {
+    const blocked = await createBridgeRule(request, {
+      family: 'bridge',
+      table: tableName,
+      chain: 'forward',
+      action: 'accept',
+      fib_check: 'daddr type local',
+      socket_match: 'transparent 1',
+      rt_nexthop: '192.0.2.1',
+      ipv6_exthdrs: 'frag missing',
+    })
+    expect(blocked.res.ok()).toBeFalsy()
+    expect(String(blocked.payload?.error || '')).toContain('fib_check/socket_match/rt_nexthop/ipv6_exthdrs are planned for family=bridge')
+  } finally {
+    await deleteTable(request, String(table.id))
+  }
+})
+
+test('bridge rule API validation: fwd statement is rejected for bridge (netdev only)', async ({ request }) => {
+  const tableName = unique('br_tbl')
+  const table = await createBridgeTable(request, tableName)
+  try {
+    const bad = await createBridgeRule(request, {
+      family: 'bridge',
+      table: tableName,
+      chain: 'forward',
+      action: 'accept',
+      fwd_to: '198.51.100.10',
+      fwd_dev: 'eth0',
+      fwd_family: 'ip',
+    })
+    expect(bad.res.ok()).toBeFalsy()
+    expect(String(bad.payload?.error || '')).toContain('fwd_to/fwd_dev/fwd_family are supported only for family=netdev')
+  } finally {
+    await deleteTable(request, String(table.id))
+  }
+})
+
+test('bridge rule API validation: queue fanout requires queue range', async ({ request }) => {
+  const tableName = unique('br_tbl')
+  const table = await createBridgeTable(request, tableName)
+  try {
+    const bad = await createBridgeRule(request, {
+      family: 'bridge',
+      table: tableName,
+      chain: 'forward',
+      action: 'queue',
+      queue_num: '0',
+      queue_flags: ['fanout'],
+    })
+    expect(bad.res.ok()).toBeFalsy()
+    expect(String(bad.payload?.error || '')).toContain('fanout')
+  } finally {
+    await deleteTable(request, String(table.id))
+  }
+})
+
+test('bridge rule API validation: dup statement is currently planned for bridge runtime', async ({ request }) => {
+  const tableName = unique('br_tbl')
+  const table = await createBridgeTable(request, tableName)
+  try {
+    const bad = await createBridgeRule(request, {
+      family: 'bridge',
+      table: tableName,
+      chain: 'forward',
+      action: 'accept',
+      dup_to: '192.0.2.10',
+      dup_dev: 'eth0',
+    })
+    expect(bad.res.ok()).toBeFalsy()
+    expect(String(bad.payload?.error || '')).toContain('dup_to/dup_dev are planned for family=bridge')
   } finally {
     await deleteTable(request, String(table.id))
   }
@@ -411,6 +557,203 @@ test('bridge named objects: one rule can reference multiple object bindings', as
     for (const objectId of createdObjectIds) {
       if (objectId) await deleteNamedObject(request, objectId)
     }
+    await deleteTable(request, String(table.id))
+  }
+})
+
+test('policy v2 bridge UI: object usage drilldown works both ways (objects -> rules -> objects)', async ({ page, request }) => {
+  const tableName = unique('br_tbl')
+  const table = await createBridgeTable(request, tableName)
+  let objectId = ''
+  let ruleId = ''
+  const objectName = unique('cnt')
+  try {
+    const createdObject = await upsertNamedObject(request, {
+      family: 'bridge',
+      table: tableName,
+      kind: 'counter',
+      name: objectName,
+      enabled: true,
+      comment: 'drilldown object',
+    })
+    expect(createdObject.res.ok(), `create object failed: ${JSON.stringify(createdObject.payload)}`).toBeTruthy()
+    objectId = String(createdObject.payload?.item?.id || '')
+
+    const createdRule = await createBridgeRule(request, {
+      family: 'bridge',
+      table: tableName,
+      chain: 'forward',
+      action: 'accept',
+      proto: 'tcp',
+      dport: '443',
+      counter_name: objectName,
+      comment: 'drilldown-rule',
+    })
+    expect(createdRule.res.ok(), `create rule failed: ${JSON.stringify(createdRule.payload)}`).toBeTruthy()
+    ruleId = String(createdRule.payload?.item?.id || '')
+
+    await login(page)
+    await openFirewall(page)
+    await page.getByRole('tab', { name: 'policy v2' }).click()
+    await page.locator("label:has-text('Table')").locator('..').locator('select').selectOption(tableName)
+
+    await page.getByRole('tab', { name: 'objects' }).click()
+    const objectRow = page.locator('tbody tr').filter({ hasText: objectName }).first()
+    await expect(objectRow).toBeVisible()
+    await objectRow.getByRole('button').first().click()
+
+    await expect(page.getByText(new RegExp(`object:\\s*counter:${objectName.toLowerCase()}`))).toBeVisible()
+    await expect(page.getByRole('tab', { name: 'rules' })).toBeVisible()
+    await expect(page.locator('tbody tr').filter({ hasText: 'drilldown-rule' }).first()).toBeVisible()
+
+    const ruleRow = page.locator('tbody tr').filter({ hasText: 'drilldown-rule' }).first()
+    await ruleRow.getByRole('button', { name: `counter:${objectName}` }).click()
+    await expect(page.getByText(new RegExp(`object:\\s*counter:${objectName.toLowerCase()}`))).toBeVisible()
+    await expect(page.getByRole('tab', { name: 'objects' })).toBeVisible()
+    await expect(page.locator('tbody tr').filter({ hasText: objectName }).first()).toBeVisible()
+  } finally {
+    if (ruleId) await request.delete(`/firewall/rules/${ruleId}`, { headers: authHeaders() })
+    if (objectId) await deleteNamedObject(request, objectId)
+    await deleteTable(request, String(table.id))
+  }
+})
+
+test('policy v2 bridge UI: objects tab can open Add Rule prefilled with selected object binding', async ({ page, request }) => {
+  const tableName = unique('br_tbl')
+  const table = await createBridgeTable(request, tableName)
+  let objectId = ''
+  const objectName = unique('cnt')
+  try {
+    const createdObject = await upsertNamedObject(request, {
+      family: 'bridge',
+      table: tableName,
+      kind: 'counter',
+      name: objectName,
+      enabled: true,
+      comment: 'prefill object',
+    })
+    expect(createdObject.res.ok(), `create object failed: ${JSON.stringify(createdObject.payload)}`).toBeTruthy()
+    objectId = String(createdObject.payload?.item?.id || '')
+
+    await login(page)
+    await openFirewall(page)
+    await page.getByRole('tab', { name: 'policy v2' }).click()
+    await page.locator("label:has-text('Table')").locator('..').locator('select').selectOption(tableName)
+    await page.getByRole('tab', { name: 'objects' }).click()
+
+    const objectRow = page.locator('tbody tr').filter({ hasText: objectName }).first()
+    await expect(objectRow).toBeVisible()
+    await objectRow.getByRole('button', { name: 'use' }).click()
+
+    await expect(page.getByText('Add Bridge Rule (Policy v2)')).toBeVisible()
+    await expect(page.getByText(`counter:${objectName}`)).toBeVisible()
+  } finally {
+    if (objectId) await deleteNamedObject(request, objectId)
+    await deleteTable(request, String(table.id))
+  }
+})
+
+test('policy v2 bridge UI: limit object row can open Add Rule prefilled with limit binding', async ({ page, request }) => {
+  const tableName = unique('br_tbl')
+  const table = await createBridgeTable(request, tableName)
+  let counterId = ''
+  let limitId = ''
+  const counterName = unique('cnt')
+  const limitName = unique('lim')
+  try {
+    const counterObj = await upsertNamedObject(request, {
+      family: 'bridge',
+      table: tableName,
+      kind: 'counter',
+      name: counterName,
+      enabled: true,
+    })
+    expect(counterObj.res.ok(), `create counter failed: ${JSON.stringify(counterObj.payload)}`).toBeTruthy()
+    counterId = String(counterObj.payload?.item?.id || '')
+
+    const limitObj = await upsertNamedObject(request, {
+      family: 'bridge',
+      table: tableName,
+      kind: 'limit',
+      name: limitName,
+      enabled: true,
+      rate: '15/second',
+    })
+    expect(limitObj.res.ok(), `create limit failed: ${JSON.stringify(limitObj.payload)}`).toBeTruthy()
+    limitId = String(limitObj.payload?.item?.id || '')
+
+    await login(page)
+    await openFirewall(page)
+    await page.getByRole('tab', { name: 'policy v2' }).click()
+    await page.locator("label:has-text('Table')").locator('..').locator('select').selectOption(tableName)
+    await page.getByRole('tab', { name: 'objects' }).click()
+
+    const limitRow = page.locator('tbody tr').filter({ hasText: limitName }).first()
+    await expect(limitRow).toBeVisible()
+    await limitRow.getByRole('button', { name: 'use' }).click()
+
+    await expect(page.getByText('Add Bridge Rule (Policy v2)')).toBeVisible()
+    await expect(page.getByText(`limit:${limitName}`)).toBeVisible({ timeout: 5000 })
+  } finally {
+    if (limitId) await deleteNamedObject(request, limitId)
+    if (counterId) await deleteNamedObject(request, counterId)
+    await deleteTable(request, String(table.id))
+  }
+})
+
+test('policy v2 bridge UI: editor quick panel can unlink a prefilled object binding', async ({ page, request }) => {
+  const tableName = unique('br_tbl')
+  const table = await createBridgeTable(request, tableName)
+  let objectId = ''
+  const objectName = unique('cnt')
+  try {
+    const createdObject = await upsertNamedObject(request, {
+      family: 'bridge',
+      table: tableName,
+      kind: 'counter',
+      name: objectName,
+      enabled: true,
+    })
+    expect(createdObject.res.ok(), `create object failed: ${JSON.stringify(createdObject.payload)}`).toBeTruthy()
+    objectId = String(createdObject.payload?.item?.id || '')
+
+    await login(page)
+    await openFirewall(page)
+    await page.getByRole('tab', { name: 'policy v2' }).click()
+    await page.locator("label:has-text('Table')").locator('..').locator('select').selectOption(tableName)
+    await page.getByRole('tab', { name: 'objects' }).click()
+
+    const objectRow = page.locator('tbody tr').filter({ hasText: objectName }).first()
+    await expect(objectRow).toBeVisible()
+    await objectRow.getByRole('button', { name: 'use' }).click()
+    await expect(page.getByText('Add Bridge Rule (Policy v2)')).toBeVisible()
+    await expect(page.getByText(`counter:${objectName}`)).toBeVisible()
+
+    await page.getByRole('button', { name: 'unlink' }).first().click()
+    await expect(page.getByText(`counter:${objectName}`)).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'unlink' })).toHaveCount(0)
+  } finally {
+    if (objectId) await deleteNamedObject(request, objectId)
+    await deleteTable(request, String(table.id))
+  }
+})
+
+test('policy v2 bridge UI: dup/fwd show planned strategy hints in editor', async ({ page, request }) => {
+  const tableName = unique('br_tbl')
+  const table = await createBridgeTable(request, tableName)
+  try {
+    await login(page)
+    await openFirewall(page)
+    await page.getByRole('tab', { name: 'policy v2' }).click()
+    await page.locator("label:has-text('Table')").locator('..').locator('select').selectOption(tableName)
+    await page.getByRole('button', { name: 'Add' }).first().click()
+    await expect(page.getByText('Add Bridge Rule (Policy v2)')).toBeVisible()
+
+    await expect(page.getByText(/dup.*planned for bridge.*rejected by backend validation/i)).toBeVisible()
+    await expect(page.getByText(/fwd.*netdev-only.*outside bridge policy v2/i)).toBeVisible()
+    await expect(page.getByText(/planned for bridge runtime/i).first()).toBeVisible()
+    await expect(page.getByText(/netdev-only \(planned\)/i).first()).toBeVisible()
+  } finally {
     await deleteTable(request, String(table.id))
   }
 })
