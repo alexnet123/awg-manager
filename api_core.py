@@ -191,7 +191,7 @@ class AWGManagerAPIHandler(BaseHTTPRequestHandler):
             self._send_json(200, {'ok': True, 'items': clients})
             return
 
-        if firewall_api.handle_get(path_parts, self._send_json):
+        if firewall_api.handle_get(path_parts, query_params, self._send_json):
             return
 
         if ipsec_api.handle_get(path_parts, self._send_json):

@@ -115,7 +115,7 @@ EOF
 }
 
 pin_running_kernel() {
-  local running_kernel base_ver saved_entry
+  local running_kernel base_ver grub_title grub_default_entry
   running_kernel="$(uname -r)"
   base_ver="${running_kernel%-amd64}"
 
@@ -139,17 +139,24 @@ pin_running_kernel() {
     apt-mark hold "${installed_kernel_pkgs[@]}" >/dev/null 2>&1 || true
   fi
 
-  # Persist kernel choice for next boot. Prefer entry id if we can find it.
+  # Persist kernel choice for next boot.
+  # Use explicit "Advanced options > kernel" entry. This is more reliable on
+  # cloud images where GRUB_DEFAULT=saved can still drift to a newer kernel.
   if [[ -f /boot/grub/grub.cfg ]]; then
-    saved_entry="$(grep -m1 "with Linux ${running_kernel}'" /boot/grub/grub.cfg | sed -n "s/.*menuentry_id_option '\([^']*\)'.*/\1/p")"
-    if [[ -n "${saved_entry:-}" ]]; then
-      if ! grep -q '^GRUB_DEFAULT=saved' /etc/default/grub 2>/dev/null; then echo 'GRUB_DEFAULT=saved' >> /etc/default/grub; fi
-      if ! grep -q '^GRUB_SAVEDEFAULT=true' /etc/default/grub 2>/dev/null; then echo 'GRUB_SAVEDEFAULT=true' >> /etc/default/grub; fi
+    grub_title="Debian GNU/Linux, with Linux ${running_kernel}"
+    grub_default_entry="Advanced options for Debian GNU/Linux>${grub_title}"
+    if grep -Fq "menuentry '${grub_title}'" /boot/grub/grub.cfg; then
+      cp /etc/default/grub "/etc/default/grub.bak.$(date +%F-%H%M%S)" >/dev/null 2>&1 || true
+      sed -i '/^GRUB_DEFAULT=/d; /^GRUB_SAVEDEFAULT=/d' /etc/default/grub
+      {
+        printf 'GRUB_DEFAULT="%s"\n' "${grub_default_entry}"
+        printf 'GRUB_SAVEDEFAULT=false\n'
+      } >> /etc/default/grub
       update-grub >/dev/null 2>&1 || true
-      grub-set-default "${saved_entry}" >/dev/null 2>&1 || true
-      log "GRUB saved_entry set: ${saved_entry}"
+      grub-set-default "${grub_default_entry}" >/dev/null 2>&1 || true
+      log "GRUB default pinned: ${grub_default_entry}"
     else
-      log "WARN: could not detect GRUB entry id for ${running_kernel}; kernel is held but GRUB default was not changed"
+      log "WARN: could not detect GRUB menuentry for ${running_kernel}; kernel is held but GRUB default was not changed"
     fi
   else
     log "WARN: /boot/grub/grub.cfg not found; kernel is held but GRUB default was not changed"

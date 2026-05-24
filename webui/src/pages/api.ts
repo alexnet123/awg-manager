@@ -28,14 +28,16 @@ export type ClientItem = {
 export type FirewallRule = {
   id: string
   table: string
-  family: 'inet' | 'ip' | 'ip6'
+  family: 'inet' | 'ip' | 'ip6' | 'bridge' | 'netdev'
   chain: string
-  action: 'accept' | 'drop' | 'reject' | 'jump' | 'goto' | 'return'
+  action: 'accept' | 'drop' | 'reject' | 'jump' | 'goto' | 'return' | 'queue'
   proto?: 'tcp' | 'udp' | 'icmp' | 'icmpv6' | null
   src?: string | null
   dst?: string | null
   in_interface?: string | null
   out_interface?: string | null
+  ibrname?: string | null
+  obrname?: string | null
   sport?: string | null
   dport?: string | null
   comment?: string | null
@@ -56,6 +58,10 @@ export type FirewallRule = {
   ct_mark_set?: string | null
   log_prefix?: string | null
   log_level?: 'emerg' | 'alert' | 'crit' | 'err' | 'warn' | 'notice' | 'info' | 'debug' | null
+  log_flags?: Array<'tcp sequence' | 'tcp options' | 'ip options' | 'skuid' | 'ether' | 'all'> | null
+  log_group?: number | null
+  log_snaplen?: number | null
+  log_queue_threshold?: number | null
   fib_expr?: string | null
   socket_expr?: string | null
   rt_expr?: string | null
@@ -98,6 +104,16 @@ export type FirewallRule = {
   ct_helper_set?: string | null
   ct_timeout_set?: string | null
   ct_expectation_set?: string | null
+  counter_name?: string | null
+  limit_name?: string | null
+  quota_name?: string | null
+  queue_num?: string | null
+  queue_flags?: Array<'bypass' | 'fanout'> | null
+  dup_to?: string | null
+  dup_dev?: string | null
+  fwd_to?: string | null
+  fwd_dev?: string | null
+  fwd_family?: 'ip' | 'ip6' | null
   limit_rate?: string | null
   counter?: boolean
   runtime_packets?: number
@@ -163,6 +179,31 @@ export type FirewallTableItem = {
 export type FirewallTablesState = {
   builtin: FirewallTableItem[]
   custom: FirewallTableItem[]
+}
+
+export type FirewallNamedObjects = {
+  family: string
+  table: string
+  counter: string[]
+  limit: string[]
+  quota: string[]
+  ct_helper: string[]
+  ct_timeout: string[]
+  ct_expectation: string[]
+  items?: FirewallNamedObjectItem[]
+}
+
+export type FirewallNamedObjectKind = 'counter' | 'limit' | 'quota' | 'ct_helper' | 'ct_timeout' | 'ct_expectation'
+
+export type FirewallNamedObjectItem = {
+  id: string
+  kind: FirewallNamedObjectKind
+  family: 'inet' | 'ip' | 'ip6' | 'bridge' | 'netdev'
+  table: string
+  name: string
+  enabled: boolean
+  comment?: string | null
+  config?: Record<string, string | number | boolean | null>
 }
 
 export type FirewallState = {
@@ -344,6 +385,46 @@ export async function getFirewallState(auth: AuthState): Promise<FirewallState> 
   if (!res.ok) throw new Error(await parseError(res))
   const payload = await res.json()
   return payload.item
+}
+
+export async function getFirewallRules(auth: AuthState, filters?: { family?: string; table?: string }): Promise<FirewallRule[]> {
+  const params = new URLSearchParams()
+  if (filters?.family) params.set('family', filters.family)
+  if (filters?.table) params.set('table', filters.table)
+  const query = params.toString()
+  const res = await fetch(`/firewall/rules${query ? `?${query}` : ''}`, { headers: headers(auth) })
+  if (!res.ok) throw new Error(await parseError(res))
+  const payload = await res.json()
+  return payload.items || []
+}
+
+export async function getFirewallObjects(auth: AuthState, filters: { family: string; table: string }): Promise<FirewallNamedObjects> {
+  const params = new URLSearchParams()
+  params.set('family', filters.family)
+  params.set('table', filters.table)
+  const res = await fetch(`/firewall/objects?${params.toString()}`, { headers: headers(auth) })
+  if (!res.ok) throw new Error(await parseError(res))
+  const payload = await res.json()
+  return payload.item
+}
+
+export async function upsertFirewallObject(auth: AuthState, body: Partial<FirewallNamedObjectItem> & Record<string, any>): Promise<FirewallNamedObjectItem> {
+  const objectId = body.id
+  const method = objectId ? 'PUT' : 'POST'
+  const url = objectId ? `/firewall/objects/${objectId}` : '/firewall/objects'
+  const res = await fetch(url, {
+    method,
+    headers: headers(auth, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  const payload = await res.json()
+  return payload.item
+}
+
+export async function deleteFirewallObject(auth: AuthState, id: string): Promise<void> {
+  const res = await fetch(`/firewall/objects/${id}`, { method: 'DELETE', headers: headers(auth) })
+  if (!res.ok) throw new Error(await parseError(res))
 }
 
 export async function getFirewallSchema(auth: AuthState): Promise<FirewallSchema> {

@@ -2,6 +2,7 @@
 
 - [API.md](API.md) — AWG Manager HTTP API reference
 - [DEPLOY.md](DEPLOY.md) — deployment, systemd, restore workflow
+- [STAND_SETUP_FIXES.md](STAND_SETUP_FIXES.md) — real stand setup issues + applied fixes log
 - [FIREWALL_TESTPLAN.md](FIREWALL_TESTPLAN.md) — strict UI/API/NFT firewall test methodology
 - [FIREWALL_ADD_RULE_TESTPLAN.md](FIREWALL_ADD_RULE_TESTPLAN.md) — hard test plan for Add Firewall Rule modal
 - [FIREWALL_ADD_RULE_FIELDS_INVENTORY.md](FIREWALL_ADD_RULE_FIELDS_INVENTORY.md) — Add Rule field completeness inventory

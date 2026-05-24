@@ -56,6 +56,13 @@ For a fresh server test stand (AmneziaWG + restore + API + Web UI), run:
 sudo ./scripts/install_test_stand.sh --project-dir /root/awg_manager --host 0.0.0.0 --port 8787
 ```
 
+What installer fixes now:
+- disables auto updates;
+- holds installed kernel packages;
+- pins GRUB to the running kernel via explicit `Advanced options > kernel` entry;
+- enables persistent `net.ipv4.ip_forward=1`;
+- installs and starts `awg-manager-api` + `awg-manager-restore`.
+
 Generated credentials are saved to:
 
 - `/root/key/api.key`
@@ -105,6 +112,15 @@ npm install
 npm run build
 ```
 
+If build fails due old Node runtime, upgrade first (Node 20+ recommended):
+
+```bash
+npm install -g n
+n 20
+hash -r
+node -v
+```
+
 Copy the service file:
 
 ```bash
@@ -148,3 +164,17 @@ Requests must include:
 - `X-API-Key`
 
 Detailed route documentation is available in [API.md](API.md).
+
+## Post-Reboot Verification (Recommended)
+
+After reboot, verify runtime state:
+
+```bash
+uname -r
+lsmod | grep -E '^amneziawg' || true
+systemctl is-active awg-manager-api.service awg-manager-restore.service
+sysctl -n net.ipv4.ip_forward
+```
+
+For known stand issues and exact fixes, see:
+- [STAND_SETUP_FIXES.md](STAND_SETUP_FIXES.md)

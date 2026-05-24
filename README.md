@@ -126,5 +126,6 @@ Source:
 
 - [docs/API.md](docs/API.md)
 - [docs/DEPLOY.md](docs/DEPLOY.md)
+- [docs/STAND_SETUP_FIXES.md](docs/STAND_SETUP_FIXES.md) (stand setup issues and fixes log)
 - [docs/README.md](docs/README.md) (full docs index)
 - [docs/TESTS_CATALOG.ru.md](docs/TESTS_CATALOG.ru.md) (complete tests catalog, RU)
