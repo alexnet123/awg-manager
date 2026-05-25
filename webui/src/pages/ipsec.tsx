@@ -293,7 +293,7 @@ export function IpsecPage(props: { auth: AuthState; refreshNonce: number }) {
               <CardContent className='space-y-2'>
                 {installed.map((x, idx) => (
                   <div key={`${x.child_sa || 'sa'}-${idx}`} className='rounded border p-2 text-sm'>
-                    {x.child_sa} | {x.state} | SPI in/out: {x.spi_in}/{x.spi_out} | {x.local_ts?.join(', ')} -> {x.remote_ts?.join(', ')} | {x.esp_proposal}
+                    {x.child_sa} | {x.state} | SPI in/out: {x.spi_in}/{x.spi_out} | {x.local_ts?.join(', ')} -&gt; {x.remote_ts?.join(', ')} | {x.esp_proposal}
                   </div>
                 ))}
                 {!installed.length ? <div className='text-sm text-muted-foreground'>No installed SAs.</div> : null}

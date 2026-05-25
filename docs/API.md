@@ -20,7 +20,12 @@ Every request must include:
  
 Authentication works as a single-key check:
 
-- `X-API-Key` must match the API key from env var `AWG_MANAGER_API_KEY` or file `/etc/wg-manager/api.key`
+- `X-API-Key` must match the API key from env var `AWG_MANAGER_API_KEY` or file `${AWG_MANAGER_DATA_DIR}/api.key`
+
+Runtime env defaults:
+
+- `AWG_MANAGER_DATA_DIR=/etc/wg-manager`
+- `AWG_MANAGER_STAND_PROFILE=firewall`
 
 If the header is missing or invalid, the API returns `401`.
 
@@ -60,7 +65,7 @@ Important:
 
 - request authentication is API-key based (`X-API-Key`)
 - a server reboot does not restore runtime AWG interfaces by itself
-- restore is performed by `python3 awg_manager.py -r /etc/wg-manager/encryption.key`
+- restore is performed by `python3 awg_manager.py -r ${AWG_MANAGER_DATA_DIR}/encryption.key`
 - for automatic restore, use the systemd unit documented in [DEPLOY.md](DEPLOY.md)
 
 ## Common Headers
@@ -356,6 +361,15 @@ Important:
 - `dup_to`/`dup_dev` are currently planned for `family=bridge` on this runtime and rejected by backend validation.
 - `fwd_to`/`fwd_dev`/`fwd_family` are netdev-only (planned for future `Policy v2` families).
 - UI explicitly shows planned strategy notes for `structured expressions`, `dup`, and `fwd` in bridge rule editor to avoid false runtime expectations.
+
+Netdev Policy3 (`family=netdev`, used by Firewall → Policy3):
+- base: `family`, `table`, `chain`, `action`, `enabled`, `comment`.
+- table/chain constraint: selected table must be a custom `netdev` table with `chain_type=filter`, `hook=ingress`, and `device` set.
+- actions: `accept`, `drop`, `jump`, `goto`, `return`, `queue`, `fwd`.
+- L2/L3/L4: `in_interface`, `ether_src`, `ether_dst`, `ether_type`, `vlan_id`, `src`, `dst`, `proto`, `sport`, `dport`, `ct_state`.
+- metadata/statements: `meta_pkttype`, `meta_iiftype`, `meta_iifgroup`, `mark_match`, `ct_mark_match`, `counter`, `limit_rate`, `log_prefix`, `log_level`, `log_flags`, `log_group`, `log_snaplen`, `log_queue_threshold`, `queue_num`, `queue_flags`.
+- forwarding: `action=fwd` requires `fwd_to` and `fwd_dev`; `fwd_family` is optional and must match the address family when present.
+- bridge-only fields (`ibrname`, `obrname`, named objects, `dup_*`) and nat/raw/route-only fields are rejected.
 
 `PUT /firewall/rules/{id}`
 

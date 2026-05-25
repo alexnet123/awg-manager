@@ -417,6 +417,8 @@ def start_api_server(host='127.0.0.1', port=8787):
     httpd = HTTPServer((host, port), AWGManagerAPIHandler)
     print(f'API server started on http://{host}:{port}')
     print('Authentication header required: X-API-Key')
+    print(f'Runtime data dir: {manager.bd_path}')
+    print(f'Stand profile: {os.environ.get("AWG_MANAGER_STAND_PROFILE", "firewall")}')
     httpd.serve_forever()
 
 

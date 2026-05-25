@@ -2,12 +2,15 @@
 
 Документ объясняет, как использовать меню **Firewall → Add Firewall Rule** в AWG Manager.
 
-## 0) Policy и Policy v2
+## 0) Policy, Policy2 и Policy3
 - Вкладка `policy` по дизайну работает только с **inet**.
-- Для non-inet семейств используйте **Firewall → policy v2**.
-- Текущий MVP в `policy v2`: `Family=bridge` и выбор таблицы в 2 шага: `Family -> Table`.
+- Для bridge используйте **Firewall → policy2**.
+- Для netdev ingress используйте **Firewall → policy3**.
+- Текущий `policy2`: `Family=bridge` и включённые custom bridge-таблицы.
+- Текущий `policy3`: `Family=netdev` и включённые custom netdev-таблицы (`filter` + `ingress` + `device`).
 - В `policy v2` в списке `Table` показываются только включённые custom-таблицы выбранного семейства.
 - В bridge `policy v2` поддерживаются: `ibrname/obrname`, `ether src/dst/type`, `vlan id`, `proto`, `sport`, `dport`, `ct state`, `meta pkttype`, `meta iifgroup`, `meta oifgroup`, `mark match`, `ct mark match`, `counter`, именованные `counter/limit/quota`, `limit rate`, расширенные параметры `log` и `action=queue` (`queue_num`, `queue_flags`).
+- В netdev `policy3` поддерживаются ingress-safe L2/L3/L4 поля, anonymous `counter`, `limit rate`, расширенный `log`, `action=queue` и `action=fwd` с `fwd_to/fwd_dev/fwd_family`.
 - Для bridge `reject` допускается только для цепочек с hook `input` или `prerouting`.
 - Для bridge `vlan id` допустим диапазон `1..4095`.
 - Для bridge `ether type` принимается Ethertype в hex/decimal: `0x0000..0xffff` или `0..65535`.

@@ -2,12 +2,15 @@
 
 This guide explains how to use **Firewall → Add Firewall Rule** in AWG Manager.
 
-## 0) Policy vs Policy v2
+## 0) Policy vs Policy2 vs Policy3
 - `policy` tab is intentionally **inet-only** (classic flow).
-- For non-inet families, use **Firewall → policy v2**.
-- Current MVP in `policy v2`: `Family=bridge` with 2-step selector `Family -> Table`.
+- Use **Firewall → policy2** for bridge rules.
+- Use **Firewall → policy3** for netdev ingress rules.
+- Current `policy2`: `Family=bridge` with enabled custom bridge tables.
+- Current `policy3`: `Family=netdev` with enabled custom netdev tables (`filter` + `ingress` + `device`).
 - `Table` list in `policy v2` shows only enabled custom tables from selected family.
 - Bridge `policy v2` supports: `ibrname/obrname`, `ether src/dst/type`, `vlan id`, `proto`, `sport`, `dport`, `ct state`, `meta pkttype`, `meta iifgroup`, `meta oifgroup`, `mark match`, `ct mark match`, `counter`, named `counter/limit/quota`, `limit rate`, extended `log` options, and `action=queue` (`queue_num`, `queue_flags`).
+- Netdev `policy3` supports ingress-safe L2/L3/L4 fields, anonymous `counter`, `limit rate`, extended `log`, `action=queue`, and `action=fwd` with `fwd_to/fwd_dev/fwd_family`.
 - Bridge `reject` is allowed only on chains with hook `input` or `prerouting`.
 - Bridge `vlan id` range is `1..4095`.
 - Bridge `ether type` accepts Ethertype as hex/integer: `0x0000..0xffff` or `0..65535`.

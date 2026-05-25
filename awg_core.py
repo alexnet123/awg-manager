@@ -69,7 +69,10 @@ encryption_key_legacy = derive_encryption_key_v1_legacy(encryption_secret)
 
 
 
-bd_path = '/etc/wg-manager'
+DATA_DIR_ENV_VAR = 'AWG_MANAGER_DATA_DIR'
+DEFAULT_DATA_DIR = '/etc/wg-manager'
+_raw_data_dir = str(os.environ.get(DATA_DIR_ENV_VAR, '') or '').strip()
+bd_path = os.path.abspath(_raw_data_dir or DEFAULT_DATA_DIR)
 API_KEY_ENV_VAR = 'AWG_MANAGER_API_KEY'
 API_KEY_FILE = os.path.join(bd_path, 'api.key')
 FIREWALL_RULES_FILE = os.path.join(bd_path, 'firewall_rules.json')
@@ -118,7 +121,7 @@ FIREWALL_SCHEMA = {
             'supports': ['proto', 'src', 'dst', 'sport', 'dport', 'ct_state', 'in_interface', 'out_interface', 'action', 'counter', 'mark_set', 'ct_mark_set', 'log', 'limit_rate', 'user_id', 'hour', 'dscp', 'tcp_flags', 'icmp_type', 'icmp_code', 'icmpv6_type', 'icmpv6_code', 'meta_length', 'meta_priority', 'meta_cpu', 'meta_pkttype', 'meta_iiftype', 'meta_oiftype', 'meta_iifgroup', 'meta_oifgroup', 'mark_match', 'ct_mark_match', 'ct_status', 'ct_direction', 'ct_expiration', 'ct_helper_match', 'ct_label', 'ct_event', 'ct_original_saddr', 'ct_original_daddr', 'ct_reply_saddr', 'ct_reply_daddr', 'fib_check', 'socket_match', 'rt_nexthop', 'ipv6_exthdrs', 'vlan_id', 'ether_src', 'ether_dst', 'ether_type'],
         },
     },
-    'actions': ['accept', 'drop', 'reject', 'jump', 'goto', 'return', 'queue'],
+    'actions': ['accept', 'drop', 'reject', 'jump', 'goto', 'return', 'queue', 'fwd'],
     'protos': ['tcp', 'udp', 'icmp', 'icmpv6'],
     'ct_states': ['established,related', 'new', 'invalid', 'related', 'established', 'untracked'],
 }
@@ -147,13 +150,9 @@ FIREWALL_DEFAULT_TABLE_DEFS = {
     ],
 }
 FIREWALL_RESERVED_PRIORITIES = {-300, -150, -100, 0, 100}
-if os.path.isdir(bd_path):
-    # Подключение к базе данных
-    conn = sqlite3.connect(bd_path+"/"+"clients.db")
-else:
-    print('Directory does not exist')
+if not os.path.isdir(bd_path):
     os.makedirs(bd_path, exist_ok=True)
-    conn = sqlite3.connect(bd_path+"/"+"clients.db")
+conn = sqlite3.connect(os.path.join(bd_path, "clients.db"))
 
 
 
@@ -1293,8 +1292,8 @@ def _normalize_firewall_rule(payload, validate_runtime_objects=False):
     enabled = payload.get('enabled', True)
 
     family = str(family).lower()
-    if family not in (FIREWALL_TABLE_FAMILY, 'bridge'):
-        raise ValueError('family must be inet or bridge')
+    if family not in (FIREWALL_TABLE_FAMILY, 'bridge', 'netdev'):
+        raise ValueError('family must be inet, bridge, or netdev')
 
     table_mode = None
     chain_mode = None
@@ -1326,8 +1325,12 @@ def _normalize_firewall_rule(payload, validate_runtime_objects=False):
 
     if chain not in allowed_chains:
         raise ValueError(f'chain "{chain}" is not valid for table "{nft_table}"')
-    if action not in ('accept', 'drop', 'reject', 'jump', 'goto', 'return', 'queue'):
-        raise ValueError('action must be one of: accept, drop, reject, jump, goto, return, queue')
+    if action not in ('accept', 'drop', 'reject', 'jump', 'goto', 'return', 'queue', 'fwd'):
+        raise ValueError('action must be one of: accept, drop, reject, jump, goto, return, queue, fwd')
+    if action == 'fwd' and family != 'netdev':
+        raise ValueError('action=fwd is supported only for family=netdev')
+    if family == 'netdev' and action == 'reject':
+        raise ValueError('action=reject is not supported for family=netdev')
     if table_mode != 'filter' and action in ('jump', 'goto', 'return'):
         raise ValueError('jump/goto/return are currently supported only in filter table')
     if action in ('jump', 'goto'):
@@ -1438,6 +1441,12 @@ def _normalize_firewall_rule(payload, validate_runtime_objects=False):
         raise ValueError('fwd_to is required when fwd_dev is set')
     if (fwd_to is not None or fwd_dev is not None or fwd_family is not None) and family != 'netdev':
         raise ValueError('fwd_to/fwd_dev/fwd_family are supported only for family=netdev')
+    if action == 'fwd' and fwd_to is None:
+        raise ValueError('fwd_to is required when action=fwd')
+    if action == 'fwd' and fwd_dev is None:
+        raise ValueError('fwd_dev is required when action=fwd')
+    if action != 'fwd' and (fwd_to is not None or fwd_dev is not None or fwd_family is not None):
+        raise ValueError('fwd_to/fwd_dev/fwd_family are only valid when action=fwd')
     if family == 'bridge' and (dup_to is not None or dup_dev is not None):
         raise ValueError('dup_to/dup_dev are planned for family=bridge and temporarily disabled on current nft runtime')
     if tcp_flags is not None and proto != 'tcp':
@@ -1812,6 +1821,62 @@ def _normalize_firewall_rule(payload, validate_runtime_objects=False):
                     raise ValueError(f'{field_name} is not supported for family=bridge in Policy v2 MVP')
             elif field_value is not None:
                 raise ValueError(f'{field_name} is not supported for family=bridge in Policy v2 MVP')
+    if family == 'netdev':
+        selected_hook = str((selected_chain or {}).get('hook') or '').lower()
+        selected_type = str((selected_chain or {}).get('chain_type') or 'filter').lower()
+        selected_device = normalize_config_value((selected_chain or {}).get('device'))
+        if selected_type != 'filter' or selected_hook != 'ingress' or selected_device is None:
+            raise ValueError('family=netdev requires a custom filter chain with hook=ingress and device')
+        netdev_disallowed = (
+            ('out_interface', out_interface),
+            ('ibrname', ibrname),
+            ('obrname', obrname),
+            ('user_id', user_id),
+            ('hour', hour),
+            ('nat_type', nat_type),
+            ('to_addr', to_addr),
+            ('to_port', to_port),
+            ('nat_random', nat_random),
+            ('nat_fully_random', nat_fully_random),
+            ('nat_persistent', nat_persistent),
+            ('notrack', notrack),
+            ('nftrace', nftrace),
+            ('fib_expr', fib_expr),
+            ('socket_expr', socket_expr),
+            ('rt_expr', rt_expr),
+            ('exthdr_expr', exthdr_expr),
+            ('raw_expr', raw_expr),
+            ('fib_check', fib_check),
+            ('socket_match', socket_match),
+            ('rt_nexthop', rt_nexthop),
+            ('ipv6_exthdrs', ipv6_exthdrs),
+            ('meta_oiftype', meta_oiftype),
+            ('meta_oifgroup', meta_oifgroup),
+            ('ct_status', ct_status),
+            ('ct_direction', ct_direction),
+            ('ct_expiration', ct_expiration),
+            ('ct_helper_match', ct_helper_match),
+            ('ct_label', ct_label),
+            ('ct_event', ct_event),
+            ('ct_original_saddr', ct_original_saddr),
+            ('ct_original_daddr', ct_original_daddr),
+            ('ct_reply_saddr', ct_reply_saddr),
+            ('ct_reply_daddr', ct_reply_daddr),
+            ('ct_helper_set', ct_helper_set),
+            ('ct_timeout_set', ct_timeout_set),
+            ('ct_expectation_set', ct_expectation_set),
+            ('counter_name', counter_name),
+            ('limit_name', limit_name),
+            ('quota_name', quota_name),
+            ('dup_to', dup_to),
+            ('dup_dev', dup_dev),
+        )
+        for field_name, field_value in netdev_disallowed:
+            if isinstance(field_value, bool):
+                if field_value:
+                    raise ValueError(f'{field_name} is not supported for family=netdev in Policy3')
+            elif field_value is not None:
+                raise ValueError(f'{field_name} is not supported for family=netdev in Policy3')
 
     return {
         'id': str(payload.get('id') or uuid.uuid4().hex),
@@ -2104,12 +2169,6 @@ def _render_firewall_rule(rule, table_family='inet'):
             parts.append(f'dup to {rule["dup_to"]} device "{rule["dup_dev"]}"')
         else:
             parts.append(f'dup to {rule["dup_to"]}')
-    if rule.get('fwd_to'):
-        family = str(rule.get('fwd_family') or '').strip().lower()
-        if family in ('ip', 'ip6'):
-            parts.append(f'fwd {family} to {rule["fwd_to"]} device "{rule["fwd_dev"]}"')
-        else:
-            parts.append(f'fwd to {rule["fwd_to"]} device "{rule["fwd_dev"]}"')
     nat_type = rule.get('nat_type')
     if nat_type:
         nat_stmt = nat_type
@@ -2152,6 +2211,12 @@ def _render_firewall_rule(rule, table_family='inet'):
             if normalized_flags:
                 queue_stmt += f' {",".join(normalized_flags)}'
             parts.append(queue_stmt)
+        elif action == 'fwd':
+            family = str(rule.get('fwd_family') or '').strip().lower()
+            if family in ('ip', 'ip6'):
+                parts.append(f'fwd {family} to {rule["fwd_to"]} device "{rule["fwd_dev"]}"')
+            else:
+                parts.append(f'fwd to {rule["fwd_to"]} device "{rule["fwd_dev"]}"')
         else:
             parts.append(action)
     if rule['comment']:

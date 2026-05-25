@@ -30,7 +30,7 @@ export type FirewallRule = {
   table: string
   family: 'inet' | 'ip' | 'ip6' | 'bridge' | 'netdev'
   chain: string
-  action: 'accept' | 'drop' | 'reject' | 'jump' | 'goto' | 'return' | 'queue'
+  action: 'accept' | 'drop' | 'reject' | 'jump' | 'goto' | 'return' | 'queue' | 'fwd'
   proto?: 'tcp' | 'udp' | 'icmp' | 'icmpv6' | null
   src?: string | null
   dst?: string | null

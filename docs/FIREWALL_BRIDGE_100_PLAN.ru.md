@@ -54,6 +54,10 @@
   - backend: добавлены строгие проверки для `queue` (включая `fanout` -> обязательный диапазон), несовместимые `dup_*`/`fwd_*` в bridge отклоняются как planned/runtime-limited;
   - UI/API: в `Policy v2` (bridge rules) добавлены поля Queue и отображение queue в таблице правил; `dup`/`fwd` отмечены planned;
   - тесты: добавлены API/e2e кейсы для queue и отрицательные кейсы для `dup`/`fwd` в bridge.
+- 2026-05-24: Policy3 netdev выделен отдельно:
+  - `Policy2` остаётся bridge-only;
+  - `Policy3` реализует netdev ingress (`filter` + `ingress` + `device`) и включает `action=fwd`;
+  - подробности вынесены в `docs/FIREWALL_POLICY3_NETDEV_PLAN.ru.md`.
 - 2026-05-23: старт B2:
   - backend: включены `limit_rate` для `family=bridge`, именованные поля `counter_name/limit_name/quota_name`;
   - backend: включены ссылки `ct_helper_set/ct_timeout_set/ct_expectation_set` с runtime-проверкой существования named objects в выбранной bridge-таблице;
