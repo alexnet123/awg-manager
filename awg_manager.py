@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 import sys
 
-import awg_core
+from backend.app import manager_facade as manager
 
 
 def run_cli():
@@ -24,31 +24,31 @@ def run_cli():
         choice = input("=>:")
         print("--------------------------------------------")
         if choice == '1':
-            awg_core.add_client()
+            manager.add_client()
         elif choice == '2':
-            awg_core.delete_client()
+            manager.delete_client()
         elif choice == '3':
-            awg_core.list_clients()
+            manager.list_clients()
         elif choice == '4':
-            awg_core.client_qrencode()
+            manager.client_qrencode()
         elif choice == '5':
-            awg_core.list_wg_int()
+            manager.list_wg_int()
         elif choice == '6':
-            awg_core.add_wg_int()
+            manager.add_wg_int()
         elif choice == '7':
-            awg_core.del_wg_int()
+            manager.del_wg_int()
         elif choice == '8':
-            awg_core.update_interface()
+            manager.update_interface()
         elif choice == '9':
-            awg_core.sync(1)
+            manager.sync(1)
         elif choice == '10':
-            awg_core.update_peer()
+            manager.update_peer()
         elif choice == '11':
-            awg_core.list_wg_int_clients()
+            manager.list_wg_int_clients()
         elif choice == '12':
-            awg_core.show_api_key_status()
+            manager.show_api_key_status()
         elif choice == '13':
-            awg_core.set_api_key()
+            manager.set_api_key()
         elif choice == '0':
             break
         else:
@@ -63,7 +63,7 @@ def main():
         api_port = int(sys.argv[api_index + 2]) if len(sys.argv) > api_index + 2 else 8787
         start_api_server(api_host, api_port)
     elif len(sys.argv) > 1 and sys.argv[1] == "-r":
-        awg_core.sync(1)
+        manager.sync(1)
     else:
         run_cli()
 

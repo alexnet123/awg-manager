@@ -13,19 +13,23 @@ if str(PROJECT_ROOT) not in sys.path:
 
 
 class DataDirConfigTest(unittest.TestCase):
-    def _import_awg_core(self, data_dir: str):
+    def _import_legacy_target_manager(self, data_dir: str):
         key_file = pathlib.Path(data_dir) / "encryption.key"
         pathlib.Path(data_dir).mkdir(parents=True, exist_ok=True)
         key_file.write_text("test-secret\n", encoding="utf-8")
 
         old_argv = list(sys.argv)
         old_env = os.environ.get("AWG_MANAGER_DATA_DIR")
+        old_target_env = os.environ.get("AWG_MANAGER_LEGACY_TARGET_MODULE")
         old_crypto = sys.modules.get("cryptography")
         old_crypto_fernet = sys.modules.get("cryptography.fernet")
         old_segno = sys.modules.get("segno")
+        old_target_module = sys.modules.get("backend.app.legacy_manager_target")
+        old_legacy_compat_module = sys.modules.get("backend.app.legacy_manager_compat")
         try:
             sys.argv = ["awg_core.py", "-r", str(key_file)]
             os.environ["AWG_MANAGER_DATA_DIR"] = data_dir
+            os.environ["AWG_MANAGER_LEGACY_TARGET_MODULE"] = "awg_core"
             crypto_mod = types.ModuleType("cryptography")
             fernet_mod = types.ModuleType("cryptography.fernet")
 
@@ -43,7 +47,10 @@ class DataDirConfigTest(unittest.TestCase):
             sys.modules["cryptography.fernet"] = fernet_mod
             sys.modules["segno"] = types.ModuleType("segno")
             sys.modules.pop("awg_core", None)
-            module = importlib.import_module("awg_core")
+            sys.modules.pop("backend.app.legacy_manager_target", None)
+            sys.modules.pop("backend.app.legacy_manager_compat", None)
+            target = importlib.import_module("backend.app.legacy_manager_target")
+            module = target.load_manager_module(import_module_fn=importlib.import_module)
             return module
         finally:
             sys.argv = old_argv
@@ -51,6 +58,10 @@ class DataDirConfigTest(unittest.TestCase):
                 os.environ.pop("AWG_MANAGER_DATA_DIR", None)
             else:
                 os.environ["AWG_MANAGER_DATA_DIR"] = old_env
+            if old_target_env is None:
+                os.environ.pop("AWG_MANAGER_LEGACY_TARGET_MODULE", None)
+            else:
+                os.environ["AWG_MANAGER_LEGACY_TARGET_MODULE"] = old_target_env
             if old_crypto is None:
                 sys.modules.pop("cryptography", None)
             else:
@@ -63,10 +74,18 @@ class DataDirConfigTest(unittest.TestCase):
                 sys.modules.pop("segno", None)
             else:
                 sys.modules["segno"] = old_segno
+            if old_target_module is None:
+                sys.modules.pop("backend.app.legacy_manager_target", None)
+            else:
+                sys.modules["backend.app.legacy_manager_target"] = old_target_module
+            if old_legacy_compat_module is None:
+                sys.modules.pop("backend.app.legacy_manager_compat", None)
+            else:
+                sys.modules["backend.app.legacy_manager_compat"] = old_legacy_compat_module
 
     def test_data_dir_env_overrides_default_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
-            module = self._import_awg_core(tmp)
+            module = self._import_legacy_target_manager(tmp)
             self.assertEqual(module.bd_path, os.path.abspath(tmp))
             self.assertTrue(module.API_KEY_FILE.startswith(os.path.abspath(tmp)))
             self.assertTrue(module.FIREWALL_RULES_FILE.startswith(os.path.abspath(tmp)))
@@ -74,10 +93,11 @@ class DataDirConfigTest(unittest.TestCase):
             self.assertTrue((pathlib.Path(tmp) / "clients.db").exists())
             module.conn.close()
             sys.modules.pop("awg_core", None)
+            sys.modules.pop("backend.app.legacy_manager_compat", None)
 
     def test_api_key_is_persisted_inside_selected_data_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
-            module = self._import_awg_core(tmp)
+            module = self._import_legacy_target_manager(tmp)
             module.save_api_key("abc123")
             self.assertEqual(module.load_api_key(), "abc123")
             api_key_path = pathlib.Path(tmp) / "api.key"
@@ -88,6 +108,7 @@ class DataDirConfigTest(unittest.TestCase):
             self.assertEqual(api_key_path.read_text(encoding="utf-8").strip(), rotated)
             module.conn.close()
             sys.modules.pop("awg_core", None)
+            sys.modules.pop("backend.app.legacy_manager_compat", None)
 
 
 if __name__ == "__main__":

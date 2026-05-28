@@ -6,9 +6,8 @@ import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
-import awg_core as manager
-import firewall_api
-import ipsec_api
+from backend.app import router as app_router
+from backend.app import manager_facade as manager
 
 UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ui')
 WEBUI_DIST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'webui', 'dist')
@@ -105,14 +104,6 @@ class AWGManagerAPIHandler(BaseHTTPRequestHandler):
             self._send_json(400, {'ok': False, 'error': 'Invalid JSON body'})
             return None
 
-    def _handle_service_error(self, exc):
-        if isinstance(exc, LookupError):
-            self._send_json(404, {'ok': False, 'error': str(exc)})
-        elif isinstance(exc, ValueError):
-            self._send_json(400, {'ok': False, 'error': str(exc)})
-        else:
-            self._send_json(500, {'ok': False, 'error': str(exc)})
-
     def do_GET(self):
         parsed_url = urlparse(self.path)
 
@@ -144,154 +135,7 @@ class AWGManagerAPIHandler(BaseHTTPRequestHandler):
         path_parts = [part for part in parsed_url.path.strip('/').split('/') if part]
         query_params = parse_qs(parsed_url.query)
 
-        if parsed_url.path == '/health':
-            self._send_json(200, {
-                'ok': True,
-                'service': 'awg_manager',
-                'auth': 'api_key'
-            })
-            return
-
-        if path_parts == ['interfaces']:
-            interfaces = [
-                manager.serialize_interface_row(row)
-                for row in manager.c.execute(f'SELECT {manager.WG_INTERFACE_COLUMNS} FROM wg_interfaces').fetchall()
-            ]
-            self._send_json(200, {'ok': True, 'items': interfaces})
-            return
-
-        if len(path_parts) == 2 and path_parts[0] == 'interfaces':
-            row = manager.c.execute(
-                f'SELECT {manager.WG_INTERFACE_COLUMNS} FROM wg_interfaces WHERE id = ?',
-                (path_parts[1],)
-            ).fetchone()
-            if not row:
-                self._send_json(404, {'ok': False, 'error': 'Interface not found'})
-                return
-            self._send_json(200, {'ok': True, 'item': manager.serialize_interface_row(row)})
-            return
-
-        if len(path_parts) == 3 and path_parts[0] == 'interfaces' and path_parts[2] == 'config':
-            row = manager.c.execute(
-                f'SELECT {manager.WG_INTERFACE_COLUMNS} FROM wg_interfaces WHERE id = ?',
-                (path_parts[1],)
-            ).fetchone()
-            if not row:
-                self._send_json(404, {'ok': False, 'error': 'Interface not found'})
-                return
-            config_text = manager.build_interface_server_config(row)
-            self._send_json(200, {'ok': True, 'config': config_text})
-            return
-
-        if path_parts == ['clients']:
-            clients = [
-                manager.serialize_client_row(row)
-                for row in manager.c.execute('SELECT * FROM clients').fetchall()
-            ]
-            self._send_json(200, {'ok': True, 'items': clients})
-            return
-
-        if firewall_api.handle_get(path_parts, query_params, self._send_json):
-            return
-
-        if ipsec_api.handle_get(path_parts, self._send_json):
-            return
-
-        if path_parts == ['backup', 'download']:
-            backup_bytes = manager.read_database_bytes()
-            self._send_bytes(
-                200,
-                backup_bytes,
-                'application/octet-stream',
-                filename='clients.db',
-                as_attachment=True
-            )
-            return
-
-        if len(path_parts) == 2 and path_parts[0] == 'clients':
-            row = manager.c.execute('SELECT * FROM clients WHERE id = ?', (path_parts[1],)).fetchone()
-            if not row:
-                self._send_json(404, {'ok': False, 'error': 'Client not found'})
-                return
-            self._send_json(200, {'ok': True, 'item': manager.serialize_client_row(row, include_private_key=True)})
-            return
-
-        if len(path_parts) == 3 and path_parts[0] == 'clients' and path_parts[2] == 'config':
-            client_row = manager.c.execute('SELECT * FROM clients WHERE id = ?', (path_parts[1],)).fetchone()
-            if not client_row:
-                self._send_json(404, {'ok': False, 'error': 'Client not found'})
-                return
-            interface_row = manager.c.execute(
-                f'SELECT {manager.WG_INTERFACE_COLUMNS} FROM wg_interfaces WHERE wg_interface = ?',
-                (client_row[5],)
-            ).fetchone()
-            if not interface_row:
-                self._send_json(404, {'ok': False, 'error': 'Interface not found'})
-                return
-            client_config = manager.build_client_config(client_row, interface_row)
-            self._send_json(200, {
-                'ok': True,
-                'client': manager.serialize_client_row(client_row),
-                'config': client_config
-            })
-            return
-
-        if len(path_parts) == 4 and path_parts[0] == 'clients' and path_parts[2] == 'config' and path_parts[3] == 'download':
-            client_row = manager.c.execute('SELECT * FROM clients WHERE id = ?', (path_parts[1],)).fetchone()
-            if not client_row:
-                self._send_json(404, {'ok': False, 'error': 'Client not found'})
-                return
-            interface_row = manager.c.execute(
-                f'SELECT {manager.WG_INTERFACE_COLUMNS} FROM wg_interfaces WHERE wg_interface = ?',
-                (client_row[5],)
-            ).fetchone()
-            if not interface_row:
-                self._send_json(404, {'ok': False, 'error': 'Interface not found'})
-                return
-
-            client_config = manager.build_client_config(client_row, interface_row).encode('utf-8')
-            filename = f"client-{client_row[0]}-{client_row[1]}.conf"
-            self._send_bytes(
-                200,
-                client_config,
-                'text/plain; charset=utf-8',
-                filename=filename,
-                as_attachment=True
-            )
-            return
-
-        if len(path_parts) in (3, 4) and path_parts[0] == 'clients' and path_parts[2] == 'qr':
-            client_row = manager.c.execute('SELECT * FROM clients WHERE id = ?', (path_parts[1],)).fetchone()
-            if not client_row:
-                self._send_json(404, {'ok': False, 'error': 'Client not found'})
-                return
-            interface_row = manager.c.execute(
-                f'SELECT {manager.WG_INTERFACE_COLUMNS} FROM wg_interfaces WHERE wg_interface = ?',
-                (client_row[5],)
-            ).fetchone()
-            if not interface_row:
-                self._send_json(404, {'ok': False, 'error': 'Interface not found'})
-                return
-
-            output_format = query_params.get('format', ['svg'])[0].lower()
-            client_config = manager.build_client_config(client_row, interface_row)
-            if output_format != 'svg':
-                self._send_json(400, {'ok': False, 'error': 'Only svg format is currently supported'})
-                return
-
-            qr_svg = manager.build_qr_svg(client_config)
-            filename = f"client-{client_row[0]}-{client_row[1]}.svg"
-            is_download = len(path_parts) == 4 and path_parts[3] == 'download'
-            if len(path_parts) == 4 and path_parts[3] != 'download':
-                self._send_json(404, {'ok': False, 'error': 'Route not found'})
-                return
-            self._send_bytes(
-                200,
-                qr_svg,
-                'image/svg+xml',
-                filename=filename,
-                as_attachment=is_download
-            )
+        if app_router.handle_get(path_parts, query_params, self._send_json, self._send_bytes):
             return
 
         self._send_json(404, {'ok': False, 'error': 'Route not found'})
@@ -306,44 +150,7 @@ class AWGManagerAPIHandler(BaseHTTPRequestHandler):
         if payload is None:
             return
 
-        try:
-            if path_parts == ['api-key', 'rotate']:
-                new_key = manager.rotate_api_key()
-                self._send_json(200, {'ok': True, 'api_key': new_key})
-                return
-
-            if path_parts == ['awg', 'params', 'generate']:
-                awg_version = manager.detect_awg_version(payload.get('awg_version', '2'), {})
-                awg_params = manager.prepare_awg_params_for_version(awg_version)
-                self._send_json(200, {'ok': True, 'awg_version': awg_version, 'awg_params': awg_params})
-                return
-
-            if path_parts == ['interfaces']:
-                row = manager.create_interface_service(payload)
-                self._send_json(201, {'ok': True, 'item': manager.serialize_interface_row(row)})
-                return
-
-            if path_parts == ['clients']:
-                row = manager.create_client_service(payload)
-                self._send_json(201, {'ok': True, 'item': manager.serialize_client_row(row, include_private_key=True)})
-                return
-
-            if firewall_api.handle_post(path_parts, payload, self._send_json):
-                return
-
-            if ipsec_api.handle_post(path_parts, payload, self._send_json):
-                return
-
-            if path_parts == ['backup', 'restore']:
-                db_base64 = payload.get('db_base64')
-                if not isinstance(db_base64, str) or not db_base64.strip():
-                    raise ValueError('db_base64 is required')
-                backup_bytes = manager.decode_base64_payload(db_base64.strip())
-                manager.restore_database_from_bytes(backup_bytes)
-                self._send_json(200, {'ok': True})
-                return
-        except Exception as exc:
-            self._handle_service_error(exc)
+        if app_router.handle_post(path_parts, payload, self._send_json, self._send_bytes):
             return
 
         self._send_json(404, {'ok': False, 'error': 'Route not found'})
@@ -358,24 +165,7 @@ class AWGManagerAPIHandler(BaseHTTPRequestHandler):
         if payload is None:
             return
 
-        try:
-            if len(path_parts) == 2 and path_parts[0] == 'interfaces':
-                row = manager.update_interface_service(path_parts[1], payload)
-                self._send_json(200, {'ok': True, 'item': manager.serialize_interface_row(row)})
-                return
-
-            if len(path_parts) == 2 and path_parts[0] == 'clients':
-                row = manager.update_client_service(path_parts[1], payload)
-                self._send_json(200, {'ok': True, 'item': manager.serialize_client_row(row, include_private_key=True)})
-                return
-
-            if firewall_api.handle_put(path_parts, payload, self._send_json):
-                return
-
-            if ipsec_api.handle_put(path_parts, payload, self._send_json):
-                return
-        except Exception as exc:
-            self._handle_service_error(exc)
+        if app_router.handle_put(path_parts, payload, self._send_json, self._send_bytes):
             return
 
         self._send_json(404, {'ok': False, 'error': 'Route not found'})
@@ -387,24 +177,7 @@ class AWGManagerAPIHandler(BaseHTTPRequestHandler):
         parsed_url = urlparse(self.path)
         path_parts = [part for part in parsed_url.path.strip('/').split('/') if part]
 
-        try:
-            if len(path_parts) == 2 and path_parts[0] == 'interfaces':
-                row = manager.delete_interface_service(path_parts[1])
-                self._send_json(200, {'ok': True, 'item': manager.serialize_interface_row(row)})
-                return
-
-            if len(path_parts) == 2 and path_parts[0] == 'clients':
-                row = manager.delete_client_service(path_parts[1])
-                self._send_json(200, {'ok': True, 'item': manager.serialize_client_row(row)})
-                return
-
-            if firewall_api.handle_delete(path_parts, self._send_json):
-                return
-
-            if ipsec_api.handle_delete(path_parts, self._send_json):
-                return
-        except Exception as exc:
-            self._handle_service_error(exc)
+        if app_router.handle_delete(path_parts, self._send_json, self._send_bytes):
             return
 
         self._send_json(404, {'ok': False, 'error': 'Route not found'})

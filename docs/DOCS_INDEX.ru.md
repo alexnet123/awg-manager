@@ -25,6 +25,12 @@
 - [FIREWALL_ADD_RULE_PHASE1_BUGLIST.md](FIREWALL_ADD_RULE_PHASE1_BUGLIST.md) — backlog багов/доработок.
 - [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md) — чеклист перед релизом.
 
+## Документация по разработке (архитектура/рефакторинг)
+
+- [development/README.md](development/README.md) — индекс dev-документации.
+- [development/MODULE_MAP.ru.md](development/MODULE_MAP.ru.md) — карта модулей и ответственности функций/методов (RU).
+- [development/MODULE_MAP.md](development/MODULE_MAP.md) — module ownership map (EN).
+
 ## Справочные материалы по nftables
 
 - [NFT.md](NFT.md) — рабочая справка по nft (CLI/синтаксис/выражения).

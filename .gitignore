@@ -39,4 +39,3 @@ client-*.svg
 /deploy/*.local
 /deploy/*.env
 
-AGENTS.md

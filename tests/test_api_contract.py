@@ -1,6 +1,7 @@
 import http.client
 import importlib
 import json
+import os
 import pathlib
 import socket
 import sys
@@ -289,12 +290,15 @@ class _ManagerStub:
 class APITestCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls._legacy_module_name = "test_api_contract_legacy_stub"
+        cls._old_target_env = os.environ.get("AWG_MANAGER_LEGACY_TARGET_MODULE")
+        os.environ["AWG_MANAGER_LEGACY_TARGET_MODULE"] = cls._legacy_module_name
         cls._manager_stub = _ManagerStub()
         stub_module = types.SimpleNamespace(**cls._manager_stub.__dict__)
         for name in dir(cls._manager_stub):
             if not name.startswith("_"):
                 setattr(stub_module, name, getattr(cls._manager_stub, name))
-        sys.modules["awg_core"] = stub_module
+        sys.modules[cls._legacy_module_name] = stub_module
 
         cls.awg_api = importlib.import_module("api_core")
         cls.awg_api.manager = cls._manager_stub
@@ -313,6 +317,11 @@ class APITestCase(unittest.TestCase):
         cls.httpd.shutdown()
         cls.thread.join(timeout=3)
         cls.httpd.server_close()
+        sys.modules.pop(cls._legacy_module_name, None)
+        if cls._old_target_env is None:
+            os.environ.pop("AWG_MANAGER_LEGACY_TARGET_MODULE", None)
+        else:
+            os.environ["AWG_MANAGER_LEGACY_TARGET_MODULE"] = cls._old_target_env
 
     def _request(self, method, path, body=None, api_key=None):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)

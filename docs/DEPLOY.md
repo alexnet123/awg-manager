@@ -81,6 +81,27 @@ What installer fixes now:
 - enables persistent `net.ipv4.ip_forward=1`;
 - installs and starts `awg-manager-api` + `awg-manager-restore`.
 
+## Final Single-Stand Redeploy From `main`
+
+For final rollout (after push/merge), use single-stand redeploy from local `main`:
+
+```bash
+scripts/redeploy_single_stand_from_main.sh \
+  --target root@YOUR_HOST \
+  --project-dir /root/awg-manager \
+  --data-dir /etc/wg-manager \
+  --port 8787 \
+  --clean-data
+```
+
+What this script does:
+- packages code from local branch `main` (`git archive`);
+- uploads and deploys to target stand;
+- stops optional validation services (if present);
+- (optional) wipes data dir when `--clean-data` is set;
+- installs units/env and starts `awg-manager-restore` + `awg-manager-api`;
+- runs post-deploy smoke (`/health`, `/firewall/apply`) unless `--skip-smoke`.
+
 Generated credentials are saved to:
 
 - `/root/key/api.key`
