@@ -125,7 +125,7 @@ def _manager_crypto_context():
     if _Fernet is None:
         if not _fallback_enabled():
             raise RuntimeError(
-                "cryptography backend unavailable while awg_core fallback is disabled"
+                "cryptography backend unavailable while legacy fallback is disabled"
             )
         fernet_class = _legacy_manager_attr("Fernet")
         invalid_token_type = _legacy_manager_attr("InvalidToken")

@@ -15,9 +15,9 @@ This repository is under active modular refactoring. These rules are mandatory f
 - `backend/app/manager_facade.py` is a compatibility facade and must stay backend-first.
 - Domain modules (`backend/domains/firewall`, `backend/domains/ipsec`, `backend/domains/awg`) must be HTTP-neutral.
 - Domain-to-domain imports are forbidden. Domains may import only `backend/common` and their own package.
-- `awg_core.py` is being reduced to a compatibility shim. New logic must go into domain/common modules first.
-- For refactor steps touching `awg_core.py` or `manager_facade.py`, prefer direct domain wiring over local wrapper helpers when signatures stay stable.
-- Private helper bridging from facade to `awg_core` is not allowed for new code paths; use domain modules first, keep fallback only via public service wrappers.
+- `awg_core.py` is removed. Legacy runtime compatibility is provided by `backend/app/legacy_manager_compat.py`.
+- For refactor steps touching `backend/app/legacy_manager_compat.py` or `manager_facade.py`, prefer direct domain wiring over local wrapper helpers when signatures stay stable.
+- Private helper bridging from facade to removed `awg_core` paths is not allowed for new code paths; use domain modules first, keep fallback only via public service wrappers.
 - Naming decision completed: canonical backend domain name is `backend/domains/awg` (former transitional name `backend/domains/interfaces_clients` is retired).
 - Rename stability rule: do not reintroduce `backend/domains/interfaces_clients`; all new code/imports must use `backend/domains/awg`.
 
@@ -48,7 +48,7 @@ For backend refactor steps, run at least:
 1. `python3 -m pytest -q tests/test_firewall_rule_ops.py` (or relevant targeted test)
 2. `python3 -m pytest -q tests/test_api_contract.py`
 3. `python3 -m pytest -q tests`
-4. If `awg_core.py` or `backend/app/manager_facade.py` is changed: `python3 -m pytest -q tests/test_manager_access_facade.py`
+4. If `backend/app/legacy_manager_compat.py` or `backend/app/manager_facade.py` is changed: `python3 -m pytest -q tests/test_manager_access_facade.py`
 
 If any test is skipped, explicitly document why.
 

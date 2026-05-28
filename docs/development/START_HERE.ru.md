@@ -27,7 +27,7 @@
 4. Подтвердить свой контур задачи:
    - изменение поведения `firewall`
    - структурный рефакторинг `ipsec` (feature-поток на паузе)
-   - cleanup `awg_core`/compat
+   - cleanup legacy-compat (`backend/app/legacy_manager_compat.py`)
 
 ## 3) Архитектурные ограничения
 
@@ -35,7 +35,7 @@
 - Доменные модули HTTP-neutral.
 - Междоменные импорты запрещены.
 - Доменам разрешены импорты только из `backend/common` и собственного пакета.
-- Новая логика идет в `backend/common` или `backend/domains/*`, а не в `awg_core.py`.
+- Новая логика идет в `backend/common` или `backend/domains/*`, а не в legacy compatibility модули.
 
 ## 4) Definition Of Done (DoD)
 
@@ -48,7 +48,7 @@
    - `python3 -m pytest -q tests/test_firewall_rule_ops.py` (или релевантная целевая замена)
    - `python3 -m pytest -q tests/test_api_contract.py`
    - `python3 -m pytest -q tests`
-   - Если менялись `awg_core.py` или `backend/app/manager_facade.py`:
+   - Если менялись `backend/app/legacy_manager_compat.py` или `backend/app/manager_facade.py`:
      - `python3 -m pytest -q tests/test_manager_access_facade.py`
 5. Если какая-то проверка пропущена, причина явно зафиксирована в прогресс-заметке.
 
@@ -70,11 +70,11 @@
 4. Прогнать контрактные и полный набор тестов.
 5. Обновить module maps и progress log.
 
-### C) Playbook для `awg_core.py` / `manager_facade.py`
+### C) Playbook для `legacy_manager_compat.py` / `manager_facade.py`
 
 1. Предпочитать прямую доменную проводку вместо новых локальных wrapper-ов.
 2. Сохранять fallback-поведение через существующие facade-паттерны.
-3. Не добавлять новую бизнес-логику в `awg_core.py`.
+3. Не добавлять новую бизнес-логику в `backend/app/legacy_manager_compat.py`.
 4. Прогнать `tests/test_manager_access_facade.py` и стандартный gate.
 5. Зафиксировать перенос ответственности в module map и progress log.
 

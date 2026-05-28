@@ -9,7 +9,7 @@ This document tracks module ownership during the modular refactor and explains w
 1. `backend/app` — HTTP routing and response wiring only.
 2. `backend/domains/*` — domain orchestration and business logic.
 3. `backend/common` — shared low-level helpers (paths, JSON, keys, errors).
-4. `awg_core.py` — compatibility entrypoint while responsibilities are being migrated.
+4. `backend/app/legacy_manager_compat.py` — legacy runtime compatibility module (post-`awg_core.py` removal).
 
 ## Backend: Module Ownership
 
@@ -170,11 +170,11 @@ This document tracks module ownership during the modular refactor and explains w
   - `append_enabled_named_object_script_lines`
 - `collection_ops.py`, `table_ops.py`, `state_ops.py`, `schema_ops.py`, `runtime_ops.py`: focused service helpers for collection/table/state/schema/runtime flows.
   - `collection_ops.py`: `infer_map_token_type`, `format_map_token`, `build_map_declaration_and_elements`, `append_runtime_collection_script_lines`
-- `service_layer_ops.py`: firewall compatibility composition layer for `awg_core.py` service wrappers.
+- `service_layer_ops.py`: firewall compatibility composition layer for legacy compatibility service wrappers.
   - rules/runtime/state wiring: `list_rules`, `apply_rules`, `create_rule`, `update_rule`, `delete_rule`, `reorder_rules`, `reset_counters`, `get_state`
   - collections/maps/tables/named-objects/schema wiring: `list_sets`, `upsert_set`, `delete_set`, `list_maps`, `upsert_map`, `delete_map`, `list_tables`, `list_named_objects`, `upsert_named_object`, `create_named_object`, `update_named_object`, `delete_named_object`, `upsert_table`, `delete_table`, `get_schema`
   - set/map cross-tab uniqueness callbacks (`other_names`) are centralized via shared helper iterators and `functools.partial`
-- `compat_entry_ops.py`: firewall compatibility entry layer used by `awg_core.py`.
+- `compat_entry_ops.py`: firewall compatibility entry layer used by `backend.app.legacy_manager_compat`.
   - delegates compat wrappers over `service_layer_ops` for rules/runtime/state and collections/maps/tables/named-objects/schema paths
   - collection runtime helper factory for compat wiring: `build_collection_runtime_helpers`
 
@@ -190,7 +190,7 @@ This document tracks module ownership during the modular refactor and explains w
   - `get_next_available_ip`, `validate_client_ip_for_interface`
 - `config_render_ops.py`: client/interface serialization and config text rendering.
   - `serialize_interface_row`, `serialize_client_row`, `build_client_config`, `build_interface_server_config`
-- `config_render_service_ops.py`: config-render composition layer for compatibility wrappers in `awg_core.py`.
+- `config_render_service_ops.py`: config-render composition layer for compatibility wrappers in `backend.app.legacy_manager_compat`.
   - `serialize_interface_row`, `serialize_client_row`, `build_client_config`, `build_interface_server_config`
 - `client_service_ops.py`: HTTP-neutral client CRUD orchestration.
   - `create_client_service`, `update_client_service`, `delete_client_service`
@@ -200,7 +200,7 @@ This document tracks module ownership during the modular refactor and explains w
   - `generate_keypair`, `create_temp_key_file`, `build_awg_set_command`
   - `apply_interface_runtime`, `remove_interface_runtime`, `append_config_param`, `build_client_config_lines`
   - `wg_lease_ip`, `add_peer`, `del_peer`
-- `runtime_service_ops.py`: runtime composition layer for compatibility wrappers in `awg_core.py`.
+- `runtime_service_ops.py`: runtime composition layer for compatibility wrappers in `backend.app.legacy_manager_compat`.
   - `generate_keypair`, `create_temp_key_file`, `apply_interface_runtime`, `remove_interface_runtime`
   - `build_awg_set_command`, `append_config_param`, `build_client_config_lines`
 - `service_ops.py`: service-level composition layer for interfaces/clients DB and runtime wiring.
@@ -234,13 +234,13 @@ This document tracks module ownership during the modular refactor and explains w
   - `list_clients`, `list_wg_int`, `list_wg_int_clients`, `client_qrencode`
 - `cli_support_ops.py`: CLI support composition layer for auth and runtime helper wiring.
   - `show_api_key_status`, `set_api_key`, `wg_lease_ip`, `add_peer`, `del_peer`
-- `cli_compat_entry_ops.py`: CLI compatibility entry layer used by `awg_core.py`.
+- `cli_compat_entry_ops.py`: CLI compatibility entry layer used by `backend.app.legacy_manager_compat`.
   - legacy/read/support/service wrapper wiring: `add_client`, `delete_client`, `list_clients`, `list_wg_int`, `list_wg_int_clients`, `client_qrencode`, `show_api_key_status`, `set_api_key`, `wg_lease_ip`, `add_peer`, `del_peer`, `add_wg_int`, `del_wg_int`, `update_interface`, `update_peer`, `sync`
 - `support_facade_ops.py`: support facade layer for `awg_core.py` compatibility wrappers (auth/QR/backup/base64).
   - API key/auth wiring: `load_api_key`, `save_api_key`, `verify_api_auth`, `rotate_api_key`
   - QR helpers: `render_qr_in_terminal`, `build_qr_svg`
   - backup/payload helpers: `read_database_bytes`, `restore_database_from_bytes`, `decode_base64_payload`
-- `compat_entry_ops.py`: interfaces/clients compatibility entry layer used by `awg_core.py`.
+- `compat_entry_ops.py`: interfaces/clients compatibility entry layer used by `backend.app.legacy_manager_compat`.
   - render/runtime/service wrapper wiring: `serialize_interface_row`, `serialize_client_row`, `build_client_config`, `build_interface_server_config`, `generate_keypair`, `create_temp_key_file`, `apply_interface_runtime`, `remove_interface_runtime`
   - interface/client CRUD wrapper wiring: `create_interface_service`, `delete_interface_service`, `update_interface_service`, `create_client_service`, `delete_client_service`, `update_client_service`
   - shared runtime/service helper wiring: `build_awg_set_command`, `append_config_param`, `build_client_config_lines`, `get_next_available_ip`, `validate_client_ip_for_interface`, `fetch_allowed_ips_row`, `fetch_interface_peer_rows`
@@ -283,32 +283,32 @@ This document tracks module ownership during the modular refactor and explains w
   - existence checks: `ensure_peer_exists`, `ensure_phase1_exists`, `ensure_phase2_exists`
   - CRUD composition: `upsert_peer_service`, `upsert_identity_service`, `upsert_phase1_profile_service`, `upsert_phase2_proposal_service`, `upsert_policy_service`, `delete_peer_service`, `delete_policy_service`
   - runtime composition: `log_event_service`, `list_events_service`, `list_active_peers_service`, `list_installed_sas_service`, `load_peer_service`, `initiate_policy_service`, `terminate_peer_service`, `apply_config_service`
-- `service_layer_ops.py`: IPsec compatibility composition layer for `awg_core.py` service wrappers.
+- `service_layer_ops.py`: IPsec compatibility composition layer for legacy compatibility service wrappers.
   - list/read wiring: `list_peers`, `list_identities`, `list_phase1_profiles`, `list_phase2_proposals`, `list_policies`
   - CRUD wiring: `upsert_peer`, `upsert_identity`, `upsert_phase1_profile`, `upsert_phase2_proposal`, `upsert_policy`, `delete_peer`, `delete_policy`
   - runtime wiring: `log_event`, `list_events`, `list_active_peers`, `list_installed_sas`, `load_peer`, `initiate_policy`, `terminate_peer`, `apply_config`
-- `compat_entry_ops.py`: IPsec compatibility entry layer used by `awg_core.py`.
+- `compat_entry_ops.py`: IPsec compatibility entry layer used by `backend.app.legacy_manager_compat`.
   - encapsulates callback wiring for store/validation/proposal/crypto/event helpers over `service_layer_ops`
   - exports compatibility wrappers: `list_*`, `upsert_*`, `delete_*`, `list_events_service`, `list_active_peers_service`, `list_installed_sas_service`, `load_peer_service`, `initiate_policy_service`, `terminate_peer_service`, `apply_config_service`
-- `service_facade_ops.py`: IPsec facade layer that encapsulates `awg_core.py` helper wiring (store/validation/crypto/files).
+- `service_facade_ops.py`: IPsec facade layer that encapsulates legacy compatibility helper wiring (store/validation/crypto/files).
   - helper wiring: `_read_collection`, `_write_collection`, `_valid_name`, `_normalize_ip_list`, `_normalize_ts_list`
   - proposal/secret wiring: `_build_phase1_proposal_string`, `_build_phase2_proposal_string`, `_secret_encrypt`, `_secret_decrypt`
   - public service wrappers: `list_*`, `upsert_*`, `delete_*`, `list_events_service`, `list_active_peers_service`, `list_installed_sas_service`, `load_peer_service`, `initiate_policy_service`, `terminate_peer_service`, `apply_config_service`
 
-### `awg_core.py` (compat shim)
+### `awg_core.py` (removed)
 
-- Thin re-export shim kept for backward-compatible imports.
-- Delegates runtime implementation to `backend.app.legacy_manager_compat`.
-- Detailed compat-wrapper wiring notes below now refer to runtime behavior in `backend.app.legacy_manager_compat`.
+- `awg_core.py` has been removed.
+- Legacy runtime compatibility is now provided by `backend.app.legacy_manager_compat`.
+- Any references to `awg_core.py` below are historical notes from migration steps.
 
 - HTTP/API bootstrap no longer imports `awg_core` directly:
   - `api_core.py` now depends on `backend.app.manager_facade` as manager entrypoint.
-  - `manager_facade` preserves compatibility fallback to `awg_core` for residual paths while decoupling the app-layer import graph.
+  - `manager_facade` preserves compatibility fallback to `backend.app.legacy_manager_compat` for residual paths while decoupling the app-layer import graph.
 - CLI bootstrap no longer imports `awg_core` directly:
   - `awg_manager.py` now depends on `backend.app.manager_facade` as manager entrypoint for CLI actions.
   - direct `import awg_core` references are removed from project `.py` entrypoints.
 - Firewall compatibility wrappers are reduced to orchestration wiring and delegate normalization/runtime helpers directly to domain modules.
-  - firewall compat-service wrapper block in `awg_core.py` is flattened to `functools.partial` delegates (including defaults for `family/table/apply_now/table`), keeping a thin shim surface.
+  - firewall compat-service wrapper block in `backend.app.legacy_manager_compat` is flattened to `functools.partial` delegates (including defaults for `family/table/apply_now/table`), keeping a thin shim surface.
   - positional fallback compatibility is handled in `backend/app/manager_facade.py` via named `fallback_kwargs`, so temporary firewall wrapper-def shims were removed from `awg_core.py`.
   - direct domain normalization wiring in service wrappers:
     - `upsert_firewall_set_service` -> `firewall_store.normalize_set_item`
@@ -327,11 +327,11 @@ This document tracks module ownership during the modular refactor and explains w
   - table-def collection wiring delegates to `firewall_helper_service_ops.collect_table_defs` (shared with `manager_facade`)
   - managed-table parse/key/runtime-table wiring in `apply_firewall_rules` delegates directly to `firewall_store`/`firewall_runtime_adapter` callbacks via shared compat callables (`functools.partial`)
   - remaining interfaces/IPsec compat callback wiring is centralized via named helpers (`_run_command_checked`, `_fernet_encrypt`, `_fernet_decrypt`, `_fetch_allowed_ips_row`, `_fetch_interface_peer_rows`, interface uniqueness helpers); `_fernet_*` are compact lambda aliases.
-  - interfaces validation/support/AWG helper wrappers are flattened to direct aliases/partials to `interfaces_compat_entry_ops` (minimal compat shim surface in `awg_core.py`)
+  - interfaces validation/support/AWG helper wrappers are flattened to direct aliases/partials to `interfaces_compat_entry_ops` (minimal compat shim surface in `backend.app.legacy_manager_compat`)
   - interfaces utility/crypto wrappers (`generate_keypair`, `create_temp_key_file`, `remove_interface_runtime`, `build_awg_set_command`, `append_config_param`, `build_client_config_lines`, `get_next_available_ip`, `validate_client_ip_for_interface`, `encrypt_private_key`, `decrypt_private_key`) are flattened to `functools.partial` delegates
   - redundant inline lambda/wrapper duplication removed from `awg_core.py` for the paths above via shared callable wiring (no wire/API contract changes).
 - IPsec compatibility wrappers delegate to `backend.domains.ipsec.compat_entry_ops` (thin entry wiring in domain layer); local `_ipsec_*` helper wiring was removed from `awg_core.py`.
-  - IPsec service wrapper block in `awg_core.py` is flattened to `functools.partial`/alias delegates with bound files/crypto callbacks.
+  - IPsec service wrapper block in `backend.app.legacy_manager_compat` is flattened to `functools.partial`/alias delegates with bound files/crypto callbacks.
 - interfaces/clients compatibility wrappers for render/runtime/service paths delegate to `backend.domains.awg.compat_entry_ops`; direct wiring to `*_service_ops` modules was moved out of `awg_core.py`.
   - additional interfaces render/service wrappers are flattened to `functools.partial` where import-order safe (`serialize_interface_row`, `serialize_client_row`, `build_client_config`, `build_interface_server_config`, `apply_interface_runtime`, `create_interface_service`, `delete_interface_service`, `update_interface_service`, `create_client_service`, `update_client_service`, `delete_client_service`).
   - remaining callback wiring (`write_text_file`) is delegated through `interfaces_cli_compat_entry_ops.write_text_file` to domain CLI helpers (no local `def` wrappers).

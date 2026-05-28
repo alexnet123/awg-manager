@@ -9,7 +9,7 @@
 
 ## Статус Master-Plan (без чекбоксов)
 
-- Backend decomposition: `DONE (for awg_core removal-cycle scope)` (выполнены шаги `1.1`-`1.183`; `awg_core` переведен в compat shim, regression/docs lock закрыты).
+- Backend decomposition: `DONE (for awg_core removal-cycle scope)` (выполнены шаги `1.1`-`1.183`; далее выполнен structural-step: файл `awg_core.py` удален, compatibility runtime закреплен в `backend.app.legacy_manager_compat`).
 - API contract layer: `DONE (for current refactor scope)` (wire-совместимость держится, `tests/test_api_contract.py` стабильно зеленый).
 - Frontend decomposition: `IN PROGRESS` (доменный API split и большая часть firewall-декомпозиции сделаны, финальный e2e/regression gate еще впереди).
 - Delivery model (A/B/C/D): `IN PROGRESS` (этапы A-B в работе, C-D pending: финальный cleanup + freeze window + merge).
@@ -18,11 +18,11 @@
 ## Быстрый Срез Прогресса
 
 - Выполнено: `183` backend-этапов (`1.1`-`1.183`) с паритетными тестами.
-- Текущее состояние монолита: `awg_core.py` = `7` строк (compat shim), runtime перенесен в `backend/app/legacy_manager_compat.py` (`1102` строки, на 2026-05-27).
+- Текущее состояние монолита: файл `awg_core.py` удален; legacy runtime закреплен в `backend/app/legacy_manager_compat.py`.
 - Уже переведено на модульные слои: `50+` явных интеграционных вызовов (`backend.common`, `firewall_store`, `firewall_runtime_adapter`, `firewall_compat_entry_ops`, `ipsec_compat_entry_ops`, `interfaces_compat_entry_ops`, `interfaces_cli_compat_entry_ops`).
 - Введена базовая dev-документация по владению модулями/функциями (RU/EN): `docs/development/MODULE_MAP.ru.md`, `docs/development/MODULE_MAP.md`; добавлен `AGENTS.md` с правилами сопровождения рефакторинга.
 - До полного remove-cycle по `awg_core.py` осталось: `0/4` блоков (`B1`-`B4` закрыты).
-- Оценка по времени до удаления `awg_core.py` как файла: отдельный согласованный structural step (по текущему плану не обязателен, так как `compat shim` уже введен).
+- Оценка по времени до удаления `awg_core.py` как файла: `DONE` (отдельный structural-step выполнен).
 - Прогресс macro-этапов (оценка):
   - Этап 1 (thin-shim `manager_facade`): `100%` (завершен, guarded).
   - Этап 2 (истончение `awg_core.py`): `100%`.
@@ -39,9 +39,30 @@
   - обязательные first-steps;
   - архитектурные guardrails;
   - единый `Definition of Done`;
-  - playbook-и по типам задач (`firewall`, структурный `ipsec`, `awg_core/manager_facade`).
+  - playbook-и по типам задач (`firewall`, структурный `ipsec`, `legacy_manager_compat/manager_facade`).
 - Проверки:
   - Тесты не запускались: изменения документационные, без изменения runtime-кода.
+
+## 2026-05-28 — Structural step: удаление файла `awg_core.py`
+
+- Scope шага:
+  - удален файл `awg_core.py` (бывший compat shim);
+  - тестовый legacy-target сценарий переведен на canonical target `backend.app.legacy_manager_compat`;
+  - документация/правила обновлены на post-`awg_core` состояние.
+- Что перенесено по ответственности:
+  - runtime legacy compatibility окончательно закреплен в `backend.app.legacy_manager_compat`;
+  - выбор fallback-target остается в `backend.app.legacy_manager_target` через `AWG_MANAGER_LEGACY_TARGET_MODULE`.
+- Какой legacy entrypoint теперь делегирует куда:
+  - файл-энтрипойнт `awg_core.py` удален;
+  - legacy fallback path: `manager_facade -> legacy_manager_bridge -> legacy_manager_target -> backend.app.legacy_manager_compat`.
+- Команды верификации:
+  - `python3 -m pytest -q tests/test_data_dir_config.py` -> `2 passed`
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` -> `43 passed`
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` -> `20 passed`
+  - `python3 -m pytest -q tests/test_api_contract.py` -> `9 passed`
+  - `python3 -m pytest -q tests` -> `279 passed`
+- Краткий итог:
+  - structural removal выполнен без регрессий по тестам.
 
 ## 1) Инфраструктура и runtime-конфиги
 

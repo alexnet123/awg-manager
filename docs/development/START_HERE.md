@@ -27,7 +27,7 @@ Source of truth:
 4. Confirm your task scope:
    - `firewall` behavior change
    - `ipsec` structural refactor (feature stream is on hold)
-   - `awg_core`/compat cleanup
+   - legacy compatibility cleanup (`backend/app/legacy_manager_compat.py`)
 
 ## 3) Architectural Guardrails
 
@@ -35,7 +35,7 @@ Source of truth:
 - Domain modules are HTTP-neutral.
 - Domain-to-domain imports are forbidden.
 - Domains may import only `backend/common` and their own package.
-- New logic goes to `backend/common` or `backend/domains/*`, not to `awg_core.py`.
+- New logic goes to `backend/common` or `backend/domains/*`, not to legacy compatibility modules.
 
 ## 4) Definition Of Done (DoD)
 
@@ -48,7 +48,7 @@ A refactor step is done only when all are true:
    - `python3 -m pytest -q tests/test_firewall_rule_ops.py` (or relevant targeted replacement)
    - `python3 -m pytest -q tests/test_api_contract.py`
    - `python3 -m pytest -q tests`
-   - If `awg_core.py` or `backend/app/manager_facade.py` changed:
+   - If `backend/app/legacy_manager_compat.py` or `backend/app/manager_facade.py` changed:
      - `python3 -m pytest -q tests/test_manager_access_facade.py`
 5. If any check is skipped, reason is documented in the progress note.
 
@@ -70,11 +70,11 @@ A refactor step is done only when all are true:
 4. Run contract and full test suites.
 5. Update module maps and progress log.
 
-### C) `awg_core.py` / `manager_facade.py` Playbook
+### C) `legacy_manager_compat.py` / `manager_facade.py` Playbook
 
 1. Prefer direct domain wiring over new local wrappers.
 2. Keep fallback behavior controlled via existing facade patterns.
-3. Do not add new business logic into `awg_core.py`.
+3. Do not add new business logic into `backend/app/legacy_manager_compat.py`.
 4. Run `tests/test_manager_access_facade.py` plus standard gate.
 5. Record moved responsibilities in module map and progress log.
 

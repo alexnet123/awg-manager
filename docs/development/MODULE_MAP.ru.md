@@ -9,7 +9,7 @@
 1. `backend/app` — только HTTP-маршрутизация и сборка ответов.
 2. `backend/domains/*` — доменная оркестрация и бизнес-логика.
 3. `backend/common` — общие низкоуровневые хелперы (пути, JSON, ключи, ошибки).
-4. `awg_core.py` — compat-слой на период поэтапного выноса логики.
+4. `backend/app/legacy_manager_compat.py` — legacy runtime compatibility модуль (после удаления `awg_core.py`).
 
 ## Backend: владение модулями
 
@@ -170,11 +170,11 @@
   - `append_enabled_named_object_script_lines`
 - `collection_ops.py`, `table_ops.py`, `state_ops.py`, `schema_ops.py`, `runtime_ops.py`: специализированные helper-модули для collection/table/state/schema/runtime сценариев.
   - `collection_ops.py`: `infer_map_token_type`, `format_map_token`, `build_map_declaration_and_elements`, `append_runtime_collection_script_lines`
-- `service_layer_ops.py`: слой firewall compatibility-композиции для service-оберток `awg_core.py`.
+- `service_layer_ops.py`: слой firewall compatibility-композиции для legacy compatibility service-оберток.
   - wiring rules/runtime/state: `list_rules`, `apply_rules`, `create_rule`, `update_rule`, `delete_rule`, `reorder_rules`, `reset_counters`, `get_state`
   - wiring collections/maps/tables/named-objects/schema: `list_sets`, `upsert_set`, `delete_set`, `list_maps`, `upsert_map`, `delete_map`, `list_tables`, `list_named_objects`, `upsert_named_object`, `create_named_object`, `update_named_object`, `delete_named_object`, `upsert_table`, `delete_table`, `get_schema`
   - callback-и межвкладочной уникальности set/map (`other_names`) централизованы через shared helper-итераторы и `functools.partial`
-- `compat_entry_ops.py`: compat entry-слой firewall, который использует `awg_core.py`.
+- `compat_entry_ops.py`: compat entry-слой firewall, который используется `backend.app.legacy_manager_compat`.
   - делегирует compat-обертки поверх `service_layer_ops` для paths rules/runtime/state и collections/maps/tables/named-objects/schema
   - фабрика collection runtime helper-ов для compat wiring: `build_collection_runtime_helpers`
 
@@ -190,7 +190,7 @@
   - `get_next_available_ip`, `validate_client_ip_for_interface`
 - `config_render_ops.py`: сериализация interface/client и рендеринг config-текста.
   - `serialize_interface_row`, `serialize_client_row`, `build_client_config`, `build_interface_server_config`
-- `config_render_service_ops.py`: слой config-render композиции для compat-оберток в `awg_core.py`.
+- `config_render_service_ops.py`: слой config-render композиции для compat-оберток в `backend.app.legacy_manager_compat`.
   - `serialize_interface_row`, `serialize_client_row`, `build_client_config`, `build_interface_server_config`
 - `client_service_ops.py`: HTTP-neutral оркестрация CRUD клиентов.
   - `create_client_service`, `update_client_service`, `delete_client_service`
@@ -200,7 +200,7 @@
   - `generate_keypair`, `create_temp_key_file`, `build_awg_set_command`
   - `apply_interface_runtime`, `remove_interface_runtime`, `append_config_param`, `build_client_config_lines`
   - `wg_lease_ip`, `add_peer`, `del_peer`
-- `runtime_service_ops.py`: слой runtime-композиции для compat-оберток в `awg_core.py`.
+- `runtime_service_ops.py`: слой runtime-композиции для compat-оберток в `backend.app.legacy_manager_compat`.
   - `generate_keypair`, `create_temp_key_file`, `apply_interface_runtime`, `remove_interface_runtime`
   - `build_awg_set_command`, `append_config_param`, `build_client_config_lines`
 - `service_ops.py`: сервисный слой композиции wiring для DB/runtime сценариев interfaces/clients.
@@ -234,13 +234,13 @@
   - `list_clients`, `list_wg_int`, `list_wg_int_clients`, `client_qrencode`
 - `cli_support_ops.py`: слой CLI-композиции support wiring для auth/runtime helper-ов.
   - `show_api_key_status`, `set_api_key`, `wg_lease_ip`, `add_peer`, `del_peer`
-- `cli_compat_entry_ops.py`: CLI compat entry-слой, который использует `awg_core.py`.
+- `cli_compat_entry_ops.py`: CLI compat entry-слой, который используется `backend.app.legacy_manager_compat`.
   - wiring legacy/read/support/service оберток: `add_client`, `delete_client`, `list_clients`, `list_wg_int`, `list_wg_int_clients`, `client_qrencode`, `show_api_key_status`, `set_api_key`, `wg_lease_ip`, `add_peer`, `del_peer`, `add_wg_int`, `del_wg_int`, `update_interface`, `update_peer`, `sync`
 - `support_facade_ops.py`: support facade-слой для compat-оберток `awg_core.py` (auth/QR/backup/base64).
   - wiring API key/auth: `load_api_key`, `save_api_key`, `verify_api_auth`, `rotate_api_key`
   - QR helper-ы: `render_qr_in_terminal`, `build_qr_svg`
   - helper-ы backup/payload: `read_database_bytes`, `restore_database_from_bytes`, `decode_base64_payload`
-- `compat_entry_ops.py`: compat entry-слой interfaces/clients, который использует `awg_core.py`.
+- `compat_entry_ops.py`: compat entry-слой interfaces/clients, который используется `backend.app.legacy_manager_compat`.
   - wiring render/runtime/service оберток: `serialize_interface_row`, `serialize_client_row`, `build_client_config`, `build_interface_server_config`, `generate_keypair`, `create_temp_key_file`, `apply_interface_runtime`, `remove_interface_runtime`
   - wiring interface/client CRUD оберток: `create_interface_service`, `delete_interface_service`, `update_interface_service`, `create_client_service`, `delete_client_service`, `update_client_service`
   - wiring shared runtime/service helper-ов: `build_awg_set_command`, `append_config_param`, `build_client_config_lines`, `get_next_available_ip`, `validate_client_ip_for_interface`, `fetch_allowed_ips_row`, `fetch_interface_peer_rows`
@@ -283,32 +283,32 @@
   - проверки существования: `ensure_peer_exists`, `ensure_phase1_exists`, `ensure_phase2_exists`
   - CRUD-композиция: `upsert_peer_service`, `upsert_identity_service`, `upsert_phase1_profile_service`, `upsert_phase2_proposal_service`, `upsert_policy_service`, `delete_peer_service`, `delete_policy_service`
   - runtime-композиция: `log_event_service`, `list_events_service`, `list_active_peers_service`, `list_installed_sas_service`, `load_peer_service`, `initiate_policy_service`, `terminate_peer_service`, `apply_config_service`
-- `service_layer_ops.py`: слой IPsec compatibility-композиции для service-оберток `awg_core.py`.
+- `service_layer_ops.py`: слой IPsec compatibility-композиции для legacy compatibility service-оберток.
   - list/read wiring: `list_peers`, `list_identities`, `list_phase1_profiles`, `list_phase2_proposals`, `list_policies`
   - CRUD wiring: `upsert_peer`, `upsert_identity`, `upsert_phase1_profile`, `upsert_phase2_proposal`, `upsert_policy`, `delete_peer`, `delete_policy`
   - runtime wiring: `log_event`, `list_events`, `list_active_peers`, `list_installed_sas`, `load_peer`, `initiate_policy`, `terminate_peer`, `apply_config`
-- `compat_entry_ops.py`: compat entry-слой IPsec, который использует `awg_core.py`.
+- `compat_entry_ops.py`: compat entry-слой IPsec, который используется `backend.app.legacy_manager_compat`.
   - инкапсулирует callback wiring для store/validation/proposal/crypto/event helper-ов поверх `service_layer_ops`
   - экспортирует compatibility-обертки: `list_*`, `upsert_*`, `delete_*`, `list_events_service`, `list_active_peers_service`, `list_installed_sas_service`, `load_peer_service`, `initiate_policy_service`, `terminate_peer_service`, `apply_config_service`
-- `service_facade_ops.py`: facade-слой IPsec, инкапсулирующий helper wiring `awg_core.py` (store/validation/crypto/files).
+- `service_facade_ops.py`: facade-слой IPsec, инкапсулирующий legacy compatibility helper wiring (store/validation/crypto/files).
   - helper wiring: `_read_collection`, `_write_collection`, `_valid_name`, `_normalize_ip_list`, `_normalize_ts_list`
   - wiring proposal/secret: `_build_phase1_proposal_string`, `_build_phase2_proposal_string`, `_secret_encrypt`, `_secret_decrypt`
   - публичные service-обертки: `list_*`, `upsert_*`, `delete_*`, `list_events_service`, `list_active_peers_service`, `list_installed_sas_service`, `load_peer_service`, `initiate_policy_service`, `terminate_peer_service`, `apply_config_service`
 
-### `awg_core.py` (compat shim)
+### `awg_core.py` (удален)
 
-- Тонкий re-export shim для обратной совместимости импортов.
-- Делегирует runtime-реализацию в `backend.app.legacy_manager_compat`.
-- Детали compat-wrapper wiring ниже относятся к runtime-модулю `backend.app.legacy_manager_compat`.
+- `awg_core.py` удален.
+- Legacy runtime compatibility теперь обеспечивается через `backend.app.legacy_manager_compat`.
+- Упоминания `awg_core.py` ниже — исторические примечания миграции.
 
 - HTTP/API bootstrap больше не импортирует `awg_core` напрямую:
   - `api_core.py` теперь использует `backend.app.manager_facade` как manager-entrypoint.
-  - `manager_facade` сохраняет compatibility fallback в `awg_core` для остаточных путей, при этом ослабляя import-граф app-слоя.
+  - `manager_facade` сохраняет compatibility fallback в `backend.app.legacy_manager_compat` для остаточных путей, при этом ослабляя import-граф app-слоя.
 - CLI bootstrap больше не импортирует `awg_core` напрямую:
   - `awg_manager.py` теперь использует `backend.app.manager_facade` как manager-entrypoint для CLI-действий.
   - прямые `import awg_core` удалены из `.py` entrypoint-ов проекта.
 - Firewall compat-обертки сокращены до orchestration wiring и делегируют normalizer/runtime helper-ы напрямую в доменные модули.
-  - firewall compat-service wrapper-блок в `awg_core.py` сведен к `functools.partial` делегатам (включая дефолты `family/table/apply_now/table`), сохраняя тонкую shim-поверхность.
+  - firewall compat-service wrapper-блок в `backend.app.legacy_manager_compat` сведен к `functools.partial` делегатам (включая дефолты `family/table/apply_now/table`), сохраняя тонкую shim-поверхность.
   - позиционная fallback-совместимость перенесена в `backend/app/manager_facade.py` через именованные `fallback_kwargs`, поэтому временные firewall wrapper-def shim-обертки удалены из `awg_core.py`.
   - прямой доменный wiring нормализации в service-обертках:
     - `upsert_firewall_set_service` -> `firewall_store.normalize_set_item`
@@ -327,11 +327,11 @@
   - сбор table-defs делегирован в `firewall_helper_service_ops.collect_table_defs` (общий путь с `manager_facade`)
   - wiring managed-table parse/key/runtime-table в `apply_firewall_rules` делегирован напрямую в callback-и `firewall_store`/`firewall_runtime_adapter` через shared compat callable-ы (`functools.partial`)
   - оставшийся interfaces/IPsec compat callback wiring централизован через именованные helper-ы (`_run_command_checked`, `_fernet_encrypt`, `_fernet_decrypt`, `_fetch_allowed_ips_row`, `_fetch_interface_peer_rows`, helper-ы uniqueness для interfaces); `_fernet_*` оформлены как компактные lambda-alias.
-  - interfaces validation/support/AWG helper-обертки сведены к прямым alias/partial делегатам на `interfaces_compat_entry_ops` (минимальная compat shim-поверхность в `awg_core.py`)
+  - interfaces validation/support/AWG helper-обертки сведены к прямым alias/partial делегатам на `interfaces_compat_entry_ops` (минимальная compat shim-поверхность в `backend.app.legacy_manager_compat`)
   - interfaces utility/crypto wrapper-ы (`generate_keypair`, `create_temp_key_file`, `remove_interface_runtime`, `build_awg_set_command`, `append_config_param`, `build_client_config_lines`, `get_next_available_ip`, `validate_client_ip_for_interface`, `encrypt_private_key`, `decrypt_private_key`) сведены к `functools.partial` делегатам
   - из `awg_core.py` убрано дублирование inline lambda/wrapper wiring для путей выше за счет shared callable-ов (без изменения wire/API контракта).
 - IPsec compat-обертки делегируют в `backend.domains.ipsec.compat_entry_ops` (тонкий entry wiring в доменном слое); локальный `_ipsec_*` helper wiring удален из `awg_core.py`.
-  - блок IPsec service-оберток в `awg_core.py` сведен к `functools.partial`/alias делегатам с bind файловых/crypto callback-ов.
+  - блок IPsec service-оберток в `backend.app.legacy_manager_compat` сведен к `functools.partial`/alias делегатам с bind файловых/crypto callback-ов.
 - interfaces/clients compat-обертки для render/runtime/service путей делегируют в `backend.domains.awg.compat_entry_ops`; прямой wiring к `*_service_ops` модулям вынесен из `awg_core.py`.
   - дополнительная группа interfaces render/service wrapper-ов сведена к `functools.partial` там, где безопасен порядок инициализации (`serialize_interface_row`, `serialize_client_row`, `build_client_config`, `build_interface_server_config`, `apply_interface_runtime`, `create_interface_service`, `delete_interface_service`, `update_interface_service`, `create_client_service`, `update_client_service`, `delete_client_service`).
   - оставшийся callback wiring (`write_text_file`) делегирован через `interfaces_cli_compat_entry_ops.write_text_file` в доменные CLI helper-ы (без локальных `def`-оберток).

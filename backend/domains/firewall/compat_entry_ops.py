@@ -437,7 +437,7 @@ def build_collection_runtime_helpers(*, normalize_value_fn, now_ts_fn):
     }
 
 
-# Compatibility aliases for existing awg_core call-sites.
+# Compatibility aliases for existing legacy-manager call-sites.
 list_rules = list_rules_service
 apply_rules = apply_rules_service
 create_rule = create_rule_service

@@ -27,9 +27,9 @@ class DataDirConfigTest(unittest.TestCase):
         old_target_module = sys.modules.get("backend.app.legacy_manager_target")
         old_legacy_compat_module = sys.modules.get("backend.app.legacy_manager_compat")
         try:
-            sys.argv = ["awg_core.py", "-r", str(key_file)]
+            sys.argv = ["legacy_manager_compat.py", "-r", str(key_file)]
             os.environ["AWG_MANAGER_DATA_DIR"] = data_dir
-            os.environ["AWG_MANAGER_LEGACY_TARGET_MODULE"] = "awg_core"
+            os.environ["AWG_MANAGER_LEGACY_TARGET_MODULE"] = "backend.app.legacy_manager_compat"
             crypto_mod = types.ModuleType("cryptography")
             fernet_mod = types.ModuleType("cryptography.fernet")
 
@@ -46,7 +46,6 @@ class DataDirConfigTest(unittest.TestCase):
             sys.modules["cryptography"] = crypto_mod
             sys.modules["cryptography.fernet"] = fernet_mod
             sys.modules["segno"] = types.ModuleType("segno")
-            sys.modules.pop("awg_core", None)
             sys.modules.pop("backend.app.legacy_manager_target", None)
             sys.modules.pop("backend.app.legacy_manager_compat", None)
             target = importlib.import_module("backend.app.legacy_manager_target")
@@ -92,7 +91,6 @@ class DataDirConfigTest(unittest.TestCase):
             self.assertTrue(module.IPSEC_PEERS_FILE.startswith(os.path.abspath(tmp)))
             self.assertTrue((pathlib.Path(tmp) / "clients.db").exists())
             module.conn.close()
-            sys.modules.pop("awg_core", None)
             sys.modules.pop("backend.app.legacy_manager_compat", None)
 
     def test_api_key_is_persisted_inside_selected_data_dir(self):
@@ -107,7 +105,6 @@ class DataDirConfigTest(unittest.TestCase):
             self.assertEqual(module.load_api_key(), rotated)
             self.assertEqual(api_key_path.read_text(encoding="utf-8").strip(), rotated)
             module.conn.close()
-            sys.modules.pop("awg_core", None)
             sys.modules.pop("backend.app.legacy_manager_compat", None)
 
 
