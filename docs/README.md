@@ -2,6 +2,7 @@
 
 - [API.md](API.md) — AWG Manager HTTP API reference
 - [DEPLOY.md](DEPLOY.md) — deployment, systemd, restore workflow
+- [STAND_SETUP_FIXES.md](STAND_SETUP_FIXES.md) — real stand setup issues + applied fixes log
 - [FIREWALL_TESTPLAN.md](FIREWALL_TESTPLAN.md) — strict UI/API/NFT firewall test methodology
 - [FIREWALL_ADD_RULE_TESTPLAN.md](FIREWALL_ADD_RULE_TESTPLAN.md) — hard test plan for Add Firewall Rule modal
 - [FIREWALL_ADD_RULE_FIELDS_INVENTORY.md](FIREWALL_ADD_RULE_FIELDS_INVENTORY.md) — Add Rule field completeness inventory
@@ -14,5 +15,8 @@
 - [DOCS_INDEX.ru.md](DOCS_INDEX.ru.md) — Russian documentation navigator (what to read and when)
 - [TESTS_CATALOG.ru.md](TESTS_CATALOG.ru.md) — complete RU catalog of tests (location, purpose, run commands)
 - [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md) — release-readiness commands and pass criteria
+- [development/README.md](development/README.md) — development docs index (module ownership and refactor docs policy)
+- [development/MODULE_MAP.md](development/MODULE_MAP.md) — backend/frontend module ownership map (EN)
+- [development/MODULE_MAP.ru.md](development/MODULE_MAP.ru.md) — карта модулей и ответственности функций (RU)
 - [../README.md](../README.md) — main guide (EN)
 - [../README.ru.md](../README.ru.md) — main guide (RU)

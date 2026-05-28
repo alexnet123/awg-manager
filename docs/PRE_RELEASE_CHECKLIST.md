@@ -49,6 +49,18 @@ Expected: all tests pass.
   - reboot host
   - verify `/firewall`, `nft list ruleset`, and persisted files stay consistent
 
+## 4.1) IPsec stand smoke
+Run IPsec API/runtime smoke on ipsec stand:
+
+```bash
+cd /root/awg-manager
+AWG_API_URL=http://127.0.0.1:8788 \
+AWG_API_KEY=$(cat /etc/wg-manager-ipsec/api.key) \
+bash scripts/ipsec_stand_smoke.sh
+```
+
+Expected: script exits with `OK: ipsec stand smoke passed`.
+
 ## 5) Manual spot checks
 - Login/logout and API key auth
 - Create/edit/delete one interface (v1 and v2)

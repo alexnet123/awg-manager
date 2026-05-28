@@ -16,17 +16,24 @@ python3 -m pip install -r requirements.txt
 
 ## Runtime Files
 
-AWG Manager stores persistent state in:
+AWG Manager stores persistent state in `AWG_MANAGER_DATA_DIR`:
 
-- `/etc/wg-manager/clients.db`
-- `/etc/wg-manager/api.key`
+- default: `/etc/wg-manager`
+- override: set `AWG_MANAGER_DATA_DIR` in service env
+
+Typical files:
+
+- `${AWG_MANAGER_DATA_DIR}/clients.db`
+- `${AWG_MANAGER_DATA_DIR}/api.key`
+- `${AWG_MANAGER_DATA_DIR}/encryption.key`
 
 Create the encryption key file used for startup restore:
 
 ```bash
-install -d -m 700 /etc/wg-manager
-printf '%s\n' 'YOUR_ENCRYPTION_SECRET' > /etc/wg-manager/encryption.key
-chmod 600 /etc/wg-manager/encryption.key
+export AWG_MANAGER_DATA_DIR="${AWG_MANAGER_DATA_DIR:-/etc/wg-manager}"
+install -d -m 700 "$AWG_MANAGER_DATA_DIR"
+printf '%s\n' 'YOUR_ENCRYPTION_SECRET' > "$AWG_MANAGER_DATA_DIR/encryption.key"
+chmod 600 "$AWG_MANAGER_DATA_DIR/encryption.key"
 ```
 
 ## Manual Restore After Reboot
@@ -34,7 +41,7 @@ chmod 600 /etc/wg-manager/encryption.key
 To restore all interfaces and peers from the database:
 
 ```bash
-python3 awg_manager.py -r /etc/wg-manager/encryption.key
+python3 awg_manager.py -r "${AWG_MANAGER_DATA_DIR:-/etc/wg-manager}/encryption.key"
 ```
 
 This command loads the encryption secret, decrypts stored client keys, and reapplies runtime AmneziaWG state.
@@ -56,15 +63,59 @@ For a fresh server test stand (AmneziaWG + restore + API + Web UI), run:
 sudo ./scripts/install_test_stand.sh --project-dir /root/awg_manager --host 0.0.0.0 --port 8787
 ```
 
+For explicit runtime isolation/profile:
+
+```bash
+sudo ./scripts/install_test_stand.sh \
+  --project-dir /root/awg_manager \
+  --host 0.0.0.0 \
+  --port 8787 \
+  --data-dir /etc/wg-manager-firewall \
+  --stand-profile firewall
+```
+
+What installer fixes now:
+- disables auto updates;
+- holds installed kernel packages;
+- pins GRUB to the running kernel via explicit `Advanced options > kernel` entry;
+- enables persistent `net.ipv4.ip_forward=1`;
+- installs and starts `awg-manager-api` + `awg-manager-restore`.
+
+## Final Single-Stand Redeploy From `main`
+
+For final rollout (after push/merge), use single-stand redeploy from local `main`:
+
+```bash
+scripts/redeploy_single_stand_from_main.sh \
+  --target root@YOUR_HOST \
+  --project-dir /root/awg-manager \
+  --data-dir /etc/wg-manager \
+  --port 8787 \
+  --clean-data
+```
+
+What this script does:
+- packages code from local branch `main` (`git archive`);
+- uploads and deploys to target stand;
+- stops optional validation services (if present);
+- (optional) wipes data dir when `--clean-data` is set;
+- installs units/env and starts `awg-manager-restore` + `awg-manager-api`;
+- runs post-deploy smoke (`/health`, `/firewall/apply`) unless `--skip-smoke`.
+
 Generated credentials are saved to:
 
 - `/root/key/api.key`
 - `/root/key/encryption.key`
 
-Service runtime keys:
+Service runtime keys (inside configured `AWG_MANAGER_DATA_DIR`):
 
-- `/etc/wg-manager/api.key`
-- `/etc/wg-manager/encryption.key`
+- `${AWG_MANAGER_DATA_DIR}/api.key`
+- `${AWG_MANAGER_DATA_DIR}/encryption.key`
+
+Service env files:
+
+- `/etc/wg-manager/awg-manager-api.env`
+- `/etc/wg-manager/awg-manager-restore.env`
 
 View keys:
 
@@ -76,7 +127,8 @@ cat /root/key/encryption.key
 Regenerate keys:
 
 ```bash
-install -d -m 700 /root/key /etc/wg-manager
+export AWG_MANAGER_DATA_DIR="${AWG_MANAGER_DATA_DIR:-/etc/wg-manager}"
+install -d -m 700 /root/key "$AWG_MANAGER_DATA_DIR"
 python3 - <<'PY'
 import secrets, pathlib
 api = secrets.token_hex(32)
@@ -86,9 +138,9 @@ pathlib.Path('/root/key/encryption.key').write_text(enc + '\n')
 print('API_KEY=', api)
 print('ENC_KEY=', enc)
 PY
-cp /root/key/api.key /etc/wg-manager/api.key
-cp /root/key/encryption.key /etc/wg-manager/encryption.key
-chmod 600 /root/key/api.key /root/key/encryption.key /etc/wg-manager/api.key /etc/wg-manager/encryption.key
+cp /root/key/api.key "$AWG_MANAGER_DATA_DIR/api.key"
+cp /root/key/encryption.key "$AWG_MANAGER_DATA_DIR/encryption.key"
+chmod 600 /root/key/api.key /root/key/encryption.key "$AWG_MANAGER_DATA_DIR/api.key" "$AWG_MANAGER_DATA_DIR/encryption.key"
 systemctl restart awg-manager-api.service awg-manager-restore.service
 ```
 
@@ -103,6 +155,15 @@ Rebuild only after frontend changes:
 cd webui
 npm install
 npm run build
+```
+
+If build fails due old Node runtime, upgrade first (Node 20+ recommended):
+
+```bash
+npm install -g n
+n 20
+hash -r
+node -v
 ```
 
 Copy the service file:
@@ -140,7 +201,7 @@ journalctl -u awg-manager-restore.service -n 100
 Start the API manually:
 
 ```bash
-python3 api_core.py 0.0.0.0 8787 -r /etc/wg-manager/encryption.key
+python3 api_core.py 0.0.0.0 8787 -r "${AWG_MANAGER_DATA_DIR:-/etc/wg-manager}/encryption.key"
 ```
 
 Requests must include:
@@ -148,3 +209,33 @@ Requests must include:
 - `X-API-Key`
 
 Detailed route documentation is available in [API.md](API.md).
+
+## Parallel Streams (Firewall + IPsec)
+
+Recommended model:
+
+- separate local worktrees/branches per stream (`codex-firewall-*`, `codex-ipsec-*`);
+- separate stands for firewall and ipsec;
+- explicit stand role marker in env: `AWG_MANAGER_STAND_PROFILE=firewall|ipsec`.
+
+If multiple instances are colocated on one host, use unique:
+
+- API ports;
+- `AWG_MANAGER_DATA_DIR` values.
+
+## Post-Reboot Verification (Recommended)
+
+After reboot, verify runtime state:
+
+```bash
+uname -r
+lsmod | grep -E '^amneziawg' || true
+systemctl is-active awg-manager-api.service awg-manager-restore.service
+sysctl -n net.ipv4.ip_forward
+```
+
+For known stand issues and exact fixes, see:
+- [STAND_SETUP_FIXES.md](STAND_SETUP_FIXES.md)
+
+For branch/worktree/stand orchestration across Firewall and IPsec streams, see:
+- [PARALLEL_DEVELOPMENT.md](PARALLEL_DEVELOPMENT.md)

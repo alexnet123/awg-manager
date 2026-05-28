@@ -2,6 +2,20 @@
 
 This guide explains how to use **Firewall → Add Firewall Rule** in AWG Manager.
 
+## 0) Policy vs Policy2 vs Policy3
+- `policy` tab is intentionally **inet-only** (classic flow).
+- Use **Firewall → policy2** for bridge rules.
+- Use **Firewall → policy3** for netdev ingress rules.
+- Current `policy2`: `Family=bridge` with enabled custom bridge tables.
+- Current `policy3`: `Family=netdev` with enabled custom netdev tables (`filter` + `ingress` + `device`).
+- `Table` list in `policy v2` shows only enabled custom tables from selected family.
+- Bridge `policy v2` supports: `ibrname/obrname`, `ether src/dst/type`, `vlan id`, `proto`, `sport`, `dport`, `ct state`, `meta pkttype`, `meta iifgroup`, `meta oifgroup`, `mark match`, `ct mark match`, `counter`, named `counter/limit/quota`, `limit rate`, extended `log` options, and `action=queue` (`queue_num`, `queue_flags`).
+- Netdev `policy3` supports ingress-safe L2/L3/L4 fields, anonymous `counter`, `limit rate`, extended `log`, `action=queue`, and `action=fwd` with `fwd_to/fwd_dev/fwd_family`.
+- Bridge `reject` is allowed only on chains with hook `input` or `prerouting`.
+- Bridge `vlan id` range is `1..4095`.
+- Bridge `ether type` accepts Ethertype as hex/integer: `0x0000..0xffff` or `0..65535`.
+- In bridge MVP logging, `log_group` and `log_flags` cannot be used together.
+
 ## 1) Rule tables and intent
 - `filter`: allow/deny traffic (`accept`, `drop`, `reject`, `jump`, `goto`, `return`)
 - `nat`: address/port translation (`dnat`, `snat`, `masquerade`, `redirect`)
@@ -88,6 +102,8 @@ Common rejects (expected):
 - `tcp_flags` with non-tcp protocol.
 - `icmp_type/icmp_code` with non-icmp protocol.
 - `icmpv6_type/icmpv6_code` with non-icmpv6 protocol.
+- `vlan id` outside `1..4095`.
+- `ether type` outside Ethertype range.
 - invalid `ct_direction` (must be `original` or `reply`).
 - invalid `ct_expiration` format (must be like `30s`, `1m`, `2h`, `1d`).
 - invalid mark/meta token formats.
@@ -100,11 +116,36 @@ Common rejects (expected):
 - `meta mark set`, `ct mark set`: mark operations.
 - `log prefix`, `log level`: logging controls.
 
-Note:
-- `ct_helper_set`, `ct_timeout_set`, `ct_expectation_set` are intentionally graceful-rejected until ct objects are enabled.
+Bridge Policy v2 B2 notes:
+- `counter` and `counter_name` are mutually exclusive.
+- `limit_rate` and `limit_name` are mutually exclusive.
+- `ct_helper_set`, `ct_timeout_set`, `counter_name`, `limit_name`, `quota_name` require existing named objects in the selected bridge table.
+- `ct_expectation_set` is planned for bridge and temporarily disabled.
+- The form loads named objects from API `GET /firewall/objects?family=bridge&table=<table>` and offers them in dropdowns.
+- Expert expressions (`fib_check`, `socket_match`, `rt_nexthop`, `ipv6_exthdrs`) are currently planned/disabled for bridge on this runtime.
+- `dup_to/dup_dev` and `fwd_to/fwd_dev/fwd_family` stay planned in bridge mode on current runtime.
+- Editor shows explicit runtime notes for `structured expressions`, `dup`, and `fwd` to make planned limits visible before save.
+- Named objects lifecycle is available via API: `POST/PUT/DELETE /firewall/objects`.
+- UI shortcut:
+  - In `Policy v2 -> objects`, each row has a `use` button that opens `Add Bridge Rule` with this object binding prefilled.
+  - If you select multiple objects of different kinds (`counter`, `limit`, `quota`, `ct_helper`, `ct_timeout`) and click `Use in rule`, the form opens with multiple bindings prefilled at once.
+  - Constraint: only one object per `kind` can be prefilled in one click (duplicate kinds are blocked by UI validation).
+  - In `Edit Bridge Rule`, the `Linked objects (quick actions)` block provides `open` (jump to object in objects tab) and `unlink` (remove a specific binding).
+
+Named object examples (why they matter):
+1. SSH counter:
+- Object: `kind=counter`, `name=cnt_ssh_attempts`.
+- Rule: `proto=tcp`, `dport=22`, `counter_name=cnt_ssh_attempts`, `action=accept`.
+- Why: track SSH hit volume and detect scanning pressure.
+
+2. DNS rate limiter:
+- Object: `kind=limit`, `name=lim_dns`, `rate=30/second`, `burst=100 packets`.
+- Rule: `proto=udp`, `dport=53`, `limit_name=lim_dns`, `action=accept`.
+- Why: smooth DNS bursts and reduce flood impact.
 
 ## 5) Statistics tab
 - `counter`: enable nft counter for the rule.
+- `counter name`: use existing named counter object from selected bridge table.
 - Runtime fields show packets/bytes and chart preview.
 - Chart can switch between packets/sec and bytes/sec.
 

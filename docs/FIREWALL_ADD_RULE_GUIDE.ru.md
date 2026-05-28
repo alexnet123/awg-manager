@@ -2,6 +2,20 @@
 
 Документ объясняет, как использовать меню **Firewall → Add Firewall Rule** в AWG Manager.
 
+## 0) Policy, Policy2 и Policy3
+- Вкладка `policy` по дизайну работает только с **inet**.
+- Для bridge используйте **Firewall → policy2**.
+- Для netdev ingress используйте **Firewall → policy3**.
+- Текущий `policy2`: `Family=bridge` и включённые custom bridge-таблицы.
+- Текущий `policy3`: `Family=netdev` и включённые custom netdev-таблицы (`filter` + `ingress` + `device`).
+- В `policy v2` в списке `Table` показываются только включённые custom-таблицы выбранного семейства.
+- В bridge `policy v2` поддерживаются: `ibrname/obrname`, `ether src/dst/type`, `vlan id`, `proto`, `sport`, `dport`, `ct state`, `meta pkttype`, `meta iifgroup`, `meta oifgroup`, `mark match`, `ct mark match`, `counter`, именованные `counter/limit/quota`, `limit rate`, расширенные параметры `log` и `action=queue` (`queue_num`, `queue_flags`).
+- В netdev `policy3` поддерживаются ingress-safe L2/L3/L4 поля, anonymous `counter`, `limit rate`, расширенный `log`, `action=queue` и `action=fwd` с `fwd_to/fwd_dev/fwd_family`.
+- Для bridge `reject` допускается только для цепочек с hook `input` или `prerouting`.
+- Для bridge `vlan id` допустим диапазон `1..4095`.
+- Для bridge `ether type` принимается Ethertype в hex/decimal: `0x0000..0xffff` или `0..65535`.
+- В bridge MVP для логирования `log_group` и `log_flags` взаимно исключают друг друга.
+
 ## 1) Таблицы правил и назначение
 - `filter`: разрешение/запрет трафика (`accept`, `drop`, `reject`, `jump`, `goto`, `return`)
 - `nat`: трансляция адресов/портов (`dnat`, `snat`, `masquerade`, `redirect`)
@@ -88,6 +102,8 @@
 - `tcp_flags` при протоколе не `tcp`.
 - `icmp_type/icmp_code` при протоколе не `icmp`.
 - `icmpv6_type/icmpv6_code` при протоколе не `icmpv6`.
+- `vlan id` вне диапазона `1..4095`.
+- `ether type` вне диапазона Ethertype.
 - неверный `ct_direction` (должен быть `original` или `reply`).
 - неверный формат `ct_expiration` (только `30s`, `1m`, `2h`, `1d` и т.п.).
 - некорректные форматы mark/meta токенов.
@@ -100,11 +116,36 @@
 - `meta mark set`, `ct mark set`: установка mark.
 - `log prefix`, `log level`: параметры логирования.
 
-Важно:
-- `ct_helper_set`, `ct_timeout_set`, `ct_expectation_set` сейчас намеренно отклоняются (graceful reject), пока не включены ct objects.
+Bridge Policy v2 B2:
+- `counter` и `counter_name` взаимоисключающие.
+- `limit_rate` и `limit_name` взаимоисключающие.
+- `ct_helper_set`, `ct_timeout_set`, `counter_name`, `limit_name`, `quota_name` требуют существующие именованные объекты в выбранной bridge-таблице.
+- `ct_expectation_set` для bridge пока в статусе planned и временно отключен.
+- Форма загружает именованные объекты через API `GET /firewall/objects?family=bridge&table=<table>` и показывает их в выпадающих списках.
+- Expert expressions (`fib_check`, `socket_match`, `rt_nexthop`, `ipv6_exthdrs`) для bridge на текущем runtime в статусе planned/disabled.
+- `dup_to/dup_dev` и `fwd_to/fwd_dev/fwd_family` на текущем runtime в bridge остаются planned.
+- В редакторе добавлено явное пояснение по runtime-статусу `structured expressions`, `dup` и `fwd`, чтобы ограничения были видны до сохранения правила.
+- Управление жизненным циклом именованных объектов доступно через API: `POST/PUT/DELETE /firewall/objects`.
+- UI shortcut:
+  - В `Policy v2 -> objects` кнопка `use` у строки объекта открывает `Add Bridge Rule` с автоподстановкой ссылки на этот объект.
+  - Если выделить несколько объектов разных типов (`counter`, `limit`, `quota`, `ct_helper`, `ct_timeout`) и нажать `Use in rule`, форма откроется с несколькими привязками сразу.
+  - Ограничение: по одному объекту на каждый `kind` в одном клике (дубликаты вида блокируются валидацией UI).
+  - В `Edit Bridge Rule` есть блок `Linked objects (quick actions)`: `open` (переход к объекту во вкладку objects) и `unlink` (снять конкретную привязку).
+
+Примеры объектов (зачем нужны):
+1. `counter` для SSH:
+- Object: `kind=counter`, `name=cnt_ssh_attempts`.
+- Rule: `proto=tcp`, `dport=22`, `counter_name=cnt_ssh_attempts`, `action=accept`.
+- Зачем: считать обращения к SSH и видеть нагрузку/подбор.
+
+2. `limit` для DNS burst:
+- Object: `kind=limit`, `name=lim_dns`, `rate=30/second`, `burst=100 packets`.
+- Rule: `proto=udp`, `dport=53`, `limit_name=lim_dns`, `action=accept`.
+- Зачем: сглаживать всплески DNS-трафика и защищаться от флуда.
 
 ## 5) Вкладка Statistics
 - `counter`: включает nft-счётчик для правила.
+- `counter name`: использование существующего именованного счётчика из выбранной bridge-таблицы.
 - Runtime показывает packets/bytes и предпросмотр графика.
 - График переключается между packets/sec и bytes/sec.
 

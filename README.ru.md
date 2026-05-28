@@ -124,6 +124,10 @@ python3 api_core.py 0.0.0.0 8787 -r /etc/wg-manager/encryption.key
 
 - [docs/API.md](docs/API.md)
 - [docs/DEPLOY.md](docs/DEPLOY.md)
+- [docs/STAND_SETUP_FIXES.md](docs/STAND_SETUP_FIXES.md) (журнал проблем и фиксов при настройке стенда)
 - [docs/README.md](docs/README.md) (общий индекс документации)
+- [docs/development/README.md](docs/development/README.md) (индекс dev-документации: владение модулями и правила рефакторинга)
+- [docs/development/MODULE_MAP.ru.md](docs/development/MODULE_MAP.ru.md) (карта модулей и ответственности, RU)
+- [docs/development/MODULE_MAP.md](docs/development/MODULE_MAP.md) (module ownership map, EN)
 - [docs/DOCS_INDEX.ru.md](docs/DOCS_INDEX.ru.md) (навигация по документации на русском)
 - [docs/TESTS_CATALOG.ru.md](docs/TESTS_CATALOG.ru.md) (полный каталог тестов: где лежат, что делают, как запускать)

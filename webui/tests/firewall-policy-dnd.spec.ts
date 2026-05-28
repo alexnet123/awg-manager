@@ -50,7 +50,7 @@ async function openFirewall(page: Page) {
 }
 
 async function ensurePolicyTab(page: Page, tabName: 'filter' | 'nat' | 'raw' | 'mangle') {
-  await page.getByRole('tab', { name: 'policy' }).click()
+  await page.getByRole('tab', { name: 'policy', exact: true }).click()
   await page.getByRole('tab', { name: tabName }).click({ force: true })
 }
 
@@ -204,4 +204,3 @@ test('firewall policy dnd: reorder works the same in filter/nat/raw/mangle', asy
     }
   }
 })
-

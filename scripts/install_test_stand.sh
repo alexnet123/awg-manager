@@ -4,16 +4,18 @@ set -euo pipefail
 PROJECT_DIR_DEFAULT="/opt/awg_manager"
 LISTEN_HOST_DEFAULT="0.0.0.0"
 LISTEN_PORT_DEFAULT="8787"
+DATA_DIR_DEFAULT="/etc/wg-manager"
+STAND_PROFILE_DEFAULT="firewall"
 
 usage() {
   cat <<'USAGE'
-install_test_stand.sh [--project-dir DIR] [--host HOST] [--port PORT]
+install_test_stand.sh [--project-dir DIR] [--host HOST] [--port PORT] [--data-dir DIR] [--stand-profile PROFILE]
 
 Installs a test stand on Debian/Ubuntu-like systems:
 - installs AmneziaWG kernel module + tools via the official repo instructions
 - installs Python dependencies from requirements.txt
 - generates API/encryption keys into /root/key
-- configures /etc/wg-manager/{api.key,encryption.key}
+- configures {data-dir}/{api.key,encryption.key}
 - installs and starts systemd services:
   - awg-manager-restore.service (restore after reboot)
   - awg-manager-api.service (API + Web UI)
@@ -21,6 +23,7 @@ Installs a test stand on Debian/Ubuntu-like systems:
 Examples:
   ./scripts/install_test_stand.sh
   ./scripts/install_test_stand.sh --project-dir /root/awg_manager --port 8787
+  ./scripts/install_test_stand.sh --project-dir /root/awg_manager --port 8787 --data-dir /etc/wg-manager-fw --stand-profile firewall
 USAGE
 }
 
@@ -115,7 +118,7 @@ EOF
 }
 
 pin_running_kernel() {
-  local running_kernel base_ver saved_entry
+  local running_kernel base_ver grub_title grub_default_entry
   running_kernel="$(uname -r)"
   base_ver="${running_kernel%-amd64}"
 
@@ -139,17 +142,24 @@ pin_running_kernel() {
     apt-mark hold "${installed_kernel_pkgs[@]}" >/dev/null 2>&1 || true
   fi
 
-  # Persist kernel choice for next boot. Prefer entry id if we can find it.
+  # Persist kernel choice for next boot.
+  # Use explicit "Advanced options > kernel" entry. This is more reliable on
+  # cloud images where GRUB_DEFAULT=saved can still drift to a newer kernel.
   if [[ -f /boot/grub/grub.cfg ]]; then
-    saved_entry="$(grep -m1 "with Linux ${running_kernel}'" /boot/grub/grub.cfg | sed -n "s/.*menuentry_id_option '\([^']*\)'.*/\1/p")"
-    if [[ -n "${saved_entry:-}" ]]; then
-      if ! grep -q '^GRUB_DEFAULT=saved' /etc/default/grub 2>/dev/null; then echo 'GRUB_DEFAULT=saved' >> /etc/default/grub; fi
-      if ! grep -q '^GRUB_SAVEDEFAULT=true' /etc/default/grub 2>/dev/null; then echo 'GRUB_SAVEDEFAULT=true' >> /etc/default/grub; fi
+    grub_title="Debian GNU/Linux, with Linux ${running_kernel}"
+    grub_default_entry="Advanced options for Debian GNU/Linux>${grub_title}"
+    if grep -Fq "menuentry '${grub_title}'" /boot/grub/grub.cfg; then
+      cp /etc/default/grub "/etc/default/grub.bak.$(date +%F-%H%M%S)" >/dev/null 2>&1 || true
+      sed -i '/^GRUB_DEFAULT=/d; /^GRUB_SAVEDEFAULT=/d' /etc/default/grub
+      {
+        printf 'GRUB_DEFAULT="%s"\n' "${grub_default_entry}"
+        printf 'GRUB_SAVEDEFAULT=false\n'
+      } >> /etc/default/grub
       update-grub >/dev/null 2>&1 || true
-      grub-set-default "${saved_entry}" >/dev/null 2>&1 || true
-      log "GRUB saved_entry set: ${saved_entry}"
+      grub-set-default "${grub_default_entry}" >/dev/null 2>&1 || true
+      log "GRUB default pinned: ${grub_default_entry}"
     else
-      log "WARN: could not detect GRUB entry id for ${running_kernel}; kernel is held but GRUB default was not changed"
+      log "WARN: could not detect GRUB menuentry for ${running_kernel}; kernel is held but GRUB default was not changed"
     fi
   else
     log "WARN: /boot/grub/grub.cfg not found; kernel is held but GRUB default was not changed"
@@ -169,11 +179,30 @@ install_systemd_units() {
   systemctl daemon-reload
 }
 
+configure_runtime_env() {
+  local data_dir="$1"
+  local stand_profile="$2"
+  log "Configuring service environment files for data dir: ${data_dir}, profile: ${stand_profile}"
+  install -d -m 700 /etc/wg-manager
+  cat > /etc/wg-manager/awg-manager-api.env <<EOF
+AWG_MANAGER_STAND_PROFILE=${stand_profile}
+AWG_MANAGER_DATA_DIR=${data_dir}
+AWG_MANAGER_ENCRYPTION_KEY_FILE=${data_dir}/encryption.key
+EOF
+  cat > /etc/wg-manager/awg-manager-restore.env <<EOF
+AWG_MANAGER_STAND_PROFILE=${stand_profile}
+AWG_MANAGER_DATA_DIR=${data_dir}
+AWG_MANAGER_ENCRYPTION_KEY_FILE=${data_dir}/encryption.key
+EOF
+  chmod 600 /etc/wg-manager/awg-manager-restore.env /etc/wg-manager/awg-manager-api.env
+}
+
 configure_keys() {
-  log "Generating keys into /root/key and configuring /etc/wg-manager"
+  local data_dir="$1"
+  log "Generating keys into /root/key and configuring ${data_dir}"
   install -d -m 700 /root/key
   chmod 700 /root/key
-  install -d -m 700 /etc/wg-manager
+  install -d -m 700 "$data_dir"
 
   local api_token encryption_secret
   api_token="$(rand_token)"
@@ -183,9 +212,9 @@ configure_keys() {
   printf '%s\n' "$encryption_secret" > /root/key/encryption.key
   chmod 600 /root/key/api.key /root/key/encryption.key
 
-  cp /root/key/api.key /etc/wg-manager/api.key
-  cp /root/key/encryption.key /etc/wg-manager/encryption.key
-  chmod 600 /etc/wg-manager/api.key /etc/wg-manager/encryption.key
+  cp /root/key/api.key "${data_dir}/api.key"
+  cp /root/key/encryption.key "${data_dir}/encryption.key"
+  chmod 600 "${data_dir}/api.key" "${data_dir}/encryption.key"
 }
 
 configure_ip_forward() {
@@ -210,12 +239,16 @@ main() {
   local project_dir="$PROJECT_DIR_DEFAULT"
   local listen_host="$LISTEN_HOST_DEFAULT"
   local listen_port="$LISTEN_PORT_DEFAULT"
+  local data_dir="$DATA_DIR_DEFAULT"
+  local stand_profile="$STAND_PROFILE_DEFAULT"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --project-dir) project_dir="${2:-}"; shift 2;;
       --host) listen_host="${2:-}"; shift 2;;
       --port) listen_port="${2:-}"; shift 2;;
+      --data-dir) data_dir="${2:-}"; shift 2;;
+      --stand-profile) stand_profile="${2:-}"; shift 2;;
       -h|--help) usage; exit 0;;
       *) echo "Unknown arg: $1" >&2; usage; exit 2;;
     esac
@@ -232,10 +265,11 @@ main() {
   install_amneziawg_debian_like
   ensure_awg_module_for_running_kernel
   ensure_python_deps
-  configure_keys
+  configure_keys "$data_dir"
 
   # Make systemd units point to the chosen project dir and listen host/port.
   install_systemd_units
+  configure_runtime_env "$data_dir" "$stand_profile"
   sed -i "s|WorkingDirectory=/opt/awg_manager|WorkingDirectory=${project_dir}|g" /etc/systemd/system/awg-manager-api.service
   sed -i "s|/opt/awg_manager/api_core.py|${project_dir}/api_core.py|g" /etc/systemd/system/awg-manager-api.service
   sed -i "s|/opt/awg_manager/awg_manager.py|${project_dir}/awg_manager.py|g" /etc/systemd/system/awg-manager-restore.service
@@ -254,6 +288,9 @@ main() {
   log "UI: http://${listen_host}:${listen_port}/ui/ (if listen_host is 0.0.0.0, use the server IP)"
   log "API token file: /root/key/api.key"
   log "Encryption key file: /root/key/encryption.key"
+  log "Runtime data dir: ${data_dir}"
+  log "Stand profile: ${stand_profile}"
+  log "Service env files: /etc/wg-manager/awg-manager-api.env and /etc/wg-manager/awg-manager-restore.env"
 }
 
 main "$@"
