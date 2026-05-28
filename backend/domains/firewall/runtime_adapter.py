@@ -140,6 +140,8 @@ def get_ruleset_counter_index(table_prefix):
             (x.get("counter") for x in expr if isinstance(x, dict) and "counter" in x),
             None,
         )
+        if not isinstance(counter_item, dict):
+            counter_item = None
         rules_by_table_chain.setdefault((runtime_family, nft_table, chain_name), []).append(
             {
                 "packets": int(counter_item.get("packets", 0)) if counter_item else 0,

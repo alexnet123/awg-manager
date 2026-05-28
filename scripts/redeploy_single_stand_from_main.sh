@@ -56,7 +56,7 @@ Notes:
 USAGE
 }
 
-log() { printf '[%s] %s\n' "$(date -Is)" "$*"; }
+log() { printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -119,7 +119,7 @@ ssh "$TARGET" \
   "PROJECT_DIR='$PROJECT_DIR' DATA_DIR='$DATA_DIR' LISTEN_HOST='$LISTEN_HOST' LISTEN_PORT='$LISTEN_PORT' STAND_PROFILE='$STAND_PROFILE' CLEAN_DATA='$CLEAN_DATA' SKIP_DEPENDENCIES='$SKIP_DEPENDENCIES' SKIP_SMOKE='$SKIP_SMOKE' REMOTE_ARCHIVE='$REMOTE_ARCHIVE' bash -s" <<'REMOTE'
 set -euo pipefail
 
-log() { printf '[%s] %s\n' "$(date -Is)" "$*"; }
+log() { printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 
 if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
   echo "ERROR: remote deploy must run as root" >&2

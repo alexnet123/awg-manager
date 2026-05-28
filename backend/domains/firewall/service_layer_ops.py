@@ -15,12 +15,16 @@ def _iter_other_set_names(data, *, set_kind):
         if kind == set_kind:
             continue
         for row in data.get(kind, []):
+            if not isinstance(row, dict):
+                continue
             yield str(row.get("name") or "")
 
 
 def _iter_other_map_names(data, *, map_kind):
     other_kind = "vmap" if map_kind == "map" else "map"
     for row in data.get(other_kind, []):
+        if not isinstance(row, dict):
+            continue
         yield str(row.get("name") or "")
 
 

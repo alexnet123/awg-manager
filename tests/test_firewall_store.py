@@ -12,6 +12,12 @@ class FirewallStoreTest(unittest.TestCase):
             store.write_rules(str(path), [{"id": "r1"}])
             self.assertEqual(store.read_rules(str(path)), [{"id": "r1"}])
 
+    def test_read_rules_filters_non_dict_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "rules.json"
+            store.write_rules(str(path), [{"id": "r1"}, "bad", 1, None])
+            self.assertEqual(store.read_rules(str(path)), [{"id": "r1"}])
+
     def test_objects_and_tables_filter_non_dict_rows(self):
         with tempfile.TemporaryDirectory() as tmp:
             objects_path = pathlib.Path(tmp) / "objects.json"
@@ -20,6 +26,21 @@ class FirewallStoreTest(unittest.TestCase):
             store.write_tables(str(tables_path), {"tables": [{"id": "t1"}, "bad"]})
             self.assertEqual(store.read_objects(str(objects_path)), {"objects": [{"id": 1}]})
             self.assertEqual(store.read_tables(str(tables_path)), {"tables": [{"id": "t1"}]})
+
+    def test_sets_and_maps_filter_non_dict_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sets_path = pathlib.Path(tmp) / "sets.json"
+            maps_path = pathlib.Path(tmp) / "maps.json"
+            store.write_sets(str(sets_path), {"addr": [{"id": "a1"}, "bad"], "port": ["bad"], "iface": [1, {"id": "i1"}]})
+            store.write_maps(str(maps_path), {"map": [{"id": "m1"}, "bad"], "vmap": [None, {"id": "vm1"}]})
+            self.assertEqual(
+                store.read_sets(str(sets_path)),
+                {"addr": [{"id": "a1"}], "port": [], "iface": [{"id": "i1"}]},
+            )
+            self.assertEqual(
+                store.read_maps(str(maps_path)),
+                {"map": [{"id": "m1"}], "vmap": [{"id": "vm1"}]},
+            )
 
     def test_managed_tables_are_normalized_and_unique(self):
         with tempfile.TemporaryDirectory() as tmp:

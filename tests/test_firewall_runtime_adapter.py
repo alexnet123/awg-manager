@@ -123,6 +123,25 @@ class FirewallRuntimeAdapterTest(unittest.TestCase):
         self.assertFalse(active)
         self.assertEqual(index, {})
 
+    @mock.patch("backend.domains.firewall.runtime_adapter.subprocess.run")
+    def test_get_ruleset_counter_index_handles_non_dict_counter_payload(self, run_mock):
+        payload = {
+            "nftables": [
+                {
+                    "rule": {
+                        "family": "inet",
+                        "table": "filter",
+                        "chain": "input",
+                        "expr": [{"counter": "bad"}],
+                    }
+                }
+            ]
+        }
+        run_mock.return_value = types.SimpleNamespace(stdout=json.dumps(payload))
+        active, index = runtime_adapter.get_ruleset_counter_index("")
+        self.assertTrue(active)
+        self.assertEqual(index[("inet", "filter", "input")][0], {"packets": 0, "bytes": 0})
+
     def test_build_runtime_counters_by_rule_aligns_rule_order_per_chain(self):
         rules = [
             {"id": "r1", "enabled": True, "family": "inet", "table": "filter", "chain": "input"},

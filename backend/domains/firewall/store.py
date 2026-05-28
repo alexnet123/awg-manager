@@ -11,10 +11,12 @@ def read_rules(path):
     if isinstance(payload, dict):
         payload = payload.get('rules', [])
     elif isinstance(payload, list):
-        return payload
+        return [dict(row) for row in payload if isinstance(row, dict)]
     else:
         return []
-    return payload if isinstance(payload, list) else []
+    if not isinstance(payload, list):
+        return []
+    return [dict(row) for row in payload if isinstance(row, dict)]
 
 
 def write_rules(path, rules):
@@ -23,10 +25,14 @@ def write_rules(path, rules):
 
 def read_sets(path):
     data = json_store.read_json(path, {})
+    def _clean_rows(raw_rows):
+        if not isinstance(raw_rows, list):
+            return []
+        return [dict(row) for row in raw_rows if isinstance(row, dict)]
     return {
-        'addr': data.get('addr', []),
-        'port': data.get('port', []),
-        'iface': data.get('iface', []),
+        'addr': _clean_rows(data.get('addr', [])),
+        'port': _clean_rows(data.get('port', [])),
+        'iface': _clean_rows(data.get('iface', [])),
     }
 
 
@@ -36,9 +42,13 @@ def write_sets(path, data):
 
 def read_maps(path):
     data = json_store.read_json(path, {})
+    def _clean_rows(raw_rows):
+        if not isinstance(raw_rows, list):
+            return []
+        return [dict(row) for row in raw_rows if isinstance(row, dict)]
     return {
-        'map': data.get('map', []),
-        'vmap': data.get('vmap', []),
+        'map': _clean_rows(data.get('map', [])),
+        'vmap': _clean_rows(data.get('vmap', [])),
     }
 
 
