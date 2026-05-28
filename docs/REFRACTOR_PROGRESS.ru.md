@@ -1,6 +1,6 @@
 # Рефакторинг: прогресс работ
 
-Обновлено: 2026-05-27
+Обновлено: 2026-05-28
 
 Цель итерации:
 - параллельная модель разработки (`firewall` + `ipsec`) без конфликтов;
@@ -28,6 +28,20 @@
   - Этап 2 (истончение `awg_core.py`): `100%`.
   - Этап 3 (remove-cycle `B1`-`B4`): `100%`.
   - Общий backend decomposition до remove-cycle completion: `100%`.
+
+## 2026-05-28 — Onboarding и единые правила для новых агентов
+
+- Добавлена пара onboarding-документов для быстрого старта:
+  - `docs/development/START_HERE.md` (EN)
+  - `docs/development/START_HERE.ru.md` (RU)
+- В `docs/development/README.md` добавлены ссылки на новые onboarding-файлы.
+- В `START_HERE` зафиксированы:
+  - обязательные first-steps;
+  - архитектурные guardrails;
+  - единый `Definition of Done`;
+  - playbook-и по типам задач (`firewall`, структурный `ipsec`, `awg_core/manager_facade`).
+- Проверки:
+  - Тесты не запускались: изменения документационные, без изменения runtime-кода.
 
 ## 1) Инфраструктура и runtime-конфиги
 
