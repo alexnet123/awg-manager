@@ -19,6 +19,10 @@
 - [FIREWALL_BRIDGE_100_PLAN.ru.md](FIREWALL_BRIDGE_100_PLAN.ru.md) — план и текущий статус по `Policy v2 (bridge)` (B1/B2/B3).
 - [FIREWALL_OBJECTS_UI_PLAN.ru.md](FIREWALL_OBJECTS_UI_PLAN.ru.md) — понятный план по вкладке `Objects`: что это за сущности, где кнопки/модалки, как влияет на трафик.
 
+## Документация по IPsec
+
+- [IPSEC_LIVE_VALIDATION.md](IPSEC_LIVE_VALIDATION.md) — live-проверки IPsec/VICI/MikroTik: какие UI-поля реально работают, какие ограничены режимом, а какие выглядят как бутафория.
+
 ## Планирование и контроль качества
 
 - [FIREWALL_ADD_RULE_IMPLEMENTATION_PLAN.md](FIREWALL_ADD_RULE_IMPLEMENTATION_PLAN.md) — roadmap реализации.

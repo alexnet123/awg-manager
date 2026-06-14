@@ -48,6 +48,9 @@ class IpsecServiceLayerOpsTest(unittest.TestCase):
             service_ops.upsert_policy_service,
             service_ops.delete_peer_service,
             service_ops.delete_policy_service,
+            service_ops.delete_identity_service,
+            service_ops.delete_phase1_profile_service,
+            service_ops.delete_phase2_proposal_service,
         )
         try:
             service_ops.upsert_peer_service = lambda payload, **kwargs: (calls.append(("upsert_peer", payload, kwargs)), {"name": "peer"})[1]
@@ -57,6 +60,9 @@ class IpsecServiceLayerOpsTest(unittest.TestCase):
             service_ops.upsert_policy_service = lambda payload, **kwargs: (calls.append(("upsert_policy", payload, kwargs)), {"name": "policy"})[1]
             service_ops.delete_peer_service = lambda name, **kwargs: (calls.append(("delete_peer", name, kwargs)), {"name": name})[1]
             service_ops.delete_policy_service = lambda name, **kwargs: (calls.append(("delete_policy", name, kwargs)), {"name": name})[1]
+            service_ops.delete_identity_service = lambda name, **kwargs: (calls.append(("delete_identity", name, kwargs)), {"peer": name})[1]
+            service_ops.delete_phase1_profile_service = lambda name, **kwargs: (calls.append(("delete_p1", name, kwargs)), {"name": name})[1]
+            service_ops.delete_phase2_proposal_service = lambda name, **kwargs: (calls.append(("delete_p2", name, kwargs)), {"name": name})[1]
 
             payload = {"name": "x"}
             valid_name_fn = object()
@@ -152,8 +158,37 @@ class IpsecServiceLayerOpsTest(unittest.TestCase):
                 )["name"],
                 "policy-a",
             )
+            self.assertEqual(
+                service_layer_ops.delete_identity(
+                    "peer-a",
+                    read_collection_fn=read_collection_fn,
+                    write_collection_fn=write_collection_fn,
+                    identities_file="identities.json",
+                )["peer"],
+                "peer-a",
+            )
+            self.assertEqual(
+                service_layer_ops.delete_phase1_profile(
+                    "p1",
+                    read_collection_fn=read_collection_fn,
+                    write_collection_fn=write_collection_fn,
+                    phase1_profiles_file="phase1.json",
+                    peers_file="peers.json",
+                )["name"],
+                "p1",
+            )
+            self.assertEqual(
+                service_layer_ops.delete_phase2_proposal(
+                    "p2",
+                    read_collection_fn=read_collection_fn,
+                    write_collection_fn=write_collection_fn,
+                    phase2_proposals_file="phase2.json",
+                    policies_file="policies.json",
+                )["name"],
+                "p2",
+            )
             self.assertEqual(calls[0][0], "upsert_peer")
-            self.assertEqual(calls[-1][0], "delete_policy")
+            self.assertEqual(calls[-1][0], "delete_p2")
         finally:
             (
                 service_ops.upsert_peer_service,
@@ -163,6 +198,9 @@ class IpsecServiceLayerOpsTest(unittest.TestCase):
                 service_ops.upsert_policy_service,
                 service_ops.delete_peer_service,
                 service_ops.delete_policy_service,
+                service_ops.delete_identity_service,
+                service_ops.delete_phase1_profile_service,
+                service_ops.delete_phase2_proposal_service,
             ) = originals
 
     def test_event_and_runtime_delegation(self):

@@ -1,14 +1,26 @@
 import { type AuthState, headers, parseError } from '../common/api'
 
+export type IpsecIkeVersion = 1 | 2
+
 export type IpsecPeer = {
+  original_name?: string
   name: string
   remote_addrs: string[]
   local_addrs: string[]
-  ike_version: 2
+  ike_version: IpsecIkeVersion
   phase1_profile: string
   enabled: boolean
   dpd: boolean
+  dpd_delay: string
+  dpd_timeout: string
   nat_t: boolean
+  mobike: 'yes' | 'no'
+  fragmentation: 'yes' | 'accept' | 'force' | 'no'
+  rekey_time: string
+  reauth_time: string
+  over_time: string
+  rand_time: string
+  keyingtries: string
   send_initial_contact: boolean
 }
 
@@ -17,11 +29,13 @@ export type IpsecIdentity = {
   auth_method: 'psk'
   local_id: string
   remote_id: string
+  enabled: boolean
   psk?: string
   has_psk?: boolean
 }
 
 export type IpsecPolicy = {
+  original_name?: string
   name: string
   peer: string
   local_ts: string[]
@@ -29,44 +43,85 @@ export type IpsecPolicy = {
   proposal: string
   action: 'encrypt'
   level: 'require' | 'use'
-  mode: 'tunnel'
-  start_action: 'start' | 'trap' | 'none'
+  mode: 'tunnel' | 'transport' | 'beet' | 'pass' | 'drop'
+  start_action: 'start' | 'trap' | 'none' | 'trap|start'
+  close_action: 'none' | 'trap' | 'start'
+  dpd_action: 'clear' | 'trap' | 'restart'
+  rekey_time: string
+  life_time: string
+  rand_time: string
+  policies: 'yes' | 'no'
+  policies_fwd_out: 'yes' | 'no'
+  reqid: string
+  priority: string
+  interface: string
+  mark_in: string
+  mark_in_sa: 'yes' | 'no'
+  mark_out: string
+  set_mark_in: string
+  set_mark_out: string
+  if_id_in: string
+  if_id_out: string
   enabled: boolean
 }
 
 export type IpsecPhase1Profile = {
+  original_name?: string
   name: string
   encryption: string
   hash: string
   dh_group: string
+  prf: string
   lifetime: string
+  enabled: boolean
   proposal_check: string
   proposal_string?: string
+  extra_proposals?: string[]
 }
 
 export type IpsecPhase2Proposal = {
   name: string
+  original_name?: string
   encryption: string
   auth: string
   pfs_group?: string | null
+  esn?: string | null
   lifetime: string
+  enabled: boolean
   proposal_string?: string
+  extra_proposals?: string[]
 }
 
 export type IpsecActivePeer = {
   status: string
   peer: string
+  id?: string
+  local_address?: string
+  local_port?: string
   remote_address: string
+  remote_port?: string
+  dynamic_address?: string
+  side?: string
   ike_version: string
   profile: string
   uptime: string
   rekey: string
+  last_seen?: string
+  ph2_total?: number
+  tx_bytes?: number
+  rx_bytes?: number
+  tx_packets?: number
+  rx_packets?: number
   state: string
 }
 
 export type IpsecInstalledSa = {
   state: string
   child_sa: string
+  uniqueid?: string
+  reqid?: string
+  mode?: string
+  protocol?: string
   spi_in: string
   spi_out: string
   local_ts: string[]
@@ -74,6 +129,12 @@ export type IpsecInstalledSa = {
   esp_proposal: string
   bytes_in: number
   bytes_out: number
+  packets_in?: number
+  packets_out?: number
+  rekey_time?: string
+  life_time?: string
+  install_time?: string
+  last_seen?: string
 }
 
 export type IpsecApplyResult = {
@@ -81,6 +142,12 @@ export type IpsecApplyResult = {
   initiated_policies: string[]
   active_peers: IpsecActivePeer[]
   installed_sas: { items: IpsecInstalledSa[]; xfrm?: { state?: string; policy?: string } }
+  warnings: string[]
+}
+
+export type IpsecConfigPreview = {
+  connections: Record<string, unknown>
+  secrets: Array<Record<string, unknown>>
   warnings: string[]
 }
 
@@ -117,6 +184,13 @@ export async function getIpsecIdentities(auth: AuthState): Promise<IpsecIdentity
   return payload.items || []
 }
 
+export async function getIpsecIdentityPsk(auth: AuthState, peer: string): Promise<{ peer: string; psk: string }> {
+  const res = await fetch(`/api/ipsec/identities/${encodeURIComponent(peer)}/psk`, { headers: headers(auth) })
+  if (!res.ok) throw new Error(await parseError(res))
+  const payload = await res.json()
+  return payload.item
+}
+
 export async function upsertIpsecIdentity(auth: AuthState, body: Partial<IpsecIdentity>): Promise<IpsecIdentity> {
   const res = await fetch('/api/ipsec/identities', {
     method: 'POST',
@@ -126,6 +200,11 @@ export async function upsertIpsecIdentity(auth: AuthState, body: Partial<IpsecId
   if (!res.ok) throw new Error(await parseError(res))
   const payload = await res.json()
   return payload.item
+}
+
+export async function deleteIpsecIdentity(auth: AuthState, peer: string): Promise<void> {
+  const res = await fetch(`/api/ipsec/identities/${encodeURIComponent(peer)}`, { method: 'DELETE', headers: headers(auth) })
+  if (!res.ok) throw new Error(await parseError(res))
 }
 
 export async function getIpsecPolicies(auth: AuthState): Promise<IpsecPolicy[]> {
@@ -172,6 +251,11 @@ export async function upsertIpsecPhase1Profile(auth: AuthState, body: Partial<Ip
   return payload.item
 }
 
+export async function deleteIpsecPhase1Profile(auth: AuthState, name: string): Promise<void> {
+  const res = await fetch(`/api/ipsec/phase1-profiles/${encodeURIComponent(name)}`, { method: 'DELETE', headers: headers(auth) })
+  if (!res.ok) throw new Error(await parseError(res))
+}
+
 export async function getIpsecPhase2Proposals(auth: AuthState): Promise<IpsecPhase2Proposal[]> {
   const res = await fetch('/api/ipsec/phase2-proposals', { headers: headers(auth) })
   if (!res.ok) throw new Error(await parseError(res))
@@ -190,6 +274,11 @@ export async function upsertIpsecPhase2Proposal(auth: AuthState, body: Partial<I
   return payload.item
 }
 
+export async function deleteIpsecPhase2Proposal(auth: AuthState, name: string): Promise<void> {
+  const res = await fetch(`/api/ipsec/phase2-proposals/${encodeURIComponent(name)}`, { method: 'DELETE', headers: headers(auth) })
+  if (!res.ok) throw new Error(await parseError(res))
+}
+
 export async function applyIpsec(auth: AuthState): Promise<IpsecApplyResult> {
   const res = await fetch('/api/ipsec/apply', {
     method: 'POST',
@@ -199,6 +288,15 @@ export async function applyIpsec(auth: AuthState): Promise<IpsecApplyResult> {
   if (!res.ok) throw new Error(await parseError(res))
   const payload = await res.json()
   return payload.item
+}
+
+export async function loadIpsecPeer(auth: AuthState, peerName: string): Promise<void> {
+  const res = await fetch(`/api/ipsec/load/${encodeURIComponent(peerName)}`, {
+    method: 'POST',
+    headers: headers(auth, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify({}),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
 }
 
 export async function getIpsecActivePeers(auth: AuthState): Promise<IpsecActivePeer[]> {
@@ -213,6 +311,13 @@ export async function getIpsecInstalledSas(auth: AuthState): Promise<{ items: Ip
   if (!res.ok) throw new Error(await parseError(res))
   const payload = await res.json()
   return payload.items || { items: [] }
+}
+
+export async function getIpsecConfigPreview(auth: AuthState): Promise<IpsecConfigPreview> {
+  const res = await fetch('/api/ipsec/config-preview', { headers: headers(auth) })
+  if (!res.ok) throw new Error(await parseError(res))
+  const payload = await res.json()
+  return payload.item || { connections: {}, secrets: [], warnings: [] }
 }
 
 export async function initiateIpsecPolicy(auth: AuthState, policyName: string): Promise<void> {

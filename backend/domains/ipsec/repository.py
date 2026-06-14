@@ -10,6 +10,10 @@ def list_identities():
     return get_manager().list_ipsec_identities_service()
 
 
+def get_identity_psk(peer):
+    return get_manager().get_ipsec_identity_psk_service(peer)
+
+
 def list_policies():
     return get_manager().list_ipsec_policies_service()
 
@@ -53,3 +57,14 @@ def delete_peer(name):
 def delete_policy(name):
     return get_manager().delete_ipsec_policy_service(name)
 
+
+def delete_identity(name):
+    return get_manager().delete_ipsec_identity_service(name)
+
+
+def delete_phase1_profile(name):
+    return get_manager().delete_ipsec_phase1_profile_service(name)
+
+
+def delete_phase2_proposal(name):
+    return get_manager().delete_ipsec_phase2_proposal_service(name)

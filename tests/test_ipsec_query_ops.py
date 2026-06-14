@@ -12,8 +12,10 @@ class IpsecQueryOpsTest(unittest.TestCase):
         out = query_ops.list_ipsec_identities(read_collection_fn=lambda: rows)
         self.assertEqual(out[0]["peer"], "peer-a")
         self.assertTrue(out[0]["has_psk"])
+        self.assertTrue(out[0]["enabled"])
         self.assertNotIn("psk_encrypted", out[0])
         self.assertFalse(out[1]["has_psk"])
+        self.assertTrue(out[1]["enabled"])
 
     def test_ensure_item_exists_by_name(self):
         rows = [{"name": "peer-a"}, {"name": "peer-b"}]

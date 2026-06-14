@@ -30,6 +30,7 @@
     - `list_ipsec_peers_service`, `list_ipsec_identities_service`
     - `list_ipsec_policies_service`, `list_ipsec_phase1_profiles_service`, `list_ipsec_phase2_proposals_service`
     - `list_ipsec_events_service`, `list_ipsec_active_peers_service`, `list_ipsec_installed_sas_service`
+    - `get_ipsec_config_preview_service`
   - backend-first маршрутизация IPsec write:
     - `upsert_ipsec_peer_service`, `upsert_ipsec_identity_service`, `upsert_ipsec_phase1_profile_service`
     - `upsert_ipsec_phase2_proposal_service`, `upsert_ipsec_policy_service`
@@ -260,8 +261,9 @@
   - `handle_get`, `handle_post`, `handle_put`, `handle_delete`
 - `repository.py`: CRUD для peers/policies/profiles/identities/events.
   - `list_peers`, `upsert_peer`, `upsert_policy`, `delete_peer`, `delete_policy`
+  - `delete_identity`, `delete_phase1_profile`, `delete_phase2_proposal`
 - `runtime_adapter.py`: интеграция с активными peers/SAs и runtime-действиями.
-  - `apply_config`, `load_peer`, `initiate_policy`, `terminate_peer`
+  - `get_config_preview`, `apply_config`, `load_peer`, `initiate_policy`, `terminate_peer`
 - `store.py`: JSON-хранилище и удержание истории событий.
   - `read_collection`, `write_collection`, `append_event`, `list_events`
 - `validation_ops.py`: helper-ы нормализации IPsec payload и proposal-string.
@@ -269,31 +271,35 @@
   - `build_phase1_proposal_string`, `build_phase2_proposal_string`
 - `query_ops.py`: helper-ы безопасного list/existence-query для IPsec коллекций.
   - `list_ipsec_identities`, `ensure_item_exists_by_name`
+  - identity list responses скрывают encrypted PSK, отдают `has_psk` и нормализуют legacy rows к `enabled: true`.
 - `crud_ops.py`: helper-ы IPsec CRUD-оркестрации для peers/identities/profiles/policies.
+  - владеет сохраненной metadata-настройкой `enabled` для peers, identities, phase profiles/proposals и policies.
   - `upsert_peer`, `upsert_identity`, `upsert_phase1_profile`, `upsert_phase2_proposal`, `upsert_policy`
-  - `delete_peer`, `delete_policy`
+  - `delete_peer`, `delete_policy`, `delete_identity`, `delete_phase1_profile`, `delete_phase2_proposal`
 - `runtime_ops.py`: helper-ы runtime-оркестрации IPsec и интеграции с VICI/xfrm.
   - `log_event`, `list_events`, `vici_session`, `collect_refs`
-  - `build_vici_connection_for_peer`, `build_vici_secret_for_peer`
+  - `build_vici_connection_for_peer`, `build_vici_secret_for_peer`, `build_vici_secret_metadata_for_peer`
+  - `build_config_preview` собирает read-only preview VICI `load_conn` и metadata secrets без открытия VICI-сессии и без раскрытия PSK.
   - `sanitize_vici_sas`, `extract_active_peers_from_sas`, `extract_installed_sas_from_sas`
   - `run_ip_xfrm_best_effort`, `list_active_peers`, `list_installed_sas`
   - `load_peer`, `initiate_policy`, `terminate_peer`, `apply_config`
+  - runtime-effective `load/apply` каскадно останавливает и выгружает peers, если отключены сам peer, identity, Phase 1 profile, набор enabled policies или связанный Phase 2 proposal.
 - `service_ops.py`: сервисный слой композиции IPsec, связывающий collections/CRUD/runtime через контрактно-совместимые адаптеры.
   - list/read сервисы: `list_peers_service`, `list_identities_service`, `list_phase1_profiles_service`, `list_phase2_proposals_service`, `list_policies_service`
   - проверки существования: `ensure_peer_exists`, `ensure_phase1_exists`, `ensure_phase2_exists`
-  - CRUD-композиция: `upsert_peer_service`, `upsert_identity_service`, `upsert_phase1_profile_service`, `upsert_phase2_proposal_service`, `upsert_policy_service`, `delete_peer_service`, `delete_policy_service`
-  - runtime-композиция: `log_event_service`, `list_events_service`, `list_active_peers_service`, `list_installed_sas_service`, `load_peer_service`, `initiate_policy_service`, `terminate_peer_service`, `apply_config_service`
+  - CRUD-композиция: `upsert_peer_service`, `upsert_identity_service`, `upsert_phase1_profile_service`, `upsert_phase2_proposal_service`, `upsert_policy_service`, `delete_peer_service`, `delete_policy_service`, `delete_identity_service`, `delete_phase1_profile_service`, `delete_phase2_proposal_service`
+  - runtime-композиция: `log_event_service`, `list_events_service`, `list_active_peers_service`, `list_installed_sas_service`, `get_config_preview_service`, `load_peer_service`, `initiate_policy_service`, `terminate_peer_service`, `apply_config_service`
 - `service_layer_ops.py`: слой IPsec compatibility-композиции для legacy compatibility service-оберток.
   - list/read wiring: `list_peers`, `list_identities`, `list_phase1_profiles`, `list_phase2_proposals`, `list_policies`
-  - CRUD wiring: `upsert_peer`, `upsert_identity`, `upsert_phase1_profile`, `upsert_phase2_proposal`, `upsert_policy`, `delete_peer`, `delete_policy`
-  - runtime wiring: `log_event`, `list_events`, `list_active_peers`, `list_installed_sas`, `load_peer`, `initiate_policy`, `terminate_peer`, `apply_config`
+  - CRUD wiring: `upsert_peer`, `upsert_identity`, `upsert_phase1_profile`, `upsert_phase2_proposal`, `upsert_policy`, `delete_peer`, `delete_policy`, `delete_identity`, `delete_phase1_profile`, `delete_phase2_proposal`
+  - runtime wiring: `log_event`, `list_events`, `list_active_peers`, `list_installed_sas`, `get_config_preview`, `load_peer`, `initiate_policy`, `terminate_peer`, `apply_config`
 - `compat_entry_ops.py`: compat entry-слой IPsec, который используется `backend.app.legacy_manager_compat`.
   - инкапсулирует callback wiring для store/validation/proposal/crypto/event helper-ов поверх `service_layer_ops`
-  - экспортирует compatibility-обертки: `list_*`, `upsert_*`, `delete_*`, `list_events_service`, `list_active_peers_service`, `list_installed_sas_service`, `load_peer_service`, `initiate_policy_service`, `terminate_peer_service`, `apply_config_service`
+  - экспортирует compatibility-обертки: `list_*`, `upsert_*`, `delete_*`, `list_events_service`, `list_active_peers_service`, `list_installed_sas_service`, `get_config_preview_service`, `load_peer_service`, `initiate_policy_service`, `terminate_peer_service`, `apply_config_service`
 - `service_facade_ops.py`: facade-слой IPsec, инкапсулирующий legacy compatibility helper wiring (store/validation/crypto/files).
   - helper wiring: `_read_collection`, `_write_collection`, `_valid_name`, `_normalize_ip_list`, `_normalize_ts_list`
   - wiring proposal/secret: `_build_phase1_proposal_string`, `_build_phase2_proposal_string`, `_secret_encrypt`, `_secret_decrypt`
-  - публичные service-обертки: `list_*`, `upsert_*`, `delete_*`, `list_events_service`, `list_active_peers_service`, `list_installed_sas_service`, `load_peer_service`, `initiate_policy_service`, `terminate_peer_service`, `apply_config_service`
+  - публичные service-обертки: `list_*`, `upsert_*`, `delete_*`, `list_events_service`, `list_active_peers_service`, `list_installed_sas_service`, `get_config_preview_service`, `load_peer_service`, `initiate_policy_service`, `terminate_peer_service`, `apply_config_service`
 
 ### `awg_core.py` (удален)
 
@@ -367,8 +373,8 @@
 ### `webui/src/frontend/domains/ipsec/api.ts`
 
 - Клиент контрактов IPsec API:
-  - CRUD: `getIpsecPeers`, `upsertIpsecPeer`, `deleteIpsecPeer`, `getIpsecPolicies`, `upsertIpsecPolicy`, `deleteIpsecPolicy`
-  - runtime/actions: `applyIpsec`, `getIpsecActivePeers`, `getIpsecInstalledSas`, `initiateIpsecPolicy`, `terminateIpsecPeer`
+  - CRUD: `getIpsecPeers`, `upsertIpsecPeer`, `deleteIpsecPeer`, `getIpsecPolicies`, `upsertIpsecPolicy`, `deleteIpsecPolicy`, `deleteIpsecIdentity`, `deleteIpsecPhase1Profile`, `deleteIpsecPhase2Proposal`
+  - runtime/actions: `applyIpsec`, `getIpsecActivePeers`, `getIpsecInstalledSas`, `getIpsecConfigPreview`, `initiateIpsecPolicy`, `terminateIpsecPeer`
 
 ## Правило для новых шагов рефакторинга
 

@@ -10,11 +10,26 @@ class IpsecCompatEntryOpsTest(unittest.TestCase):
         originals = (
             service_layer_ops.list_peers,
             service_layer_ops.delete_policy,
+            service_layer_ops.delete_identity,
+            service_layer_ops.delete_phase1_profile,
+            service_layer_ops.delete_phase2_proposal,
         )
         try:
             service_layer_ops.list_peers = lambda **kwargs: (calls.append(("list", kwargs)), ["peer-a"])[1]
             service_layer_ops.delete_policy = lambda name, **kwargs: (
                 calls.append(("delete_policy", name, kwargs)),
+                {"name": name},
+            )[1]
+            service_layer_ops.delete_identity = lambda name, **kwargs: (
+                calls.append(("delete_identity", name, kwargs)),
+                {"peer": name},
+            )[1]
+            service_layer_ops.delete_phase1_profile = lambda name, **kwargs: (
+                calls.append(("delete_p1", name, kwargs)),
+                {"name": name},
+            )[1]
+            service_layer_ops.delete_phase2_proposal = lambda name, **kwargs: (
+                calls.append(("delete_p2", name, kwargs)),
                 {"name": name},
             )[1]
 
@@ -26,16 +41,40 @@ class IpsecCompatEntryOpsTest(unittest.TestCase):
                 compat_entry_ops.delete_policy_service("policy-a", policies_file="policies.json"),
                 {"name": "policy-a"},
             )
+            self.assertEqual(
+                compat_entry_ops.delete_identity_service("peer-a", identities_file="identities.json"),
+                {"peer": "peer-a"},
+            )
+            self.assertEqual(
+                compat_entry_ops.delete_phase1_profile_service(
+                    "p1",
+                    phase1_profiles_file="phase1.json",
+                    peers_file="peers.json",
+                ),
+                {"name": "p1"},
+            )
+            self.assertEqual(
+                compat_entry_ops.delete_phase2_proposal_service(
+                    "p2",
+                    phase2_proposals_file="phase2.json",
+                    policies_file="policies.json",
+                ),
+                {"name": "p2"},
+            )
 
             self.assertIs(calls[0][1]["read_collection_fn"], compat_entry_ops._read_collection)
             self.assertEqual(calls[0][1]["peers_file"], "peers.json")
             self.assertIs(calls[1][2]["read_collection_fn"], compat_entry_ops._read_collection)
             self.assertIs(calls[1][2]["write_collection_fn"], compat_entry_ops._write_collection)
             self.assertEqual(calls[1][2]["policies_file"], "policies.json")
+            self.assertEqual(calls[-1][2]["phase2_proposals_file"], "phase2.json")
         finally:
             (
                 service_layer_ops.list_peers,
                 service_layer_ops.delete_policy,
+                service_layer_ops.delete_identity,
+                service_layer_ops.delete_phase1_profile,
+                service_layer_ops.delete_phase2_proposal,
             ) = originals
 
     def test_upsert_identity_wiring_uses_validation_and_crypto(self):
@@ -174,4 +213,34 @@ class IpsecCompatEntryOpsTest(unittest.TestCase):
                 service_layer_ops.apply_config,
                 service_layer_ops.log_event,
                 compat_entry_ops.crypto_keys.decrypt_with_key_fallback,
+            ) = originals
+
+    def test_runtime_callback_factories(self):
+        calls = []
+        originals = (
+            compat_entry_ops.crypto_keys.decrypt_with_key_fallback,
+            compat_entry_ops.log_event,
+        )
+        try:
+            compat_entry_ops.crypto_keys.decrypt_with_key_fallback = (
+                lambda token, keys, decrypt_fn, continue_exceptions: f"dec:{token}:{len(keys)}"
+            )
+            compat_entry_ops.log_event = (
+                lambda event_type, payload, events_file: calls.append((event_type, payload, events_file))
+            )
+
+            decrypt_cb = compat_entry_ops._build_secret_decrypt_fn(
+                encryption_key=b"k1",
+                encryption_key_legacy=b"k2",
+                fernet_decrypt_fn=lambda _key, token: token,
+            )
+            self.assertEqual(decrypt_cb("enc-token"), "dec:enc-token:2")
+
+            log_cb = compat_entry_ops._build_log_event_fn(events_file="events.json")
+            log_cb("test_event", {"ok": True})
+            self.assertEqual(calls, [("test_event", {"ok": True}, "events.json")])
+        finally:
+            (
+                compat_entry_ops.crypto_keys.decrypt_with_key_fallback,
+                compat_entry_ops.log_event,
             ) = originals

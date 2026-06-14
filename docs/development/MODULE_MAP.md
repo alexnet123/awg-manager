@@ -30,6 +30,7 @@ This document tracks module ownership during the modular refactor and explains w
     - `list_ipsec_peers_service`, `list_ipsec_identities_service`
     - `list_ipsec_policies_service`, `list_ipsec_phase1_profiles_service`, `list_ipsec_phase2_proposals_service`
     - `list_ipsec_events_service`, `list_ipsec_active_peers_service`, `list_ipsec_installed_sas_service`
+    - `get_ipsec_config_preview_service`
   - backend-first IPsec write routing:
     - `upsert_ipsec_peer_service`, `upsert_ipsec_identity_service`, `upsert_ipsec_phase1_profile_service`
     - `upsert_ipsec_phase2_proposal_service`, `upsert_ipsec_policy_service`
@@ -260,8 +261,9 @@ This document tracks module ownership during the modular refactor and explains w
   - `handle_get`, `handle_post`, `handle_put`, `handle_delete`
 - `repository.py`: CRUD for peers/policies/profiles/identities/events.
   - `list_peers`, `upsert_peer`, `upsert_policy`, `delete_peer`, `delete_policy`
+  - `delete_identity`, `delete_phase1_profile`, `delete_phase2_proposal`
 - `runtime_adapter.py`: integration with active peers/SAs and runtime actions.
-  - `apply_config`, `load_peer`, `initiate_policy`, `terminate_peer`
+  - `get_config_preview`, `apply_config`, `load_peer`, `initiate_policy`, `terminate_peer`
 - `store.py`: JSON storage and events retention.
   - `read_collection`, `write_collection`, `append_event`, `list_events`
 - `validation_ops.py`: IPsec payload normalization and proposal-string helpers.
@@ -269,31 +271,35 @@ This document tracks module ownership during the modular refactor and explains w
   - `build_phase1_proposal_string`, `build_phase2_proposal_string`
 - `query_ops.py`: IPsec collection-query helpers for safe list and existence checks.
   - `list_ipsec_identities`, `ensure_item_exists_by_name`
+  - identity list responses strip encrypted PSK material, expose `has_psk`, and default legacy rows to `enabled: true`
 - `crud_ops.py`: IPsec CRUD orchestration helpers for peers/identities/profiles/policies.
+  - owns persisted `enabled` metadata for peers, identities, phase profiles/proposals, and policies
   - `upsert_peer`, `upsert_identity`, `upsert_phase1_profile`, `upsert_phase2_proposal`, `upsert_policy`
-  - `delete_peer`, `delete_policy`
+  - `delete_peer`, `delete_policy`, `delete_identity`, `delete_phase1_profile`, `delete_phase2_proposal`
 - `runtime_ops.py`: IPsec runtime orchestration and VICI/xfrm integration helpers.
   - `log_event`, `list_events`, `vici_session`, `collect_refs`
-  - `build_vici_connection_for_peer`, `build_vici_secret_for_peer`
+  - `build_vici_connection_for_peer`, `build_vici_secret_for_peer`, `build_vici_secret_metadata_for_peer`
+  - `build_config_preview` builds a read-only VICI `load_conn` preview and secret metadata without opening a VICI session or exposing PSK material
   - `sanitize_vici_sas`, `extract_active_peers_from_sas`, `extract_installed_sas_from_sas`
   - `run_ip_xfrm_best_effort`, `list_active_peers`, `list_installed_sas`
   - `load_peer`, `initiate_policy`, `terminate_peer`, `apply_config`
+  - runtime-effective load/apply cascades stop and unload peers when the peer, identity, Phase 1 profile, enabled policy set, or referenced Phase 2 proposal is disabled
 - `service_ops.py`: IPsec service-level composition layer that wires collections/CRUD/runtime by contract-safe adapters.
   - list/read services: `list_peers_service`, `list_identities_service`, `list_phase1_profiles_service`, `list_phase2_proposals_service`, `list_policies_service`
   - existence checks: `ensure_peer_exists`, `ensure_phase1_exists`, `ensure_phase2_exists`
-  - CRUD composition: `upsert_peer_service`, `upsert_identity_service`, `upsert_phase1_profile_service`, `upsert_phase2_proposal_service`, `upsert_policy_service`, `delete_peer_service`, `delete_policy_service`
-  - runtime composition: `log_event_service`, `list_events_service`, `list_active_peers_service`, `list_installed_sas_service`, `load_peer_service`, `initiate_policy_service`, `terminate_peer_service`, `apply_config_service`
+  - CRUD composition: `upsert_peer_service`, `upsert_identity_service`, `upsert_phase1_profile_service`, `upsert_phase2_proposal_service`, `upsert_policy_service`, `delete_peer_service`, `delete_policy_service`, `delete_identity_service`, `delete_phase1_profile_service`, `delete_phase2_proposal_service`
+  - runtime composition: `log_event_service`, `list_events_service`, `list_active_peers_service`, `list_installed_sas_service`, `get_config_preview_service`, `load_peer_service`, `initiate_policy_service`, `terminate_peer_service`, `apply_config_service`
 - `service_layer_ops.py`: IPsec compatibility composition layer for legacy compatibility service wrappers.
   - list/read wiring: `list_peers`, `list_identities`, `list_phase1_profiles`, `list_phase2_proposals`, `list_policies`
-  - CRUD wiring: `upsert_peer`, `upsert_identity`, `upsert_phase1_profile`, `upsert_phase2_proposal`, `upsert_policy`, `delete_peer`, `delete_policy`
-  - runtime wiring: `log_event`, `list_events`, `list_active_peers`, `list_installed_sas`, `load_peer`, `initiate_policy`, `terminate_peer`, `apply_config`
+  - CRUD wiring: `upsert_peer`, `upsert_identity`, `upsert_phase1_profile`, `upsert_phase2_proposal`, `upsert_policy`, `delete_peer`, `delete_policy`, `delete_identity`, `delete_phase1_profile`, `delete_phase2_proposal`
+  - runtime wiring: `log_event`, `list_events`, `list_active_peers`, `list_installed_sas`, `get_config_preview`, `load_peer`, `initiate_policy`, `terminate_peer`, `apply_config`
 - `compat_entry_ops.py`: IPsec compatibility entry layer used by `backend.app.legacy_manager_compat`.
   - encapsulates callback wiring for store/validation/proposal/crypto/event helpers over `service_layer_ops`
-  - exports compatibility wrappers: `list_*`, `upsert_*`, `delete_*`, `list_events_service`, `list_active_peers_service`, `list_installed_sas_service`, `load_peer_service`, `initiate_policy_service`, `terminate_peer_service`, `apply_config_service`
+  - exports compatibility wrappers: `list_*`, `upsert_*`, `delete_*`, `list_events_service`, `list_active_peers_service`, `list_installed_sas_service`, `get_config_preview_service`, `load_peer_service`, `initiate_policy_service`, `terminate_peer_service`, `apply_config_service`
 - `service_facade_ops.py`: IPsec facade layer that encapsulates legacy compatibility helper wiring (store/validation/crypto/files).
   - helper wiring: `_read_collection`, `_write_collection`, `_valid_name`, `_normalize_ip_list`, `_normalize_ts_list`
   - proposal/secret wiring: `_build_phase1_proposal_string`, `_build_phase2_proposal_string`, `_secret_encrypt`, `_secret_decrypt`
-  - public service wrappers: `list_*`, `upsert_*`, `delete_*`, `list_events_service`, `list_active_peers_service`, `list_installed_sas_service`, `load_peer_service`, `initiate_policy_service`, `terminate_peer_service`, `apply_config_service`
+  - public service wrappers: `list_*`, `upsert_*`, `delete_*`, `list_events_service`, `list_active_peers_service`, `list_installed_sas_service`, `get_config_preview_service`, `load_peer_service`, `initiate_policy_service`, `terminate_peer_service`, `apply_config_service`
 
 ### `awg_core.py` (removed)
 
@@ -367,8 +373,8 @@ This document tracks module ownership during the modular refactor and explains w
 ### `webui/src/frontend/domains/ipsec/api.ts`
 
 - IPsec API contract client:
-  - CRUD: `getIpsecPeers`, `upsertIpsecPeer`, `deleteIpsecPeer`, `getIpsecPolicies`, `upsertIpsecPolicy`, `deleteIpsecPolicy`
-  - runtime/actions: `applyIpsec`, `getIpsecActivePeers`, `getIpsecInstalledSas`, `initiateIpsecPolicy`, `terminateIpsecPeer`
+  - CRUD: `getIpsecPeers`, `upsertIpsecPeer`, `deleteIpsecPeer`, `getIpsecPolicies`, `upsertIpsecPolicy`, `deleteIpsecPolicy`, `deleteIpsecIdentity`, `deleteIpsecPhase1Profile`, `deleteIpsecPhase2Proposal`
+  - runtime/actions: `applyIpsec`, `getIpsecActivePeers`, `getIpsecInstalledSas`, `getIpsecConfigPreview`, `initiateIpsecPolicy`, `terminateIpsecPeer`
 
 ## Migration Rule for New Refactor Steps
 

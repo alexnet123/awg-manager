@@ -61,6 +61,7 @@ class _ManagerStub:
         self.clients = []
         self.ipsec_peers = []
         self.ipsec_identities = []
+        self.ipsec_identity_psks = {}
         self.ipsec_policies = []
         self.ipsec_phase1_profiles = []
         self.ipsec_phase2_proposals = []
@@ -215,33 +216,90 @@ class _ManagerStub:
 
     def upsert_ipsec_phase1_profile_service(self, payload):
         self.ipsec_phase1_profiles = [x for x in self.ipsec_phase1_profiles if x.get("name") != payload.get("name")]
-        row = dict(payload)
+        row = {
+            "enabled": True,
+            "prf": "prfsha256",
+            "proposal_check": "obey",
+            "extra_proposals": [],
+            **dict(payload),
+        }
         self.ipsec_phase1_profiles.append(row)
         return row
 
     def upsert_ipsec_phase2_proposal_service(self, payload):
         self.ipsec_phase2_proposals = [x for x in self.ipsec_phase2_proposals if x.get("name") != payload.get("name")]
-        row = dict(payload)
+        row = {
+            "enabled": True,
+            "esn": None,
+            "extra_proposals": [],
+            **dict(payload),
+        }
         self.ipsec_phase2_proposals.append(row)
         return row
 
     def upsert_ipsec_peer_service(self, payload):
         self.ipsec_peers = [x for x in self.ipsec_peers if x.get("name") != payload.get("name")]
-        row = dict(payload)
+        row = {
+            "enabled": True,
+            "dpd": True,
+            "dpd_delay": "30s",
+            "dpd_timeout": "120s",
+            "nat_t": True,
+            "mobike": "yes",
+            "fragmentation": "yes",
+            "rekey_time": "1d",
+            "reauth_time": "0s",
+            "over_time": "",
+            "rand_time": "",
+            "keyingtries": "0",
+            "send_initial_contact": True,
+            **dict(payload),
+        }
         self.ipsec_peers.append(row)
         return row
 
     def upsert_ipsec_identity_service(self, payload):
         self.ipsec_identities = [x for x in self.ipsec_identities if x.get("peer") != payload.get("peer")]
         row = dict(payload)
+        if row.get("psk"):
+            self.ipsec_identity_psks[row.get("peer")] = row.get("psk")
         row.pop("psk", None)
         row["has_psk"] = True
         self.ipsec_identities.append(row)
         return row
 
+    def get_ipsec_identity_psk_service(self, peer):
+        if peer not in self.ipsec_identity_psks:
+            raise LookupError("identity psk not found")
+        return {"peer": peer, "psk": self.ipsec_identity_psks[peer]}
+
     def upsert_ipsec_policy_service(self, payload):
         self.ipsec_policies = [x for x in self.ipsec_policies if x.get("name") != payload.get("name")]
-        row = dict(payload)
+        row = {
+            "action": "encrypt",
+            "level": "require",
+            "mode": "tunnel",
+            "start_action": "start",
+            "close_action": "none",
+            "dpd_action": "restart",
+            "rekey_time": "1h",
+            "life_time": "",
+            "rand_time": "",
+            "policies": "yes",
+            "policies_fwd_out": "no",
+            "reqid": "",
+            "priority": "",
+            "interface": "",
+            "mark_in": "",
+            "mark_in_sa": "no",
+            "mark_out": "",
+            "set_mark_in": "",
+            "set_mark_out": "",
+            "if_id_in": "",
+            "if_id_out": "",
+            "enabled": True,
+            **dict(payload),
+        }
         self.ipsec_policies.append(row)
         return row
 
@@ -259,11 +317,60 @@ class _ManagerStub:
         self.ipsec_peers = [x for x in self.ipsec_peers if x.get("name") != name]
         return existing
 
+    def delete_ipsec_identity_service(self, peer):
+        existing = next((x for x in self.ipsec_identities if x.get("peer") == peer), None)
+        if existing is None:
+            raise LookupError("identity not found")
+        self.ipsec_identities = [x for x in self.ipsec_identities if x.get("peer") != peer]
+        self.ipsec_identity_psks.pop(peer, None)
+        return existing
+
+    def delete_ipsec_phase1_profile_service(self, name):
+        existing = next((x for x in self.ipsec_phase1_profiles if x.get("name") == name), None)
+        if existing is None:
+            raise LookupError("phase1 profile not found")
+        self.ipsec_phase1_profiles = [x for x in self.ipsec_phase1_profiles if x.get("name") != name]
+        return existing
+
+    def delete_ipsec_phase2_proposal_service(self, name):
+        existing = next((x for x in self.ipsec_phase2_proposals if x.get("name") == name), None)
+        if existing is None:
+            raise LookupError("phase2 proposal not found")
+        self.ipsec_phase2_proposals = [x for x in self.ipsec_phase2_proposals if x.get("name") != name]
+        return existing
+
     def list_ipsec_active_peers_service(self):
         return [{"peer": "peer-a", "state": "ESTABLISHED", "remote_address": "2.2.2.2"}]
 
     def list_ipsec_installed_sas_service(self):
         return {"items": [{"child_sa": "lan-to-lan", "state": "INSTALLED"}], "xfrm": {"state": "", "policy": ""}}
+
+    def get_ipsec_config_preview_service(self):
+        return {
+            "connections": {
+                "peer-a": {
+                    "version": "2",
+                    "children": {"pol-a": {"local_ts": ["10.0.0.0/24"], "remote_ts": ["10.1.0.0/24"]}},
+                }
+            },
+            "secrets": [{"id": "ike-peer-a", "type": "IKE", "owners": ["1.1.1.1", "2.2.2.2"], "secret_set": True}],
+            "warnings": [],
+        }
+
+    def get_ipsec_config_status_service(self):
+        preview = self.get_ipsec_config_preview_service()
+        return {
+            "preview": preview,
+            "loaded": {"connections": {"peer-a": {"children": {"pol-a": {}}}}, "warnings": []},
+            "diff": {
+                "ok": True,
+                "missing_connections": [],
+                "extra_connections": [],
+                "missing_children": [],
+                "extra_children": [],
+                "warnings": [],
+            },
+        }
 
     def list_ipsec_events_service(self):
         return []
@@ -349,6 +456,7 @@ class APITestCase(unittest.TestCase):
         self._manager_stub.clients = []
         self._manager_stub.ipsec_peers = []
         self._manager_stub.ipsec_identities = []
+        self._manager_stub.ipsec_identity_psks = {}
         self._manager_stub.ipsec_policies = []
         self._manager_stub.ipsec_phase1_profiles = []
         self._manager_stub.ipsec_phase2_proposals = []
@@ -467,50 +575,129 @@ class APITestCase(unittest.TestCase):
         self.assertEqual(data["error"], "Interface not found")
 
     def test_ipsec_crud_and_apply_routes(self):
-        status, _ = self._request(
+        status, data = self._request(
             "POST",
             "/api/ipsec/phase1-profiles",
             body={"name": "p1", "encryption": "aes256", "hash": "sha256", "dh_group": "modp2048", "lifetime": "1d"},
             api_key=self._auth_key(),
         )
         self.assertEqual(status, 201)
+        self.assertTrue(data["item"]["enabled"])
+        self.assertEqual(data["item"]["prf"], "prfsha256")
+        self.assertEqual(data["item"]["proposal_check"], "obey")
+        self.assertEqual(data["item"]["extra_proposals"], [])
 
-        status, _ = self._request(
+        status, data = self._request(
             "POST",
             "/api/ipsec/phase2-proposals",
             body={"name": "p2", "encryption": "aes256", "auth": "sha256", "pfs_group": "modp2048", "lifetime": "1h"},
             api_key=self._auth_key(),
         )
         self.assertEqual(status, 201)
+        self.assertTrue(data["item"]["enabled"])
+        self.assertIsNone(data["item"]["esn"])
+        self.assertEqual(data["item"]["extra_proposals"], [])
 
-        status, _ = self._request(
+        status, data = self._request(
             "POST",
             "/api/ipsec/peers",
             body={"name": "peer-a", "local_addrs": ["1.1.1.1"], "remote_addrs": ["2.2.2.2"], "phase1_profile": "p1"},
             api_key=self._auth_key(),
         )
         self.assertEqual(status, 201)
+        self.assertTrue(data["item"]["enabled"])
+        self.assertTrue(data["item"]["dpd"])
+        self.assertEqual(data["item"]["dpd_delay"], "30s")
+        self.assertEqual(data["item"]["dpd_timeout"], "120s")
+        self.assertTrue(data["item"]["nat_t"])
+        self.assertEqual(data["item"]["mobike"], "yes")
+        self.assertEqual(data["item"]["fragmentation"], "yes")
+        self.assertEqual(data["item"]["rekey_time"], "1d")
+        self.assertEqual(data["item"]["reauth_time"], "0s")
+        self.assertEqual(data["item"]["over_time"], "")
+        self.assertEqual(data["item"]["rand_time"], "")
+        self.assertEqual(data["item"]["keyingtries"], "0")
+        self.assertTrue(data["item"]["send_initial_contact"])
 
         status, data = self._request(
             "POST",
             "/api/ipsec/identities",
-            body={"peer": "peer-a", "auth_method": "psk", "local_id": "1.1.1.1", "remote_id": "2.2.2.2", "psk": "secret"},
+            body={"peer": "peer-a", "auth_method": "psk", "local_id": "1.1.1.1", "remote_id": "2.2.2.2", "psk": "super-secret-psk"},
             api_key=self._auth_key(),
         )
         self.assertEqual(status, 201)
         self.assertNotIn("psk", data.get("item", {}))
 
-        status, _ = self._request(
+        status, data = self._request("GET", "/api/ipsec/identities/peer-a/psk", api_key=self._auth_key())
+        self.assertEqual(status, 200)
+        self.assertEqual(data["item"], {"peer": "peer-a", "psk": "super-secret-psk"})
+
+        status, data = self._request("GET", "/api/ipsec/identities", api_key=self._auth_key())
+        self.assertEqual(status, 200)
+        self.assertNotIn("super-secret-psk", json.dumps(data))
+
+        status, data = self._request(
             "POST",
             "/api/ipsec/policies",
             body={"name": "pol-a", "peer": "peer-a", "local_ts": ["10.0.0.0/24"], "remote_ts": ["10.1.0.0/24"], "proposal": "p2"},
             api_key=self._auth_key(),
         )
         self.assertEqual(status, 201)
+        self.assertEqual(data["item"]["action"], "encrypt")
+        self.assertEqual(data["item"]["level"], "require")
+        self.assertEqual(data["item"]["mode"], "tunnel")
+        self.assertEqual(data["item"]["start_action"], "start")
+        self.assertEqual(data["item"]["close_action"], "none")
+        self.assertEqual(data["item"]["dpd_action"], "restart")
+        self.assertEqual(data["item"]["rekey_time"], "1h")
+        self.assertEqual(data["item"]["life_time"], "")
+        self.assertEqual(data["item"]["rand_time"], "")
+        self.assertEqual(data["item"]["policies"], "yes")
+        self.assertEqual(data["item"]["policies_fwd_out"], "no")
+        self.assertEqual(data["item"]["reqid"], "")
+        self.assertEqual(data["item"]["priority"], "")
+        self.assertEqual(data["item"]["interface"], "")
+        self.assertEqual(data["item"]["mark_in"], "")
+        self.assertEqual(data["item"]["mark_in_sa"], "no")
+        self.assertEqual(data["item"]["mark_out"], "")
+        self.assertEqual(data["item"]["set_mark_in"], "")
+        self.assertEqual(data["item"]["set_mark_out"], "")
+        self.assertEqual(data["item"]["if_id_in"], "")
+        self.assertEqual(data["item"]["if_id_out"], "")
+        self.assertTrue(data["item"]["enabled"])
 
         status, data = self._request("POST", "/api/ipsec/apply", body={}, api_key=self._auth_key())
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
+
+        status, data = self._request("GET", "/api/ipsec/config-preview", api_key=self._auth_key())
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(sorted(data["item"].keys()), ["connections", "secrets", "warnings"])
+        self.assertIsInstance(data["item"]["connections"], dict)
+        self.assertIsInstance(data["item"]["secrets"], list)
+        self.assertIsInstance(data["item"]["warnings"], list)
+        self.assertNotIn("super-secret-psk", json.dumps(data))
+
+        status, data = self._request("DELETE", "/api/ipsec/policies/pol-a", api_key=self._auth_key())
+        self.assertEqual(status, 200)
+        self.assertEqual(data["item"]["name"], "pol-a")
+
+        status, data = self._request("DELETE", "/api/ipsec/identities/peer-a", api_key=self._auth_key())
+        self.assertEqual(status, 200)
+        self.assertEqual(data["item"]["peer"], "peer-a")
+
+        status, data = self._request("DELETE", "/api/ipsec/peers/peer-a", api_key=self._auth_key())
+        self.assertEqual(status, 200)
+        self.assertEqual(data["item"]["name"], "peer-a")
+
+        status, data = self._request("DELETE", "/api/ipsec/phase2-proposals/p2", api_key=self._auth_key())
+        self.assertEqual(status, 200)
+        self.assertEqual(data["item"]["name"], "p2")
+
+        status, data = self._request("DELETE", "/api/ipsec/phase1-profiles/p1", api_key=self._auth_key())
+        self.assertEqual(status, 200)
+        self.assertEqual(data["item"]["name"], "p1")
 
 
 if __name__ == "__main__":

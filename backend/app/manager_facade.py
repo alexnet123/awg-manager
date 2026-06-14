@@ -747,6 +747,16 @@ def _upsert_ipsec_identity_backend(payload, paths):
     )
 
 
+def _get_ipsec_identity_psk_backend(peer_name, paths):
+    return ipsec_service_layer_ops.get_identity_psk(
+        peer_name,
+        valid_name_fn=_ipsec_valid_name,
+        secret_decrypt_fn=_ipsec_secret_decrypt,
+        read_collection_fn=_ipsec_read_collection,
+        identities_file=paths["ipsec_identities_file"],
+    )
+
+
 def _load_ipsec_peer_backend(peer_name, paths):
     return ipsec_service_layer_ops.load_peer(
         peer_name,
@@ -771,6 +781,17 @@ def _apply_ipsec_config_backend(paths):
         policies_file=paths["ipsec_policies_file"],
         secret_decrypt_fn=_ipsec_secret_decrypt,
         log_event_fn=_ipsec_log_event_fn(paths),
+    )
+
+
+def _get_ipsec_config_preview_backend(paths):
+    return ipsec_service_layer_ops.get_config_preview(
+        read_collection_fn=_ipsec_read_collection,
+        peers_file=paths["ipsec_peers_file"],
+        identities_file=paths["ipsec_identities_file"],
+        phase1_profiles_file=paths["ipsec_phase1_profiles_file"],
+        phase2_proposals_file=paths["ipsec_phase2_proposals_file"],
+        policies_file=paths["ipsec_policies_file"],
     )
 
 
@@ -1574,6 +1595,17 @@ def list_ipsec_identities_service():
     )
 
 
+def get_ipsec_identity_psk_service(peer_name):
+    paths = _ipsec_paths()
+    return _backend_partial_call(
+        "get_ipsec_identity_psk_service",
+        _get_ipsec_identity_psk_backend,
+        peer_name,
+        paths,
+        fallback_args=(peer_name,),
+    )
+
+
 def list_ipsec_policies_service():
     paths = _ipsec_paths()
     return _backend_partial_call(
@@ -1639,6 +1671,8 @@ def upsert_ipsec_peer_service(payload):
         write_collection_fn=_ipsec_write_collection,
         peers_file=paths["ipsec_peers_file"],
         phase1_profiles_file=paths["ipsec_phase1_profiles_file"],
+        policies_file=paths.get("ipsec_policies_file"),
+        identities_file=paths.get("ipsec_identities_file"),
         fallback_args=(payload,),
     )
 
@@ -1655,6 +1689,7 @@ def upsert_ipsec_phase1_profile_service(payload):
         read_collection_fn=_ipsec_read_collection,
         write_collection_fn=_ipsec_write_collection,
         phase1_profiles_file=paths["ipsec_phase1_profiles_file"],
+        peers_file=paths["ipsec_peers_file"],
         fallback_args=(payload,),
     )
 
@@ -1671,6 +1706,7 @@ def upsert_ipsec_phase2_proposal_service(payload):
         read_collection_fn=_ipsec_read_collection,
         write_collection_fn=_ipsec_write_collection,
         phase2_proposals_file=paths["ipsec_phase2_proposals_file"],
+        policies_file=paths["ipsec_policies_file"],
         fallback_args=(payload,),
     )
 
@@ -1716,6 +1752,48 @@ def delete_ipsec_policy_service(name):
         name,
         read_collection_fn=_ipsec_read_collection,
         write_collection_fn=_ipsec_write_collection,
+        policies_file=paths["ipsec_policies_file"],
+        apply_after_delete_fn=apply_ipsec_config_service,
+        fallback_args=(name,),
+    )
+
+
+def delete_ipsec_identity_service(name):
+    paths = _ipsec_paths()
+    return _backend_partial_call(
+        "delete_ipsec_identity_service",
+        ipsec_service_layer_ops.delete_identity,
+        name,
+        read_collection_fn=_ipsec_read_collection,
+        write_collection_fn=_ipsec_write_collection,
+        identities_file=paths["ipsec_identities_file"],
+        fallback_args=(name,),
+    )
+
+
+def delete_ipsec_phase1_profile_service(name):
+    paths = _ipsec_paths()
+    return _backend_partial_call(
+        "delete_ipsec_phase1_profile_service",
+        ipsec_service_layer_ops.delete_phase1_profile,
+        name,
+        read_collection_fn=_ipsec_read_collection,
+        write_collection_fn=_ipsec_write_collection,
+        phase1_profiles_file=paths["ipsec_phase1_profiles_file"],
+        peers_file=paths["ipsec_peers_file"],
+        fallback_args=(name,),
+    )
+
+
+def delete_ipsec_phase2_proposal_service(name):
+    paths = _ipsec_paths()
+    return _backend_partial_call(
+        "delete_ipsec_phase2_proposal_service",
+        ipsec_service_layer_ops.delete_phase2_proposal,
+        name,
+        read_collection_fn=_ipsec_read_collection,
+        write_collection_fn=_ipsec_write_collection,
+        phase2_proposals_file=paths["ipsec_phase2_proposals_file"],
         policies_file=paths["ipsec_policies_file"],
         fallback_args=(name,),
     )
@@ -1772,6 +1850,15 @@ def apply_ipsec_config_service():
     return _backend_partial_call(
         "apply_ipsec_config_service",
         _apply_ipsec_config_backend,
+        paths,
+    )
+
+
+def get_ipsec_config_preview_service():
+    paths = _ipsec_paths()
+    return _backend_partial_call(
+        "get_ipsec_config_preview_service",
+        _get_ipsec_config_preview_backend,
         paths,
     )
 

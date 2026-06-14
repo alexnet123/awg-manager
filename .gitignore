@@ -39,3 +39,8 @@ client-*.svg
 /deploy/*.local
 /deploy/*.env
 
+
+# TypeScript build cache/generated config
+webui/*.tsbuildinfo
+webui/vite.config.js
+webui/vite.config.d.ts

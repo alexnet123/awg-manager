@@ -10,6 +10,10 @@ def list_installed_sas():
     return get_manager().list_ipsec_installed_sas_service()
 
 
+def get_config_preview():
+    return get_manager().get_ipsec_config_preview_service()
+
+
 def apply_config():
     return get_manager().apply_ipsec_config_service()
 
@@ -24,4 +28,3 @@ def initiate_policy(policy_name):
 
 def terminate_peer(peer_name):
     return get_manager().terminate_ipsec_peer_service(peer_name)
-

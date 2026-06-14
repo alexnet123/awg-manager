@@ -1008,6 +1008,14 @@ list_ipsec_identities_service = functools.partial(
     ipsec_compat_entry_ops.list_identities_service,
     identities_file=IPSEC_IDENTITIES_FILE,
 )
+get_ipsec_identity_psk_service = functools.partial(
+    ipsec_compat_entry_ops.get_identity_psk_service,
+    normalize_config_value_fn=normalize_config_value,
+    encryption_key=encryption_key,
+    encryption_key_legacy=encryption_key_legacy,
+    identities_file=IPSEC_IDENTITIES_FILE,
+    fernet_decrypt_fn=_fernet_decrypt,
+)
 list_ipsec_phase1_profiles_service = functools.partial(
     ipsec_compat_entry_ops.list_phase1_profiles_service,
     phase1_profiles_file=IPSEC_PHASE1_PROFILES_FILE,
@@ -1025,6 +1033,8 @@ upsert_ipsec_peer_service = functools.partial(
     normalize_config_value_fn=normalize_config_value,
     peers_file=IPSEC_PEERS_FILE,
     phase1_profiles_file=IPSEC_PHASE1_PROFILES_FILE,
+    policies_file=IPSEC_POLICIES_FILE,
+    identities_file=IPSEC_IDENTITIES_FILE,
 )
 upsert_ipsec_identity_service = functools.partial(
     ipsec_compat_entry_ops.upsert_identity_service,
@@ -1038,11 +1048,13 @@ upsert_ipsec_phase1_profile_service = functools.partial(
     ipsec_compat_entry_ops.upsert_phase1_profile_service,
     normalize_config_value_fn=normalize_config_value,
     phase1_profiles_file=IPSEC_PHASE1_PROFILES_FILE,
+    peers_file=IPSEC_PEERS_FILE,
 )
 upsert_ipsec_phase2_proposal_service = functools.partial(
     ipsec_compat_entry_ops.upsert_phase2_proposal_service,
     normalize_config_value_fn=normalize_config_value,
     phase2_proposals_file=IPSEC_PHASE2_PROPOSALS_FILE,
+    policies_file=IPSEC_POLICIES_FILE,
 )
 upsert_ipsec_policy_service = functools.partial(
     ipsec_compat_entry_ops.upsert_policy_service,
@@ -1061,12 +1073,34 @@ delete_ipsec_policy_service = functools.partial(
     ipsec_compat_entry_ops.delete_policy_service,
     policies_file=IPSEC_POLICIES_FILE,
 )
+delete_ipsec_identity_service = functools.partial(
+    ipsec_compat_entry_ops.delete_identity_service,
+    identities_file=IPSEC_IDENTITIES_FILE,
+)
+delete_ipsec_phase1_profile_service = functools.partial(
+    ipsec_compat_entry_ops.delete_phase1_profile_service,
+    phase1_profiles_file=IPSEC_PHASE1_PROFILES_FILE,
+    peers_file=IPSEC_PEERS_FILE,
+)
+delete_ipsec_phase2_proposal_service = functools.partial(
+    ipsec_compat_entry_ops.delete_phase2_proposal_service,
+    phase2_proposals_file=IPSEC_PHASE2_PROPOSALS_FILE,
+    policies_file=IPSEC_POLICIES_FILE,
+)
 list_ipsec_events_service = functools.partial(
     ipsec_compat_entry_ops.list_events_service,
     events_file=IPSEC_EVENTS_FILE,
 )
 list_ipsec_active_peers_service = ipsec_compat_entry_ops.list_active_peers_service
 list_ipsec_installed_sas_service = ipsec_compat_entry_ops.list_installed_sas_service
+get_ipsec_config_preview_service = functools.partial(
+    ipsec_compat_entry_ops.get_config_preview_service,
+    peers_file=IPSEC_PEERS_FILE,
+    identities_file=IPSEC_IDENTITIES_FILE,
+    phase1_profiles_file=IPSEC_PHASE1_PROFILES_FILE,
+    phase2_proposals_file=IPSEC_PHASE2_PROPOSALS_FILE,
+    policies_file=IPSEC_POLICIES_FILE,
+)
 load_ipsec_peer_service = functools.partial(
     ipsec_compat_entry_ops.load_peer_service,
     encryption_key=encryption_key,
