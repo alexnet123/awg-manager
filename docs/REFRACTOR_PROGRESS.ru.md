@@ -3427,6 +3427,50 @@
 - [x] Обновлена эксплуатационная документация:
   - [x] `docs/DEPLOY.md` дополнен разделом `Final Single-Stand Redeploy From main`.
 
+## 1.188) IPsec UI toolbar и delete-контракты для редактируемых вкладок
+
+- [x] Добавлены contract-safe DELETE routes для редактируемых IPsec сущностей:
+  - [x] `DELETE /api/ipsec/identities/{peer}`
+  - [x] `DELETE /api/ipsec/phase1-profiles/{name}`
+  - [x] `DELETE /api/ipsec/phase2-proposals/{name}`
+- [x] Сохранены защитные зависимости:
+  - [x] Phase 1 profile нельзя удалить, если его использует peer.
+  - [x] Phase 2 proposal нельзя удалить, если его использует policy.
+- [x] UI toolbar IPsec выровнен ближе к firewall policy toolbar:
+  - [x] `Add`
+  - [x] `Del`
+  - [x] `Disable`
+  - [x] `Enable`
+- [x] `Disable/Enable` работают через bulk toolbar для `Policies`, `Peers`, `Phase 1`, `Phase 2`.
+  - [x] Для Phase 1/Phase 2 `enabled` является сохраненной metadata-настройкой UI/API; VICI proposal payload не меняется напрямую.
+- [x] Row-level action-кнопки из IPsec таблиц убраны; операции выполняются через верхний toolbar.
+- [x] Проверки:
+  - [x] `python3 -m pytest -q tests/test_ipsec_crud_ops.py tests/test_ipsec_service_ops.py tests/test_ipsec_service_layer_ops.py tests/test_ipsec_service_facade_ops.py tests/test_ipsec_compat_entry_ops.py` -> `19 passed`
+  - [x] `python3 -m pytest -q tests/test_api_contract.py` -> `9 passed`
+  - [x] `python3 -m pytest -q tests/test_manager_access_facade.py` -> `43 passed`
+  - [x] `npm --prefix webui run build` -> passed
+
+## 1.189) IPsec runtime cascade для Enable/Disable связанных компонентов
+
+- [x] Добавлен runtime-effective каскад для `apply/load` без переписывания связанных объектов:
+  - [x] отключенный `Peer` останавливает/выгружает свой IKE_SA и CHILD_SA;
+  - [x] отключенный `Identity` блокирует загрузку peer и останавливает связанные SAs;
+  - [x] отключенный `Phase 1` profile блокирует peer, который на него ссылается;
+  - [x] отключенный `Phase 2` proposal исключает связанные policies из runtime load/apply;
+  - [x] если у peer не остается enabled policies, connection выгружается из VICI.
+- [x] `Identity` получил сохраненный `enabled` state в IPsec CRUD/API/UI:
+  - [x] таблица показывает `State`;
+  - [x] форма содержит переключатель `Enabled`;
+  - [x] bulk toolbar `Enable/Disable` работает для `Identities` и сразу вызывает `apply`.
+  - [x] legacy identity rows без сохраненного `enabled` отдаются как `enabled: true`.
+- [x] Старые API-контракты `/api/ipsec/*` не ломались: поле `enabled` добавлено как совместимая metadata-настройка.
+- [x] Проверки:
+  - [x] `python3 -m pytest -q tests/test_ipsec_crud_ops.py::IpsecCrudOpsTest::test_upsert_identity tests/test_ipsec_runtime_ops.py::IpsecRuntimeOpsTest::test_runtime_respects_disabled_peer_and_policy tests/test_ipsec_runtime_ops.py::IpsecRuntimeOpsTest::test_apply_config_unloads_peer_when_phase1_identity_or_phase2_dependency_is_disabled` -> `3 passed`
+  - [x] `python3 -m pytest -q tests/test_ipsec_query_ops.py tests/test_ipsec_crud_ops.py tests/test_ipsec_runtime_ops.py` -> `24 passed`
+  - [x] `python3 -m pytest -q tests/test_api_contract.py` -> `9 passed`
+  - [x] `python3 -m pytest -q tests` -> `295 passed`
+  - [x] `npm --prefix webui run build` -> passed
+
 ## 5) Коммит-политика
 
 - [ ] Отдельные commits/PR для:
@@ -3434,3 +3478,31 @@
   - ui refactor
   - docs/tests
 - [ ] Без смешивания firewall/ipsec изменений в одном changeset.
+
+## 1.190) IPsec Config preview вкладка и read-only VICI payload endpoint
+
+- [x] Добавлен read-only diagnostic endpoint `/api/ipsec/config-preview`:
+  - [x] endpoint не вызывает `load_conn`, `load_shared`, `initiate`, `terminate` и не открывает VICI-сессию;
+  - [x] собирает тот же `connections` payload, который используется для VICI `load_conn`;
+  - [x] secrets отображаются только как metadata (`id`, `type`, `owners`, `secret_set`) без PSK/data.
+- [x] Владение логикой оставлено в IPsec domain-layer:
+  - [x] `backend/domains/ipsec/runtime_ops.py`: `build_config_preview`, `build_vici_secret_metadata_for_peer`;
+  - [x] `backend/domains/ipsec/service_ops.py` / `service_layer_ops.py` / `compat_entry_ops.py`: composition/wiring для preview;
+  - [x] `backend/app/manager_facade.py`: backend-first delegating entrypoint `get_ipsec_config_preview_service`.
+- [x] UI:
+  - [x] добавлена вкладка `Config` в IPsec;
+  - [x] добавлены `Refresh` и `Copy`;
+  - [x] JSON отображается в жестком контейнере с внутренней прокруткой, без влияния на firewall UI.
+- [x] Проверки:
+  - [x] `python3 -m pytest -q tests/test_ipsec_runtime_ops.py -k config_preview` -> `1 passed`
+  - [x] `python3 -m pytest -q tests/test_api_contract.py` -> `9 passed`
+  - [x] `python3 -m pytest -q tests/test_ipsec_runtime_ops.py tests/test_ipsec_service_ops.py tests/test_ipsec_service_layer_ops.py tests/test_ipsec_service_facade_ops.py tests/test_ipsec_compat_entry_ops.py` -> `29 passed`
+  - [x] `python3 -m pytest -q tests/test_manager_access_facade.py` -> `43 passed`
+  - [x] `npm --prefix webui run build` -> passed
+
+## 1.191) Rollback IPsec Config status/diff experiment
+
+- [x] По UX-решению удален эксперимент сравнения generated preview с загруженным VICI `list_conns`.
+- [x] Удален endpoint `/api/ipsec/config-status`; контрактный read-only endpoint `/api/ipsec/config-preview` оставлен.
+- [x] UI вкладки `Config` снова показывает только собранный VICI `load_conn` preview и metadata secrets без side-by-side loaded/diff сравнения.
+- [x] Владение логикой осталось в IPsec domain-layer; firewall-контракты и firewall-поведение не затрагивались.

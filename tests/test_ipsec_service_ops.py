@@ -83,6 +83,14 @@ class IpsecServiceOpsTest(unittest.TestCase):
         self.assertEqual(peers[0]["name"], "peer-a")
         identities = service_ops.list_identities_service(read_collection_fn=read_collection, identities_file="identities.json")
         self.assertTrue(identities[0]["has_psk"])
+        store["policies"][0]["local_ts"] = ["10.0.0.0/24", "10.2.0.0/24"]
+        store["policies"][0]["remote_ts"] = ["10.1.0.0/24", "10.3.0.0/24"]
+        listed_policies = service_ops.list_policies_service(
+            read_collection_fn=read_collection,
+            policies_file="policies.json",
+        )
+        self.assertEqual(listed_policies[0]["local_ts"], ["10.0.0.0/24"])
+        self.assertEqual(listed_policies[0]["remote_ts"], ["10.1.0.0/24"])
 
         created_peer = service_ops.upsert_peer_service(
             {"name": "peer-b", "phase1_profile": "p1", "remote_addrs": ["198.51.100.1"], "local_addrs": ["10.0.0.2"]},
@@ -115,6 +123,46 @@ class IpsecServiceOpsTest(unittest.TestCase):
             policies_file="policies.json",
         )
         self.assertEqual(deleted["name"], "policy-b")
+
+        apply_calls = []
+        deleted = service_ops.delete_policy_service(
+            "policy-a",
+            read_collection_fn=read_collection,
+            write_collection_fn=write_collection,
+            policies_file="policies.json",
+            apply_after_delete_fn=lambda: apply_calls.append("apply"),
+        )
+        self.assertEqual(deleted["name"], "policy-a")
+        self.assertEqual(apply_calls, ["apply"])
+
+        deleted_identity = service_ops.delete_identity_service(
+            "peer-a",
+            read_collection_fn=read_collection,
+            write_collection_fn=write_collection,
+            identities_file="identities.json",
+        )
+        self.assertEqual(deleted_identity["peer"], "peer-a")
+        self.assertTrue(deleted_identity["has_psk"])
+
+        store["policies"] = []
+        deleted_phase2 = service_ops.delete_phase2_proposal_service(
+            "p2",
+            read_collection_fn=read_collection,
+            write_collection_fn=write_collection,
+            phase2_proposals_file="phase2.json",
+            policies_file="policies.json",
+        )
+        self.assertEqual(deleted_phase2["name"], "p2")
+
+        store["peers"] = [x for x in store["peers"] if x.get("phase1_profile") != "p1"]
+        deleted_phase1 = service_ops.delete_phase1_profile_service(
+            "p1",
+            read_collection_fn=read_collection,
+            write_collection_fn=write_collection,
+            phase1_profiles_file="phase1.json",
+            peers_file="peers.json",
+        )
+        self.assertEqual(deleted_phase1["name"], "p1")
 
     def test_runtime_paths(self):
         store = self._build_store()

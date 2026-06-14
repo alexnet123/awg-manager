@@ -3,7 +3,7 @@ import json
 import mimetypes
 import os
 import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 from backend.app import router as app_router
@@ -11,6 +11,11 @@ from backend.app import manager_facade as manager
 
 UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ui')
 WEBUI_DIST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'webui', 'dist')
+
+
+class AWGThreadingHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    request_queue_size = 32
 
 
 class AWGManagerAPIHandler(BaseHTTPRequestHandler):
@@ -187,7 +192,7 @@ class AWGManagerAPIHandler(BaseHTTPRequestHandler):
 
 
 def start_api_server(host='127.0.0.1', port=8787):
-    httpd = HTTPServer((host, port), AWGManagerAPIHandler)
+    httpd = AWGThreadingHTTPServer((host, port), AWGManagerAPIHandler)
     print(f'API server started on http://{host}:{port}')
     print('Authentication header required: X-API-Key')
     print(f'Runtime data dir: {manager.bd_path}')

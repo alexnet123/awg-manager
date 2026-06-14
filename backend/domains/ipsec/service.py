@@ -19,6 +19,8 @@ def handle_get(path_parts):
         return 200, {'ok': True, 'items': repository.list_peers()}
     if p == ['identities']:
         return 200, {'ok': True, 'items': repository.list_identities()}
+    if len(p) == 3 and p[0] == 'identities' and p[2] == 'psk':
+        return 200, {'ok': True, 'item': repository.get_identity_psk(p[1])}
     if p == ['policies']:
         return 200, {'ok': True, 'items': repository.list_policies()}
     if p == ['phase1-profiles']:
@@ -29,6 +31,8 @@ def handle_get(path_parts):
         return 200, {'ok': True, 'items': runtime_adapter.list_active_peers()}
     if p == ['installed-sas']:
         return 200, {'ok': True, 'items': runtime_adapter.list_installed_sas()}
+    if p == ['config-preview']:
+        return 200, {'ok': True, 'item': runtime_adapter.get_config_preview()}
     if p == ['events']:
         return 200, {'ok': True, 'items': repository.list_events()}
     return None
@@ -82,4 +86,10 @@ def handle_delete(path_parts):
         return 200, {'ok': True, 'item': repository.delete_peer(p[1])}
     if len(p) == 2 and p[0] == 'policies':
         return 200, {'ok': True, 'item': repository.delete_policy(p[1])}
+    if len(p) == 2 and p[0] == 'identities':
+        return 200, {'ok': True, 'item': repository.delete_identity(p[1])}
+    if len(p) == 2 and p[0] == 'phase1-profiles':
+        return 200, {'ok': True, 'item': repository.delete_phase1_profile(p[1])}
+    if len(p) == 2 and p[0] == 'phase2-proposals':
+        return 200, {'ok': True, 'item': repository.delete_phase2_proposal(p[1])}
     return None

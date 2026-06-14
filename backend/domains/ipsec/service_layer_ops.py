@@ -43,19 +43,25 @@ def upsert_peer(
     *,
     valid_name_fn,
     normalize_ip_list_fn,
+    normalize_config_value_fn=lambda value: value,
     read_collection_fn,
     write_collection_fn,
     peers_file,
     phase1_profiles_file,
+    policies_file=None,
+    identities_file=None,
 ):
     return service_ops.upsert_peer_service(
         payload,
         valid_name_fn=valid_name_fn,
         normalize_ip_list_fn=normalize_ip_list_fn,
+        normalize_config_value_fn=normalize_config_value_fn,
         read_collection_fn=read_collection_fn,
         write_collection_fn=write_collection_fn,
         peers_file=peers_file,
         phase1_profiles_file=phase1_profiles_file,
+        policies_file=policies_file,
+        identities_file=identities_file,
     )
 
 
@@ -82,6 +88,23 @@ def upsert_identity(
     )
 
 
+def get_identity_psk(
+    name,
+    *,
+    valid_name_fn,
+    secret_decrypt_fn,
+    read_collection_fn,
+    identities_file,
+):
+    return service_ops.get_identity_psk_service(
+        name,
+        valid_name_fn=valid_name_fn,
+        secret_decrypt_fn=secret_decrypt_fn,
+        read_collection_fn=read_collection_fn,
+        identities_file=identities_file,
+    )
+
+
 def upsert_phase1_profile(
     payload,
     *,
@@ -91,6 +114,7 @@ def upsert_phase1_profile(
     read_collection_fn,
     write_collection_fn,
     phase1_profiles_file,
+    peers_file=None,
 ):
     return service_ops.upsert_phase1_profile_service(
         payload,
@@ -100,6 +124,7 @@ def upsert_phase1_profile(
         read_collection_fn=read_collection_fn,
         write_collection_fn=write_collection_fn,
         phase1_profiles_file=phase1_profiles_file,
+        peers_file=peers_file,
     )
 
 
@@ -112,6 +137,7 @@ def upsert_phase2_proposal(
     read_collection_fn,
     write_collection_fn,
     phase2_proposals_file,
+    policies_file=None,
 ):
     return service_ops.upsert_phase2_proposal_service(
         payload,
@@ -121,6 +147,7 @@ def upsert_phase2_proposal(
         read_collection_fn=read_collection_fn,
         write_collection_fn=write_collection_fn,
         phase2_proposals_file=phase2_proposals_file,
+        policies_file=policies_file,
     )
 
 
@@ -168,11 +195,55 @@ def delete_peer(
     )
 
 
-def delete_policy(name, *, read_collection_fn, write_collection_fn, policies_file):
+def delete_policy(name, *, read_collection_fn, write_collection_fn, policies_file, apply_after_delete_fn=None):
     return service_ops.delete_policy_service(
         name,
         read_collection_fn=read_collection_fn,
         write_collection_fn=write_collection_fn,
+        policies_file=policies_file,
+        apply_after_delete_fn=apply_after_delete_fn,
+    )
+
+
+def delete_identity(name, *, read_collection_fn, write_collection_fn, identities_file):
+    return service_ops.delete_identity_service(
+        name,
+        read_collection_fn=read_collection_fn,
+        write_collection_fn=write_collection_fn,
+        identities_file=identities_file,
+    )
+
+
+def delete_phase1_profile(
+    name,
+    *,
+    read_collection_fn,
+    write_collection_fn,
+    phase1_profiles_file,
+    peers_file,
+):
+    return service_ops.delete_phase1_profile_service(
+        name,
+        read_collection_fn=read_collection_fn,
+        write_collection_fn=write_collection_fn,
+        phase1_profiles_file=phase1_profiles_file,
+        peers_file=peers_file,
+    )
+
+
+def delete_phase2_proposal(
+    name,
+    *,
+    read_collection_fn,
+    write_collection_fn,
+    phase2_proposals_file,
+    policies_file,
+):
+    return service_ops.delete_phase2_proposal_service(
+        name,
+        read_collection_fn=read_collection_fn,
+        write_collection_fn=write_collection_fn,
+        phase2_proposals_file=phase2_proposals_file,
         policies_file=policies_file,
     )
 
@@ -199,6 +270,25 @@ def list_active_peers():
 
 def list_installed_sas():
     return service_ops.list_installed_sas_service()
+
+
+def get_config_preview(
+    *,
+    read_collection_fn,
+    peers_file,
+    identities_file,
+    phase1_profiles_file,
+    phase2_proposals_file,
+    policies_file,
+):
+    return service_ops.get_config_preview_service(
+        read_collection_fn=read_collection_fn,
+        peers_file=peers_file,
+        identities_file=identities_file,
+        phase1_profiles_file=phase1_profiles_file,
+        phase2_proposals_file=phase2_proposals_file,
+        policies_file=policies_file,
+    )
 
 
 def load_peer(

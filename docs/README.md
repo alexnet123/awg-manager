@@ -12,6 +12,7 @@
 - [FIREWALL_ADD_RULE_GUIDE.ru.md](FIREWALL_ADD_RULE_GUIDE.ru.md) — Add Rule user guide (RU)
 - [FIREWALL_ADD_RULE_LIBNFTABLES_GAP_MATRIX.ru.md](FIREWALL_ADD_RULE_LIBNFTABLES_GAP_MATRIX.ru.md) — RU matrix: libnftables coverage gaps and where to place missing controls in Add Rule UI
 - [FIREWALL_LIBNFTABLES_FULL_COVERAGE_PLAN.ru.md](FIREWALL_LIBNFTABLES_FULL_COVERAGE_PLAN.ru.md) — RU long-term roadmap from current state to near-full libnftables-json coverage
+- [IPSEC_LIVE_VALIDATION.md](IPSEC_LIVE_VALIDATION.md) — live IPsec/VICI/MikroTik checks for real vs cosmetic UI controls
 - [DOCS_INDEX.ru.md](DOCS_INDEX.ru.md) — Russian documentation navigator (what to read and when)
 - [TESTS_CATALOG.ru.md](TESTS_CATALOG.ru.md) — complete RU catalog of tests (location, purpose, run commands)
 - [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md) — release-readiness commands and pass criteria

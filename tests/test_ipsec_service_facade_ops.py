@@ -15,6 +15,9 @@ class IpsecServiceFacadeOpsTest(unittest.TestCase):
             service_layer_ops.list_policies,
             service_layer_ops.delete_peer,
             service_layer_ops.delete_policy,
+            service_layer_ops.delete_identity,
+            service_layer_ops.delete_phase1_profile,
+            service_layer_ops.delete_phase2_proposal,
         )
         try:
             service_layer_ops.list_peers = lambda **kwargs: (calls.append(("peers", kwargs)), ["p"])[1]
@@ -24,6 +27,9 @@ class IpsecServiceFacadeOpsTest(unittest.TestCase):
             service_layer_ops.list_policies = lambda **kwargs: (calls.append(("pol", kwargs)), ["pol"])[1]
             service_layer_ops.delete_peer = lambda name, **kwargs: (calls.append(("del_peer", name, kwargs)), {"name": name})[1]
             service_layer_ops.delete_policy = lambda name, **kwargs: (calls.append(("del_pol", name, kwargs)), {"name": name})[1]
+            service_layer_ops.delete_identity = lambda name, **kwargs: (calls.append(("del_identity", name, kwargs)), {"peer": name})[1]
+            service_layer_ops.delete_phase1_profile = lambda name, **kwargs: (calls.append(("del_p1", name, kwargs)), {"name": name})[1]
+            service_layer_ops.delete_phase2_proposal = lambda name, **kwargs: (calls.append(("del_p2", name, kwargs)), {"name": name})[1]
 
             self.assertEqual(service_facade_ops.list_peers_service(peers_file="peers.json"), ["p"])
             self.assertEqual(service_facade_ops.list_identities_service(identities_file="identities.json"), ["i"])
@@ -46,8 +52,31 @@ class IpsecServiceFacadeOpsTest(unittest.TestCase):
                 )["name"],
                 "policy-a",
             )
+            self.assertEqual(
+                service_facade_ops.delete_identity_service(
+                    "peer-a",
+                    identities_file="identities.json",
+                )["peer"],
+                "peer-a",
+            )
+            self.assertEqual(
+                service_facade_ops.delete_phase1_profile_service(
+                    "p1",
+                    phase1_profiles_file="phase1.json",
+                    peers_file="peers.json",
+                )["name"],
+                "p1",
+            )
+            self.assertEqual(
+                service_facade_ops.delete_phase2_proposal_service(
+                    "p2",
+                    phase2_proposals_file="phase2.json",
+                    policies_file="policies.json",
+                )["name"],
+                "p2",
+            )
             self.assertEqual(calls[0][0], "peers")
-            self.assertEqual(calls[-1][0], "del_pol")
+            self.assertEqual(calls[-1][0], "del_p2")
         finally:
             (
                 service_layer_ops.list_peers,
@@ -57,6 +86,9 @@ class IpsecServiceFacadeOpsTest(unittest.TestCase):
                 service_layer_ops.list_policies,
                 service_layer_ops.delete_peer,
                 service_layer_ops.delete_policy,
+                service_layer_ops.delete_identity,
+                service_layer_ops.delete_phase1_profile,
+                service_layer_ops.delete_phase2_proposal,
             ) = originals
 
     def test_upsert_wiring_with_validation_and_crypto(self):
@@ -99,8 +131,8 @@ class IpsecServiceFacadeOpsTest(unittest.TestCase):
             service_facade_ops.validation_ops.valid_name = lambda value, normalize_config_value_fn, field_name="name": f"{field_name}:{normalize_config_value_fn(value)}"
             service_facade_ops.validation_ops.normalize_ip_list = lambda value, normalize_config_value_fn, field_name: [normalize_config_value_fn(x) for x in value]
             service_facade_ops.validation_ops.normalize_ts_list = lambda value, normalize_ip_list_fn, field_name: normalize_ip_list_fn(value, field_name)
-            service_facade_ops.validation_ops.build_phase1_proposal_string = lambda enc, hash_alg, dh_group, valid_name_fn: f"{enc}-{hash_alg}-{dh_group}-{valid_name_fn('x', 'f')}"
-            service_facade_ops.validation_ops.build_phase2_proposal_string = lambda enc, auth_alg, pfs_group, valid_name_fn, normalize_config_value_fn: f"{enc}-{auth_alg}-{pfs_group}-{valid_name_fn('y', 'g')}-{normalize_config_value_fn('z')}"
+            service_facade_ops.validation_ops.build_phase1_proposal_string = lambda enc, hash_alg, dh_group, prf_alg=None, valid_name_fn=None: f"{enc}-{hash_alg}-{prf_alg}-{dh_group}-{valid_name_fn('x', 'f')}"
+            service_facade_ops.validation_ops.build_phase2_proposal_string = lambda enc, auth_alg, pfs_group=None, esn=None, valid_name_fn=None, normalize_config_value_fn=None: f"{enc}-{auth_alg}-{pfs_group}-{esn}-{valid_name_fn('y', 'g')}-{normalize_config_value_fn('z')}"
 
             norm = lambda v: str(v).strip() if v is not None else None
             self.assertEqual(
@@ -263,6 +295,36 @@ class IpsecServiceFacadeOpsTest(unittest.TestCase):
                 service_layer_ops.terminate_peer,
                 service_layer_ops.apply_config,
                 service_facade_ops.crypto_keys.decrypt_with_key_fallback,
+            ) = originals
+
+    def test_runtime_callback_factories(self):
+        calls = []
+        originals = (
+            service_facade_ops.crypto_keys.decrypt_with_key_fallback,
+            service_facade_ops._log_ipsec_event,
+        )
+        try:
+            service_facade_ops.crypto_keys.decrypt_with_key_fallback = (
+                lambda token, keys, decrypt_fn, continue_exceptions: f"dec:{token}:{len(keys)}"
+            )
+            service_facade_ops._log_ipsec_event = (
+                lambda event_type, payload, events_file: calls.append((event_type, payload, events_file))
+            )
+
+            decrypt_cb = service_facade_ops._build_secret_decrypt_fn(
+                encryption_key=b"k1",
+                encryption_key_legacy=b"k2",
+                fernet_decrypt_fn=lambda _key, token: token,
+            )
+            self.assertEqual(decrypt_cb("enc-token"), "dec:enc-token:2")
+
+            log_cb = service_facade_ops._build_log_event_fn(events_file="events.json")
+            log_cb("test_event", {"ok": True})
+            self.assertEqual(calls, [("test_event", {"ok": True}, "events.json")])
+        finally:
+            (
+                service_facade_ops.crypto_keys.decrypt_with_key_fallback,
+                service_facade_ops._log_ipsec_event,
             ) = originals
 
 
