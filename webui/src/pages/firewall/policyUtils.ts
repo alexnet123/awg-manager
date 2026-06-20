@@ -33,6 +33,12 @@ export function formatPacketRate(packetsPerSec?: number) {
   return `${(n / 1000).toFixed(1)} Kp/s`
 }
 
+export function formatFirewallRuleAction(rule: Pick<FirewallRule, 'action' | 'nat_type' | 'vmap_stmt_name'>): string {
+  if (rule.nat_type) return rule.nat_type
+  if (rule.vmap_stmt_name) return 'vmap'
+  return rule.action || '—'
+}
+
 export function formatDurationClock(seconds?: number | null) {
   if (seconds === null || seconds === undefined) return '—'
   const s = Math.max(0, Math.floor(Number(seconds) || 0))
@@ -111,7 +117,7 @@ export function normalizeCollectionTimeoutInput(value: string): string | null {
   return `${totalMs}ms`
 }
 
-export function buildPolicyV2BridgeExprSummary(rule: Partial<FirewallRule>) {
+export function buildBridgeBridgeExprSummary(rule: Partial<FirewallRule>) {
   const parts: string[] = []
   if (rule.fib_check) parts.push(`fib:${rule.fib_check}`)
   if (rule.socket_match) parts.push(`socket:${rule.socket_match}`)

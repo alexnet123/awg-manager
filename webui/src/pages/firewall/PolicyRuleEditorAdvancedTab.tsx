@@ -12,6 +12,292 @@ type Props = {
   hasSupport: (key: string) => boolean
 }
 
+const TCP_FLAG_PRESETS = [
+  { value: 'syn', label: 'SYN', hint: 'new connection' },
+  { value: 'syn,ack', label: 'SYN + ACK', hint: 'server reply' },
+  { value: 'rst', label: 'RST', hint: 'reset' },
+  { value: 'fin', label: 'FIN', hint: 'close' },
+  { value: 'ack', label: 'ACK', hint: 'acknowledge' },
+  { value: 'psh,ack', label: 'PSH + ACK', hint: 'data push' },
+  { value: 'fin,ack', label: 'FIN + ACK', hint: 'close reply' },
+  { value: 'rst,ack', label: 'RST + ACK', hint: 'reset reply' },
+] as const
+
+const ICMP_TYPE_PRESETS = [
+  { value: 'echo-request', hint: 'ping request' },
+  { value: 'echo-reply', hint: 'ping reply' },
+  { value: 'destination-unreachable', hint: 'network/host/port error' },
+  { value: 'time-exceeded', hint: 'traceroute TTL expired' },
+  { value: 'parameter-problem', hint: 'bad IP header' },
+  { value: 'redirect', hint: 'route redirect' },
+  { value: 'timestamp-request', hint: 'legacy timestamp request' },
+  { value: 'timestamp-reply', hint: 'legacy timestamp reply' },
+] as const
+
+const ICMPV6_TYPE_PRESETS = [
+  { value: 'echo-request', hint: 'ping request' },
+  { value: 'echo-reply', hint: 'ping reply' },
+  { value: 'destination-unreachable', hint: 'network/host/port error' },
+  { value: 'packet-too-big', hint: 'PMTU discovery' },
+  { value: 'time-exceeded', hint: 'hop limit expired' },
+  { value: 'parameter-problem', hint: 'bad IPv6 header' },
+  { value: 'nd-router-solicit', hint: 'neighbor discovery' },
+  { value: 'nd-router-advert', hint: 'neighbor discovery' },
+  { value: 'nd-neighbor-solicit', hint: 'neighbor discovery' },
+  { value: 'nd-neighbor-advert', hint: 'neighbor discovery' },
+] as const
+
+const ICMP_CODE_PRESETS: Record<string, readonly { value: string; hint: string }[]> = {
+  'echo-request': [{ value: '0', hint: 'only valid code' }],
+  'echo-reply': [{ value: '0', hint: 'only valid code' }],
+  'timestamp-request': [{ value: '0', hint: 'only valid code' }],
+  'timestamp-reply': [{ value: '0', hint: 'only valid code' }],
+  'destination-unreachable': [
+    { value: '0', hint: 'network unreachable' },
+    { value: '1', hint: 'host unreachable' },
+    { value: '2', hint: 'protocol unreachable' },
+    { value: '3', hint: 'port unreachable' },
+    { value: '4', hint: 'fragmentation needed' },
+    { value: '13', hint: 'administratively prohibited' },
+  ],
+  'time-exceeded': [
+    { value: '0', hint: 'TTL expired in transit' },
+    { value: '1', hint: 'fragment reassembly timeout' },
+  ],
+  'parameter-problem': [
+    { value: '0', hint: 'bad header pointer' },
+    { value: '1', hint: 'required option missing' },
+    { value: '2', hint: 'bad length' },
+  ],
+  redirect: [
+    { value: '0', hint: 'redirect network' },
+    { value: '1', hint: 'redirect host' },
+    { value: '2', hint: 'redirect network TOS' },
+    { value: '3', hint: 'redirect host TOS' },
+  ],
+}
+
+const ICMPV6_CODE_PRESETS: Record<string, readonly { value: string; hint: string }[]> = {
+  'echo-request': [{ value: '0', hint: 'only valid code' }],
+  'echo-reply': [{ value: '0', hint: 'only valid code' }],
+  'packet-too-big': [{ value: '0', hint: 'only valid code' }],
+  'nd-router-solicit': [{ value: '0', hint: 'only valid code' }],
+  'nd-router-advert': [{ value: '0', hint: 'only valid code' }],
+  'nd-neighbor-solicit': [{ value: '0', hint: 'only valid code' }],
+  'nd-neighbor-advert': [{ value: '0', hint: 'only valid code' }],
+  'destination-unreachable': [
+    { value: '0', hint: 'no route' },
+    { value: '1', hint: 'admin prohibited' },
+    { value: '2', hint: 'beyond scope' },
+    { value: '3', hint: 'address unreachable' },
+    { value: '4', hint: 'port unreachable' },
+  ],
+  'time-exceeded': [
+    { value: '0', hint: 'hop limit exceeded' },
+    { value: '1', hint: 'fragment reassembly timeout' },
+  ],
+  'parameter-problem': [
+    { value: '0', hint: 'erroneous header field' },
+    { value: '1', hint: 'unknown next header' },
+    { value: '2', hint: 'unknown IPv6 option' },
+  ],
+}
+
+const META_PRIORITY_PRESETS = [
+  { value: '1:10', hint: 'tc classid major:minor' },
+  { value: '0x10', hint: 'skb priority in hex' },
+  { value: '10', hint: 'skb priority decimal' },
+] as const
+
+function TcpFlagsPicker(props: {
+  value?: FirewallRule['tcp_flags'] | null
+  onChange: (value: FirewallRule['tcp_flags'] | null) => void
+}) {
+  return (
+    <div className='rounded-md border p-2'>
+      <div className='space-y-0.5'>
+        {TCP_FLAG_PRESETS.map((preset) => (
+          <label key={preset.value} className='flex items-center gap-1.5 rounded-sm px-1.5 py-0.5 text-[10px] hover:bg-muted'>
+            <input
+              type='radio'
+              name='tcp-flags-preset'
+              className='h-3.5 w-3.5'
+              checked={props.value === preset.value}
+              onChange={() => props.onChange(preset.value)}
+            />
+            <span className='w-16 font-semibold leading-4'>{preset.label}</span>
+            <span className='text-[9px] leading-4 text-muted-foreground'>{preset.hint}</span>
+          </label>
+        ))}
+      </div>
+      <div className='mt-1.5 text-[9px] leading-3 text-muted-foreground'>
+        Choose one preset. Requires Protocol=tcp.
+      </div>
+    </div>
+  )
+}
+
+function IcmpMatchEditor(props: {
+  typeValue?: string | null
+  codeValue?: string | null
+  typePlaceholder: string
+  presets: readonly { value: string; hint: string }[]
+  codePresetsByType: Record<string, readonly { value: string; hint: string }[]>
+  onTypeChange: (value: string | null) => void
+  onCodeChange: (value: string | null) => void
+}) {
+  const codePresets = props.typeValue ? props.codePresetsByType[props.typeValue] || [] : []
+  const codeHint = (() => {
+    switch (props.typeValue) {
+      case 'destination-unreachable':
+        return 'Code narrows reason. Empty = match all destination-unreachable reasons.'
+      case 'time-exceeded':
+        return 'Code narrows reason. Empty = match all time-exceeded reasons.'
+      case 'parameter-problem':
+        return 'Code narrows reason. Usually leave empty unless you need a specific parser error.'
+      default:
+        return 'Code is usually empty. Fill it only when you need a specific ICMP reason.'
+    }
+  })()
+
+  return (
+    <div className='rounded-md border p-2'>
+      <div className='grid grid-cols-[minmax(0,1fr)_6.75rem] gap-2'>
+        <div className='space-y-1'>
+          <div className='text-[10px] font-semibold text-muted-foreground'>Type</div>
+          <Input
+            className='h-7 text-xs'
+            placeholder={props.typePlaceholder}
+            value={props.typeValue || ''}
+            onChange={(event) => props.onTypeChange(event.target.value || null)}
+          />
+        </div>
+        <div className='space-y-1'>
+          <div className='text-[10px] font-semibold text-muted-foreground'>Code</div>
+          <Input
+            className='h-7 text-xs'
+            inputMode='numeric'
+            placeholder='optional'
+            value={props.codeValue || ''}
+            onChange={(event) => props.onCodeChange(event.target.value || null)}
+          />
+        </div>
+      </div>
+      <div className='mt-2 space-y-1'>
+        <div className='text-[9px] font-semibold uppercase tracking-wide text-muted-foreground'>Common type options</div>
+        <div className='grid grid-cols-2 gap-1'>
+          {props.presets.map((preset) => {
+            const selected = props.typeValue === preset.value
+            return (
+              <button
+                key={preset.value}
+                type='button'
+                className={[
+                  'rounded border px-2 py-1 text-left text-[10px] leading-3 transition-colors',
+                  selected ? 'border-primary bg-primary/10 text-foreground' : 'border-border bg-background hover:bg-muted',
+                ].join(' ')}
+                onClick={() => props.onTypeChange(preset.value)}
+              >
+                <span className='block font-semibold'>{preset.value}</span>
+                <span className='block text-[9px] text-muted-foreground'>{preset.hint}</span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+      {props.typeValue ? (
+        <div className='mt-2 space-y-1'>
+          <div className='text-[9px] font-semibold uppercase tracking-wide text-muted-foreground'>
+            Code options for {props.typeValue}
+          </div>
+          <div className='grid grid-cols-2 gap-1'>
+            <button
+              type='button'
+              className={[
+                'rounded border px-2 py-1 text-left text-[10px] leading-3 transition-colors',
+                !props.codeValue ? 'border-primary bg-primary/10 text-foreground' : 'border-border bg-background hover:bg-muted',
+              ].join(' ')}
+              onClick={() => props.onCodeChange(null)}
+            >
+              <span className='block font-semibold'>empty</span>
+              <span className='block text-[9px] text-muted-foreground'>all codes for this type</span>
+            </button>
+            {codePresets.map((preset) => {
+              const selected = props.codeValue === preset.value
+              return (
+                <button
+                  key={preset.value}
+                  type='button'
+                  className={[
+                    'rounded border px-2 py-1 text-left text-[10px] leading-3 transition-colors',
+                    selected ? 'border-primary bg-primary/10 text-foreground' : 'border-border bg-background hover:bg-muted',
+                  ].join(' ')}
+                  onClick={() => props.onCodeChange(preset.value)}
+                >
+                  <span className='block font-semibold'>{preset.value}</span>
+                  <span className='block text-[9px] text-muted-foreground'>{preset.hint}</span>
+                </button>
+              )
+            })}
+            {!codePresets.length ? (
+              <div className='rounded border border-dashed px-2 py-1 text-[10px] leading-3 text-muted-foreground'>
+                No common code presets. Type a code only if you know the exact reason.
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+      <div className='mt-1.5 text-[9px] leading-3 text-muted-foreground'>
+        {codeHint}
+      </div>
+    </div>
+  )
+}
+
+function MetaPriorityEditor(props: {
+  value?: string | null
+  onChange: (value: string | null) => void
+}) {
+  return (
+    <div className='rounded-md border p-2'>
+      <div className='space-y-1'>
+        <div className='text-[10px] font-semibold text-muted-foreground'>Priority value</div>
+        <Input
+          className='h-7 text-xs'
+          placeholder='1:10 / 0x10 / 10'
+          value={props.value || ''}
+          onChange={(event) => props.onChange(event.target.value || null)}
+        />
+      </div>
+      <div className='mt-2 space-y-1'>
+        <div className='text-[9px] font-semibold uppercase tracking-wide text-muted-foreground'>Common values</div>
+        <div className='grid grid-cols-3 gap-1'>
+          {META_PRIORITY_PRESETS.map((preset) => {
+            const selected = props.value === preset.value
+            return (
+              <button
+                key={preset.value}
+                type='button'
+                className={[
+                  'rounded border px-2 py-1 text-left text-[10px] leading-3 transition-colors',
+                  selected ? 'border-primary bg-primary/10 text-foreground' : 'border-border bg-background hover:bg-muted',
+                ].join(' ')}
+                onClick={() => props.onChange(preset.value)}
+              >
+                <span className='block font-semibold'>{preset.value}</span>
+                <span className='block text-[9px] text-muted-foreground'>{preset.hint}</span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+      <div className='mt-1.5 rounded border border-amber-300/70 bg-amber-50 px-2 py-1 text-[9px] leading-3 text-amber-900'>
+        Expert QoS action: sets Linux packet priority. This is not firewall rule order.
+      </div>
+    </div>
+  )
+}
+
 export function PolicyRuleEditorAdvancedTab(props: Props) {
   return (
 <TabsContent value='advanced' className='mt-2 space-y-2.5'>
@@ -19,26 +305,43 @@ export function PolicyRuleEditorAdvancedTab(props: Props) {
                     <button type='button' className='w-full text-left text-[11px] font-semibold text-muted-foreground' onClick={() => props.setAdvOpen((p) => ({ ...p, l4: !p.l4 }))}>Network & L4 extras {props.advOpen.l4 ? '−' : '+'}</button>
                     {props.advOpen.l4 ? <>
                     <div className='grid grid-cols-2 gap-2'>
-                      <ToggleLine label='tcp flags' enabled={!!props.form.tcp_flags} inactiveHint='syn / syn,ack' onToggle={() => props.setForm((p) => ({ ...p, tcp_flags: p.tcp_flags ? null : 'syn', proto: p.tcp_flags ? p.proto : (p.proto || 'tcp') }))}>
-                        <Input className='h-7' placeholder='syn / syn,ack' value={props.form.tcp_flags || ''} onChange={(e) => props.setForm((p) => ({ ...p, tcp_flags: e.target.value || null }))} />
-                      </ToggleLine>
-                      <ToggleLine label='icmp type' enabled={!!props.form.icmp_type} inactiveHint='echo-request' onToggle={() => props.setForm((p) => ({ ...p, icmp_type: p.icmp_type ? null : 'echo-request', proto: p.icmp_type ? p.proto : (p.proto || 'icmp') }))}>
-                        <Input className='h-7' placeholder='echo-request' value={props.form.icmp_type || ''} onChange={(e) => props.setForm((p) => ({ ...p, icmp_type: e.target.value || null }))} />
-                      </ToggleLine>
-                    </div>
-                    <div className='grid grid-cols-2 gap-2'>
-                      <ToggleLine label='icmp code' enabled={!!props.form.icmp_code} inactiveHint='0' onToggle={() => props.setForm((p) => ({ ...p, icmp_code: p.icmp_code ? null : '0', proto: p.icmp_code ? p.proto : (p.proto || 'icmp') }))}>
-                        <Input className='h-7' placeholder='0' value={props.form.icmp_code || ''} onChange={(e) => props.setForm((p) => ({ ...p, icmp_code: e.target.value || null }))} />
-                      </ToggleLine>
-                      <ToggleLine label='icmpv6 type' enabled={!!props.form.icmpv6_type} inactiveHint='echo-request' onToggle={() => props.setForm((p) => ({ ...p, icmpv6_type: p.icmpv6_type ? null : 'echo-request', proto: p.icmpv6_type ? p.proto : (p.proto || 'icmpv6') }))}>
-                        <Input className='h-7' placeholder='echo-request' value={props.form.icmpv6_type || ''} onChange={(e) => props.setForm((p) => ({ ...p, icmpv6_type: e.target.value || null }))} />
-                      </ToggleLine>
-                    </div>
-                    <div className='grid grid-cols-2 gap-2'>
-                      <ToggleLine label='icmpv6 code' enabled={!!props.form.icmpv6_code} inactiveHint='0' onToggle={() => props.setForm((p) => ({ ...p, icmpv6_code: p.icmpv6_code ? null : '0', proto: p.icmpv6_code ? p.proto : (p.proto || 'icmpv6') }))}>
-                        <Input className='h-7' placeholder='0' value={props.form.icmpv6_code || ''} onChange={(e) => props.setForm((p) => ({ ...p, icmpv6_code: e.target.value || null }))} />
+                      <ToggleLine label='tcp flags' enabled={!!props.form.tcp_flags} inactiveHint='syn / syn+ack' onToggle={() => props.setForm((p) => ({ ...p, tcp_flags: p.tcp_flags ? null : 'syn', proto: p.tcp_flags ? p.proto : (p.proto || 'tcp') }))}>
+                        <TcpFlagsPicker
+                          value={props.form.tcp_flags || null}
+                          onChange={(value) => props.setForm((p) => ({ ...p, tcp_flags: value, proto: value ? (p.proto || 'tcp') : p.proto }))}
+                        />
                       </ToggleLine>
                       <div />
+                    </div>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <div className='col-span-2'>
+                      <ToggleLine label='ICMP IPv4' enabled={!!(props.form.icmp_type || props.form.icmp_code)} inactiveHint='type + optional code' onToggle={() => props.setForm((p) => ({ ...p, icmp_type: (p.icmp_type || p.icmp_code) ? null : 'echo-request', icmp_code: (p.icmp_type || p.icmp_code) ? null : p.icmp_code, proto: (p.icmp_type || p.icmp_code) ? p.proto : (p.proto || 'icmp') }))}>
+                        <IcmpMatchEditor
+                          typeValue={props.form.icmp_type || null}
+                          codeValue={props.form.icmp_code || null}
+                          typePlaceholder='echo-request'
+                          presets={ICMP_TYPE_PRESETS}
+                          codePresetsByType={ICMP_CODE_PRESETS}
+                          onTypeChange={(value) => props.setForm((p) => ({ ...p, icmp_type: value, proto: value ? (p.proto || 'icmp') : p.proto }))}
+                          onCodeChange={(value) => props.setForm((p) => ({ ...p, icmp_code: value, proto: value ? (p.proto || 'icmp') : p.proto }))}
+                        />
+                      </ToggleLine>
+                      </div>
+                    </div>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <div className='col-span-2'>
+                      <ToggleLine label='ICMP IPv6' enabled={!!(props.form.icmpv6_type || props.form.icmpv6_code)} inactiveHint='type + optional code' onToggle={() => props.setForm((p) => ({ ...p, icmpv6_type: (p.icmpv6_type || p.icmpv6_code) ? null : 'echo-request', icmpv6_code: (p.icmpv6_type || p.icmpv6_code) ? null : p.icmpv6_code, proto: (p.icmpv6_type || p.icmpv6_code) ? p.proto : (p.proto || 'icmpv6') }))}>
+                        <IcmpMatchEditor
+                          typeValue={props.form.icmpv6_type || null}
+                          codeValue={props.form.icmpv6_code || null}
+                          typePlaceholder='echo-request'
+                          presets={ICMPV6_TYPE_PRESETS}
+                          codePresetsByType={ICMPV6_CODE_PRESETS}
+                          onTypeChange={(value) => props.setForm((p) => ({ ...p, icmpv6_type: value, proto: value ? (p.proto || 'icmpv6') : p.proto }))}
+                          onCodeChange={(value) => props.setForm((p) => ({ ...p, icmpv6_code: value, proto: value ? (p.proto || 'icmpv6') : p.proto }))}
+                        />
+                      </ToggleLine>
+                      </div>
                     </div>
                     </> : null}
                   </div>
@@ -50,8 +353,11 @@ export function PolicyRuleEditorAdvancedTab(props: Props) {
                       <ToggleLine label='meta length' enabled={!!props.form.meta_length} inactiveHint='64-1500' onToggle={() => props.setForm((p) => ({ ...p, meta_length: p.meta_length ? null : '64-1500' }))}>
                         <Input className='h-7' placeholder='64-1500' value={props.form.meta_length || ''} onChange={(e) => props.setForm((p) => ({ ...p, meta_length: e.target.value || null }))} />
                       </ToggleLine>
-                      <ToggleLine label='meta priority' enabled={!!props.form.meta_priority} inactiveHint='1:10 / 0x10' onToggle={() => props.setForm((p) => ({ ...p, meta_priority: p.meta_priority ? null : '1:10' }))}>
-                        <Input className='h-7' placeholder='1:10 / 0x10' value={props.form.meta_priority || ''} onChange={(e) => props.setForm((p) => ({ ...p, meta_priority: e.target.value || null }))} />
+                      <ToggleLine label='set packet priority (QoS)' enabled={!!props.form.meta_priority} inactiveHint='expert: tc classid / skb priority' onToggle={() => props.setForm((p) => ({ ...p, meta_priority: p.meta_priority ? null : '1:10' }))}>
+                        <MetaPriorityEditor
+                          value={props.form.meta_priority || null}
+                          onChange={(value) => props.setForm((p) => ({ ...p, meta_priority: value }))}
+                        />
                       </ToggleLine>
                     </div>
                     <div className='grid grid-cols-2 gap-2'>

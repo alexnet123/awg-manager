@@ -3,12 +3,14 @@ import type { FirewallRule, FirewallSchema, FirewallTableItem } from '../api'
 import { getGeneralFieldState, type FieldState } from './policyFieldStates'
 
 type FirewallPolicyTab = 'filter' | 'nat' | 'raw' | 'mangle'
+type TableFamily = 'inet' | 'ip' | 'ip6' | 'bridge' | 'netdev'
 
 type Params = {
   schema: FirewallSchema | null
   customTables: FirewallTableItem[]
   form: Partial<FirewallRule>
   activeRuleTableName: string
+  activeRuleTableFamily: TableFamily
   activePolicyTab: FirewallPolicyTab
 }
 
@@ -24,18 +26,20 @@ export function usePolicyRuleFormContext(params: Params) {
 
   const customChainRowsByTable = React.useMemo(() => {
     const out: Record<string, FirewallTableItem[]> = {}
-    for (const row of params.customTables.filter((x) => String(x.family || 'inet').toLowerCase() === 'inet')) {
+    for (const row of params.customTables.filter((x) => String(x.family || 'inet').toLowerCase() === params.activeRuleTableFamily)) {
       const t = String(row.table_name || '').toLowerCase()
       if (!t) continue
       if (!out[t]) out[t] = []
       out[t].push(row)
     }
     return out
-  }, [params.customTables])
+  }, [params.activeRuleTableFamily, params.customTables])
 
   const activeFormTable = String(params.form.table || params.activeRuleTableName || params.activePolicyTab).toLowerCase()
+  const activeFormFamily = String(params.form.family || params.activeRuleTableFamily || 'inet').toLowerCase()
+  const isBuiltinActiveTable = activeFormFamily === 'inet' && builtinRuleTables.has(activeFormTable)
 
-  const defaultChainMode = builtinRuleTables.has(activeFormTable)
+  const defaultChainMode = isBuiltinActiveTable
     ? activeFormTable
     : ((customChainRowsByTable[activeFormTable]?.find((row) => row.chain_name === params.form.chain)?.chain_type
         || customChainRowsByTable[activeFormTable]?.[0]?.chain_type
@@ -44,12 +48,13 @@ export function usePolicyRuleFormContext(params: Params) {
   const tableSupports = new Set(params.schema?.tables?.[(defaultChainMode as 'filter' | 'nat' | 'raw' | 'mangle')]?.supports || [])
   const hasSupport = (key: string) => tableSupports.has(key)
 
-  const activeChainOptions = builtinRuleTables.has(activeFormTable)
+  const activeChainOptions = isBuiltinActiveTable
     ? (chainOptionsByTable[activeFormTable] || ['input'])
     : ((customChainRowsByTable[activeFormTable] || []).map((row) => row.chain_name).filter(Boolean))
 
   const effectiveChain = (params.form.chain || activeChainOptions[0] || 'input') as string
   const contextMode: 'filter' | 'nat' | 'raw' | 'mangle' = builtinRuleTables.has(activeFormTable)
+    && isBuiltinActiveTable
     ? (activeFormTable as 'filter' | 'nat' | 'raw' | 'mangle')
     : (defaultChainMode as 'filter' | 'nat' | 'raw' | 'mangle')
 

@@ -28,6 +28,67 @@ async function listSetsViaApi(page: Page) {
   })
 }
 
+async function deleteSetViaApi(page: Page, kind: 'addr' | 'port' | 'iface', id: string) {
+  await page.evaluate(async ({ kind, id }) => {
+    const apiKey = JSON.parse(sessionStorage.getItem('awg_manager_auth_v1') || '{}')?.apiKey
+    await fetch(`/firewall/sets/${kind}/${id}`, { method: 'DELETE', headers: { 'X-API-Key': apiKey } })
+  }, { kind, id })
+}
+
+test('firewall collections: add address set, disable and enable', async ({ page }) => {
+  await login(page)
+  await openFirewall(page)
+  await page.getByRole('tab', { name: 'collections' }).click()
+
+  const setName = unique('trusted_admins')
+  const panel = page.locator('div.rounded-xl.border').first()
+  let setId = ''
+
+  try {
+    await panel.locator('button').filter({ hasText: 'Add' }).first().click()
+    await expect(page.getByText('Add collection')).toBeVisible()
+    const modal = page.locator('div.fixed.inset-0.z-40').last()
+    await page.locator("label:has-text('Type')").locator('..').locator('select').selectOption('addr')
+    await expect(modal.getByText('Use addr collections in rule fields as @set_name')).toBeVisible()
+    await page.getByPlaceholder('set_name').fill(setName)
+    await page.getByPlaceholder('10.0.0.0/24, 192.168.1.0/24').fill('10.66.1.10, 10.66.1.11')
+    await modal.getByRole('button', { name: 'Add' }).click({ force: true })
+    await expect(modal).toBeHidden({ timeout: 30_000 })
+
+    const row = page.locator('tbody tr').filter({ hasText: setName }).first()
+    await expect(row).toBeVisible()
+    await expect(row).toContainText('addr')
+    await expect(row).toContainText('10.66.1.10')
+    await expect(row).toContainText('10.66.1.11')
+
+    const afterCreate = await listSetsViaApi(page)
+    const created = (afterCreate.addr || []).find((s: any) => s.name === setName)
+    expect(created).toBeTruthy()
+    setId = created.id
+    expect(created.enabled).not.toBe(false)
+
+    await row.click()
+    const disableButton = panel.locator('button').filter({ hasText: 'Disable' }).first()
+    const enableButton = panel.locator('button').filter({ hasText: 'Enable' }).first()
+    await expect(disableButton).toBeEnabled()
+    await disableButton.click()
+    await expect.poll(async () => {
+      const sets = await listSetsViaApi(page)
+      return (sets.addr || []).find((s: any) => s.name === setName)?.enabled
+    }).toBe(false)
+
+    await row.click()
+    await expect(enableButton).toBeEnabled({ timeout: 30_000 })
+    await enableButton.click()
+    await expect.poll(async () => {
+      const sets = await listSetsViaApi(page)
+      return (sets.addr || []).find((s: any) => s.name === setName)?.enabled
+    }).not.toBe(false)
+  } finally {
+    if (setId) await deleteSetViaApi(page, 'addr', setId)
+  }
+})
+
 test('firewall maps: add map, disable/enable, delete', async ({ page }) => {
   await login(page)
   await openFirewall(page)

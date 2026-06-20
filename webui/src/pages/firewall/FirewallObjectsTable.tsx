@@ -2,7 +2,7 @@ import * as React from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import type { FirewallNamedObjectItem } from '../api'
-import { buildPolicyV2ObjectUsageKey } from './objectBindings'
+import { buildFirewallObjectUsageKey } from './firewallObjectBindings'
 
 type UsageInfo = { count: number; samples: string[] }
 
@@ -15,11 +15,11 @@ type Props = {
   onRowMouseDown: (e: React.MouseEvent<HTMLTableRowElement>) => void
   onRowClick: (row: FirewallNamedObjectItem, e: React.MouseEvent<HTMLTableRowElement>) => void
   onRowDoubleClick: (row: FirewallNamedObjectItem) => void
-  onFilterRulesByObject: (kind: string, name: string) => void
-  onCreateRuleWithObject: (kind: string, name: string) => void
+  onFilterRulesByObject?: (kind: string, name: string) => void
+  onCreateRuleWithObject?: (kind: string, name: string) => void
 }
 
-export function PolicyBridgeObjectsTable(props: Props) {
+export function FirewallObjectsTable(props: Props) {
   return (
     <div className='min-h-0 min-w-0 w-full flex-1 overflow-auto rounded-xl border'>
       <Table>
@@ -35,7 +35,7 @@ export function PolicyBridgeObjectsTable(props: Props) {
         </TableHeader>
         <TableBody>
           {props.rows.map((row) => {
-            const usageKey = buildPolicyV2ObjectUsageKey(row.kind, row.name)
+            const usageKey = buildFirewallObjectUsageKey(row.kind, row.name)
             const usage = props.usageByKey[usageKey]
             const usageSummary = usage?.count ? `${usage.count} rule(s)${usage.samples.length ? ` (${usage.samples.join(', ')})` : ''}` : null
             return (
@@ -57,31 +57,33 @@ export function PolicyBridgeObjectsTable(props: Props) {
                       {usageSummary ? `used:${usage?.count || 0}` : 'free'}
                     </Badge>
                     <div className='min-w-0 flex-1 truncate'>
-                      {usageSummary ? (
+                      {usageSummary && props.onFilterRulesByObject ? (
                         <button
                           type='button'
                           className='max-w-full truncate text-left text-blue-700 underline-offset-2 hover:underline'
                           title='Filter rules by this object'
                           onClick={(e) => {
                             e.stopPropagation()
-                            props.onFilterRulesByObject(row.kind, row.name)
+                            props.onFilterRulesByObject?.(row.kind, row.name)
                           }}
                         >
                           {usageSummary}
                         </button>
-                      ) : '—'}
+                      ) : (usageSummary || '—')}
                     </div>
-                    <button
-                      type='button'
-                      className='shrink-0 rounded border border-blue-300 bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-900 hover:bg-blue-100'
-                      title='Create bridge rule and prefill this object'
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        props.onCreateRuleWithObject(row.kind, row.name)
-                      }}
-                    >
-                      use
-                    </button>
+                    {props.onCreateRuleWithObject ? (
+                      <button
+                        type='button'
+                        className='shrink-0 rounded border border-blue-300 bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-900 hover:bg-blue-100'
+                        title='Create bridge rule and prefill this object'
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          props.onCreateRuleWithObject?.(row.kind, row.name)
+                        }}
+                      >
+                        use
+                      </button>
+                    ) : null}
                   </div>
                 </TableCell>
                 <TableCell className='max-w-[520px] truncate'>{props.formatSummary(row)}</TableCell>
@@ -99,7 +101,7 @@ export function PolicyBridgeObjectsTable(props: Props) {
           {!props.rows.length ? (
             <TableRow>
               <TableCell colSpan={6} className='py-6 text-center text-xs text-muted-foreground'>
-                {props.managedObjectsCount ? 'No objects match current filter.' : 'No managed objects in selected bridge table.'}
+                {props.managedObjectsCount ? 'No objects match current filter.' : 'No managed objects in selected object table.'}
               </TableCell>
             </TableRow>
           ) : null}
@@ -108,4 +110,3 @@ export function PolicyBridgeObjectsTable(props: Props) {
     </div>
   )
 }
-

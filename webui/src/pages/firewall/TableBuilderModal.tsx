@@ -57,7 +57,17 @@ export function TableBuilderModal(props: Props) {
               <div className='space-y-1.5'><Label>Chain type</Label><select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={props.newChainType} onChange={(e) => props.setNewChainType(e.target.value as TableChainType)}><option value='filter'>filter</option><option value='nat'>nat</option><option value='route'>route</option></select></div>
               <div className='space-y-1.5'><Label>Hook</Label><select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={props.newHook} onChange={(e) => props.setNewHook(e.target.value as TableHook)}>{props.allowedHooksForChainType.map((hookName) => <option key={hookName} value={hookName}>{hookName}</option>)}</select></div>
             </div>
-            <div className='space-y-1.5'><Label>Device</Label><Input className='h-7' placeholder={props.deviceRequiredForHook ? 'eth0 (required for ingress)' : 'Only for ingress hook'} value={props.newDevice} onChange={(e) => props.setNewDevice(e.target.value)} disabled={!props.deviceRequiredForHook} /></div>
+            <div className='space-y-1.5'>
+              <Label>Device</Label>
+              <Input className='h-7' placeholder={props.deviceRequiredForHook ? 'eth0 (required for ingress)' : 'Only for ingress hook'} value={props.newDevice} onChange={(e) => props.setNewDevice(e.target.value)} disabled={!props.deviceRequiredForHook} />
+              {props.newTableFamily === 'netdev' ? (
+                <div className='rounded-md border border-dashed px-2.5 py-1.5 text-[11px] text-muted-foreground'>
+                  <div>netdev tables use filter/ingress on one device.</div>
+                  <div>Device is required for netdev ingress, for example eth0.</div>
+                  <div>netdev egress is not enabled on the current runtime profile.</div>
+                </div>
+              ) : null}
+            </div>
             <div className='grid grid-cols-2 gap-2'>
               <div className='space-y-1.5'><Label>Priority</Label><Input className='h-7' value={props.newPriority} onChange={(e) => props.setNewPriority(e.target.value)} /></div>
               <div className='space-y-1.5'><Label>Policy</Label><select className='h-7 w-full rounded-md border bg-background px-2.5 text-xs' value={props.newPolicy} onChange={(e) => props.setNewPolicy(e.target.value as 'accept' | 'drop')}><option value='accept'>accept</option><option value='drop'>drop</option></select></div>

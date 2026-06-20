@@ -15,6 +15,7 @@ from ..common import data_paths
 from ..common import encryption_context
 from ..common import value_normalization
 from . import legacy_manager_bridge
+from ..domains.firewall import compat_entry_ops as firewall_compat_entry_ops
 from ..domains.firewall import helper_service_ops as firewall_helper_service_ops
 from ..domains.firewall import named_object_ops as firewall_named_object_ops
 from ..domains.firewall import rule_normalization_service_ops as firewall_rule_normalization_service_ops
@@ -83,6 +84,16 @@ def _legacy_manager_attr(name):
 def _backend_or_fallback(method_name, backend_fn, *fallback_args, **fallback_kwargs):
     try:
         return backend_fn()
+    except (ValueError, LookupError):
+        if not str(method_name).startswith("firewall_") and "_firewall_" not in str(method_name):
+            if not _fallback_enabled():
+                raise
+            return _legacy_manager_call(
+                method_name,
+                *fallback_args,
+                **fallback_kwargs,
+            )
+        raise
     except Exception:
         if not _fallback_enabled():
             raise
@@ -1085,45 +1096,16 @@ _collect_firewall_table_defs = functools.partial(
 )
 
 
-_normalize_nft_timeout = functools.partial(
-    firewall_helper_service_ops.normalize_nft_timeout,
+_firewall_collection_runtime_helpers = firewall_compat_entry_ops.build_collection_runtime_helpers(
     normalize_value_fn=_normalize_config_value,
+    now_ts_fn=time.time,
 )
-
-
-_timeout_to_seconds = functools.partial(
-    firewall_helper_service_ops.timeout_to_seconds,
-    normalize_value_fn=_normalize_config_value,
-    normalize_nft_timeout_fn=_normalize_nft_timeout,
-)
-
-
-def _enrich_collection_item_runtime(item, now_ts=None):
-    if now_ts is None:
-        now_ts = int(time.time())
-    return firewall_helper_service_ops.enrich_collection_item_runtime(
-        item,
-        now_ts=int(now_ts),
-        timeout_to_seconds_fn=_timeout_to_seconds,
-    )
-
-
-_cleanup_expired_collection_rows = functools.partial(
-    firewall_helper_service_ops.cleanup_expired_collection_rows,
-    timeout_to_seconds_fn=_timeout_to_seconds,
-)
-
-
-_set_runtime_signature = functools.partial(
-    firewall_helper_service_ops.set_runtime_signature,
-    normalize_value_fn=_normalize_config_value,
-)
-
-
-_map_runtime_signature = functools.partial(
-    firewall_helper_service_ops.map_runtime_signature,
-    normalize_value_fn=_normalize_config_value,
-)
+_normalize_nft_timeout = _firewall_collection_runtime_helpers["normalize_timeout_fn"]
+_timeout_to_seconds = _firewall_collection_runtime_helpers["timeout_to_seconds_fn"]
+_enrich_collection_item_runtime = _firewall_collection_runtime_helpers["enrich_item_runtime_fn"]
+_cleanup_expired_collection_rows = _firewall_collection_runtime_helpers["cleanup_expired_fn"]
+_set_runtime_signature = _firewall_collection_runtime_helpers["set_runtime_signature_fn"]
+_map_runtime_signature = _firewall_collection_runtime_helpers["map_runtime_signature_fn"]
 
 
 _load_effective_table_objects_by_kind = functools.partial(
@@ -1139,7 +1121,7 @@ def _generate_firewall_rule_id():
     return uuid.uuid4().hex
 
 
-def _normalize_firewall_rule(payload):
+def _normalize_firewall_rule(payload, validate_runtime_objects=False):
     return firewall_rule_normalization_service_ops.normalize_firewall_rule(
         payload,
         normalize_value_fn=_normalize_config_value,
@@ -1148,6 +1130,9 @@ def _normalize_firewall_rule(payload):
         ct_states=_firewall_schema().get("ct_states", []),
         read_tables_fn=_read_firewall_tables_file,
         load_effective_objects_fn=_load_effective_table_objects_by_kind,
+        read_sets_fn=_read_firewall_sets_file,
+        read_maps_fn=_read_firewall_maps_file,
+        validate_runtime_objects=validate_runtime_objects,
         id_factory=_generate_firewall_rule_id,
     )
 
@@ -1177,6 +1162,8 @@ def _parse_managed_firewall_table_key(value):
 
 def _list_firewall_runtime_tables():
     return firewall_runtime_adapter.list_tables(_firewall_supported_families())
+
+
 _append_firewall_table_script_lines = functools.partial(
     firewall_helper_service_ops.append_table_script_lines,
     table_prefix=_firewall_table_prefix(),

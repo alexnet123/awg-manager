@@ -262,6 +262,9 @@ def set_runtime_signature(item, normalize_value_fn):
         str(payload.get("name") or ""),
         bool(payload.get("enabled", True)),
         normalize_value_fn(payload.get("timeout")),
+        bool(payload.get("dynamic", False)),
+        normalize_value_fn(payload.get("size")),
+        normalize_value_fn(payload.get("gc_interval")),
         tuple(sorted(set(elems))),
     )
 
@@ -302,6 +305,22 @@ def normalize_set_item(payload, set_kind, normalize_value_fn, normalize_timeout_
     if comment is not None:
         comment = str(comment).replace('"', "'")
     timeout = normalize_timeout_fn(payload.get("timeout"))
+    dynamic = _normalize_logical_bool(payload.get("dynamic", False))
+    size = None
+    size_raw = normalize_value_fn(payload.get("size"))
+    if size_raw is not None:
+        if not re.fullmatch(r"[0-9]+", str(size_raw)):
+            raise ValueError("size must be 1..1000000")
+        size = int(size_raw)
+        if size < 1 or size > 1000000:
+            raise ValueError("size must be 1..1000000")
+    gc_interval = normalize_timeout_fn(payload.get("gc_interval"))
+    if dynamic and timeout is None:
+        raise ValueError("dynamic sets require timeout")
+    if dynamic and size is None:
+        raise ValueError("dynamic sets require size")
+    if gc_interval is not None and timeout is None:
+        raise ValueError("gc_interval requires timeout")
     out = []
     for raw in elems:
         val = normalize_value_fn(raw)
@@ -327,6 +346,9 @@ def normalize_set_item(payload, set_kind, normalize_value_fn, normalize_timeout_
         "enabled": enabled,
         "comment": comment,
         "timeout": timeout,
+        "dynamic": dynamic,
+        "size": size,
+        "gc_interval": gc_interval,
     }
 
 
@@ -345,6 +367,7 @@ def normalize_map_item(payload, map_kind, normalize_value_fn, normalize_timeout_
         comment = str(comment).replace('"', "'")
     timeout = normalize_timeout_fn(payload.get("timeout"))
     normalized_entries = []
+    allowed_vmap_verdicts = {"accept", "drop", "queue", "continue", "return"}
     for raw in entries:
         val = normalize_value_fn(raw)
         if val is None:
@@ -354,6 +377,12 @@ def normalize_map_item(payload, map_kind, normalize_value_fn, normalize_timeout_
             raise ValueError('entry must be "key:value"')
         if len(item) > 200:
             raise ValueError("entry is too long")
+        if map_kind == "vmap":
+            _key, raw_verdict = item.split(":", 1)
+            verdict = str(raw_verdict).strip().lower()
+            if verdict not in allowed_vmap_verdicts:
+                raise ValueError("vmap verdict must be one of: accept, drop, queue, continue, return")
+            item = f"{_key.strip()}:{verdict}"
         normalized_entries.append(item)
     return {
         "id": str(payload.get("id") or uuid.uuid4().hex),
@@ -681,6 +710,8 @@ def normalize_firewall_table_item(
         raise ValueError("chain_name is invalid")
     if chain_type not in ("filter", "nat", "route"):
         raise ValueError("chain_type must be filter|nat|route")
+    if family == "netdev" and hook_name == "egress":
+        raise ValueError("netdev egress hook is not supported by current nft runtime profile")
     if hook_name not in ("prerouting", "input", "forward", "output", "postrouting", "ingress"):
         raise ValueError("hook is invalid")
     allowed_hooks_by_type = {
@@ -698,7 +729,7 @@ def normalize_firewall_table_item(
         raise ValueError("device can be set only for ingress hook")
     if family == "netdev":
         if chain_type != "filter" or hook_name != "ingress":
-            raise ValueError("netdev family supports only chain_type=filter with hook=ingress")
+            raise ValueError("netdev family supports only chain_type=filter with hook=ingress on current nft runtime profile")
         if device is None:
             raise ValueError("device is required for netdev family")
     if family == "bridge":

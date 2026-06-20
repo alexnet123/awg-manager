@@ -91,6 +91,13 @@ IDENTITY_KEYS = (
     "fwd_to",
     "fwd_dev",
     "fwd_family",
+    "set_stmt_op",
+    "set_stmt_name",
+    "set_stmt_expr",
+    "set_stmt_timeout",
+    "set_stmt_comment",
+    "vmap_stmt_expr",
+    "vmap_stmt_name",
     "limit_rate",
     "counter",
     "enabled",
@@ -182,6 +189,13 @@ def extract_normalized_rule_inputs(payload, normalize_value_fn):
     fwd_to = normalize_value_fn(payload.get("fwd_to"))
     fwd_dev = normalize_value_fn(payload.get("fwd_dev"))
     fwd_family = normalize_value_fn(payload.get("fwd_family"))
+    set_stmt_op = normalize_value_fn(payload.get("set_stmt_op"))
+    set_stmt_name = normalize_value_fn(payload.get("set_stmt_name"))
+    set_stmt_expr = normalize_value_fn(payload.get("set_stmt_expr"))
+    set_stmt_timeout = normalize_value_fn(payload.get("set_stmt_timeout"))
+    set_stmt_comment = normalize_value_fn(payload.get("set_stmt_comment"))
+    vmap_stmt_expr = normalize_value_fn(payload.get("vmap_stmt_expr"))
+    vmap_stmt_name = normalize_value_fn(payload.get("vmap_stmt_name"))
     nat_random = payload.get("nat_random", False)
     nat_fully_random = payload.get("nat_fully_random", False)
     nat_persistent = payload.get("nat_persistent", False)
@@ -280,6 +294,13 @@ def extract_normalized_rule_inputs(payload, normalize_value_fn):
         limit_rate,
         counter,
         enabled,
+        set_stmt_op,
+        set_stmt_name,
+        set_stmt_expr,
+        set_stmt_timeout,
+        set_stmt_comment,
+        vmap_stmt_expr,
+        vmap_stmt_name,
     )
 
 
@@ -399,8 +420,8 @@ def normalize_queue_dup_fwd_fields(
 
 def resolve_table_chain_context(family, nft_table, chain, default_family, schema_tables, read_tables_fn):
     family = str(family).lower()
-    if family not in (default_family, "bridge", "netdev"):
-        raise ValueError("family must be inet, bridge, or netdev")
+    if family not in (default_family, "ip", "ip6", "bridge", "netdev"):
+        raise ValueError("family must be inet, ip, ip6, bridge, or netdev")
 
     table_mode = None
     chain_mode = None
@@ -453,7 +474,34 @@ def validate_action_target_reject_and_proto_fields(
     proto,
     dport,
     sport,
+    allow_empty_action=False,
 ):
+    def _normalize_proto_token(raw):
+        if raw is None:
+            return None
+        value = str(raw).strip().lower()
+        if value in ("tcp", "udp", "icmp", "icmpv6"):
+            return value
+        if re.fullmatch(r"[0-9]{1,3}", value):
+            proto_num = int(value)
+            if 0 <= proto_num <= 255:
+                return value
+        raise ValueError("proto must be tcp, udp, icmp, icmpv6, or numeric protocol id 0..255")
+
+    def _proto_allows_ports(value):
+        return value in ("tcp", "udp", "6", "17")
+
+    proto = _normalize_proto_token(proto)
+    if allow_empty_action and not action:
+        if target_chain is not None:
+            raise ValueError("target_chain is only valid for jump/goto")
+        if reject_type is not None:
+            raise ValueError("reject_type is only valid when action=reject")
+        if dport is not None and not _proto_allows_ports(proto):
+            raise ValueError("dport requires proto tcp or udp")
+        if sport is not None and not _proto_allows_ports(proto):
+            raise ValueError("sport requires proto tcp or udp")
+        return {"proto": proto}
     if action not in ("accept", "drop", "reject", "jump", "goto", "return", "queue", "fwd"):
         raise ValueError("action must be one of: accept, drop, reject, jump, goto, return, queue, fwd")
     if action == "fwd" and family != "netdev":
@@ -488,13 +536,9 @@ def validate_action_target_reject_and_proto_fields(
             raise ValueError(
                 "reject_type must be one of: icmpx port-unreachable | icmpx admin-prohibited | icmp type host-unreachable | tcp reset"
             )
-    if proto is not None:
-        proto = str(proto).lower()
-        if proto not in ("tcp", "udp", "icmp", "icmpv6"):
-            raise ValueError("proto must be one of: tcp, udp, icmp, icmpv6")
-    if dport is not None and proto not in ("tcp", "udp"):
+    if dport is not None and not _proto_allows_ports(proto):
         raise ValueError("dport requires proto tcp or udp")
-    if sport is not None and proto not in ("tcp", "udp"):
+    if sport is not None and not _proto_allows_ports(proto):
         raise ValueError("sport requires proto tcp or udp")
 
     return {"proto": proto}
@@ -530,33 +574,74 @@ def normalize_proto_and_basic_match_fields(
     if (icmpv6_type is not None or icmpv6_code is not None) and proto != "icmpv6":
         raise ValueError("icmpv6_type/icmpv6_code require proto icmpv6")
 
-    def _parse_port_or_range(raw, field_name):
-        if not re.fullmatch(r"[0-9]{1,5}(:[0-9]{1,5})?", str(raw)):
-            raise ValueError(f"{field_name} must be like 80 or 1000:2000")
-        if ":" in str(raw):
-            left, right = str(raw).split(":", 1)
-            p1, p2 = int(left), int(right)
-            if p1 < 1 or p2 < 1 or p1 > 65535 or p2 > 65535 or p1 > p2:
-                raise ValueError(f"{field_name} range must be within 1..65535 and start <= end")
-        else:
-            p = int(str(raw))
-            if p < 1 or p > 65535:
+    def _normalize_port_match(raw, field_name):
+        value = str(raw).strip()
+        if value.startswith("@"):
+            if re.fullmatch(r"@[A-Za-z0-9_.-]+", value):
+                return value
+            raise ValueError(f"{field_name} must be a port, range, comma list, or @collection reference")
+
+        def _normalize_one(token):
+            token = token.strip()
+            if not token:
+                raise ValueError(f"{field_name} must be a port, range, comma list, or @collection reference")
+            separator = ":" if ":" in token else ("-" if "-" in token else None)
+            if separator:
+                left, right = token.split(separator, 1)
+                if not re.fullmatch(r"[0-9]{1,5}", left or "") or not re.fullmatch(r"[0-9]{1,5}", right or ""):
+                    raise ValueError(f"{field_name} range must be within 1..65535 and start <= end")
+                p1, p2 = int(left), int(right)
+                if p1 < 1 or p2 < 1 or p1 > 65535 or p2 > 65535 or p1 > p2:
+                    raise ValueError(f"{field_name} range must be within 1..65535 and start <= end")
+                return f"{p1}:{p2}"
+            if not re.fullmatch(r"[0-9]{1,5}", token):
+                raise ValueError(f"{field_name} must be a port, range, comma list, or @collection reference")
+            port = int(token)
+            if port < 1 or port > 65535:
                 raise ValueError(f"{field_name} must be in range 1..65535")
+            return str(port)
+
+        if "," in value:
+            return ",".join(_normalize_one(part) for part in value.split(","))
+        return _normalize_one(value)
 
     if dport is not None:
-        _parse_port_or_range(dport, "dport")
+        dport = _normalize_port_match(dport, "dport")
     if sport is not None:
-        _parse_port_or_range(sport, "sport")
+        sport = _normalize_port_match(sport, "sport")
+
+    def _validate_l3_address_match(raw, field_name):
+        value = str(raw).strip()
+        if "," in value or "{" in value or "}" in value:
+            raise ValueError(f"{field_name} must be one IP/CIDR prefix or one @collection reference")
+        if value.startswith("@"):
+            if not re.fullmatch(r"@[A-Za-z0-9_.-]+", value):
+                raise ValueError(f"{field_name} must be one IP/CIDR prefix or one @collection reference")
+            return
+        try:
+            ipaddress.ip_network(value, strict=False)
+        except ValueError as exc:
+            raise ValueError(f"{field_name} must be one IP/CIDR prefix or one @collection reference") from exc
 
     if src is not None:
-        ipaddress.ip_network(str(src), strict=False)
+        _validate_l3_address_match(src, "src")
     if dst is not None:
-        ipaddress.ip_network(str(dst), strict=False)
+        _validate_l3_address_match(dst, "dst")
 
-    if in_interface is not None and not re.fullmatch(r"[A-Za-z0-9_.:-]+", str(in_interface)):
-        raise ValueError("in_interface contains invalid characters")
-    if out_interface is not None and not re.fullmatch(r"[A-Za-z0-9_.:-]+", str(out_interface)):
-        raise ValueError("out_interface contains invalid characters")
+    def _validate_interface_match(raw, field_name):
+        value = str(raw).strip()
+        if value.startswith("@"):
+            if re.fullmatch(r"@[A-Za-z0-9_.-]+", value):
+                return value
+            raise ValueError(f"{field_name} must be one interface name or one @collection reference")
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]+", value):
+            raise ValueError(f"{field_name} must be one interface name or one @collection reference")
+        return value
+
+    if in_interface is not None:
+        in_interface = _validate_interface_match(in_interface, "in_interface")
+    if out_interface is not None:
+        out_interface = _validate_interface_match(out_interface, "out_interface")
     if ibrname is not None and not re.fullmatch(r"[A-Za-z0-9_.:-]+", str(ibrname)):
         raise ValueError("ibrname contains invalid characters")
     if obrname is not None and not re.fullmatch(r"[A-Za-z0-9_.:-]+", str(obrname)):
@@ -800,14 +885,18 @@ def normalize_limit_and_named_object_fields(
     if limit_name is not None and limit_rate is not None:
         raise ValueError("limit_name and limit_rate are mutually exclusive")
 
-    if family != "bridge":
-        if ct_helper_set is not None or ct_timeout_set is not None or ct_expectation_set is not None:
-            raise ValueError("ct_helper_set/ct_timeout_set/ct_expectation_set are supported only for family=bridge in this sprint")
-        if counter_name is not None or limit_name is not None or quota_name is not None:
-            raise ValueError("counter_name/limit_name/quota_name are supported only for family=bridge in this sprint")
+    if family == "netdev" and (
+        ct_helper_set is not None
+        or ct_timeout_set is not None
+        or ct_expectation_set is not None
+        or counter_name is not None
+        or limit_name is not None
+        or quota_name is not None
+    ):
+        raise ValueError("named object bindings are not supported for family=netdev")
 
     if family == "bridge" and ct_expectation_set is not None:
-        raise ValueError("ct_expectation_set is planned for family=bridge and is temporarily disabled")
+        raise ValueError("ct_expectation_set is not supported for family=bridge")
 
     return {
         "limit_rate": limit_rate,
@@ -818,6 +907,161 @@ def normalize_limit_and_named_object_fields(
         "counter_name": counter_name,
         "limit_name": limit_name,
         "quota_name": quota_name,
+    }
+
+
+def normalize_dynamic_set_statement_fields(
+    set_stmt_op,
+    set_stmt_name,
+    set_stmt_expr,
+    set_stmt_timeout,
+    set_stmt_comment,
+    family,
+    read_sets_fn=None,
+):
+    has_statement = any(
+        value is not None
+        for value in (set_stmt_op, set_stmt_name, set_stmt_expr, set_stmt_timeout, set_stmt_comment)
+    )
+    if not has_statement:
+        return {
+            "set_stmt_op": None,
+            "set_stmt_name": None,
+            "set_stmt_expr": None,
+            "set_stmt_timeout": None,
+            "set_stmt_comment": None,
+        }
+
+    if family != "inet":
+        raise ValueError("dynamic set statements are supported only for family=inet in current runtime profile")
+
+    if set_stmt_op is None:
+        raise ValueError("set_stmt_op is required for dynamic set statements")
+    set_stmt_op = str(set_stmt_op).lower()
+    if set_stmt_op not in ("add", "update"):
+        raise ValueError("set_stmt_op must be add or update")
+
+    if set_stmt_name is None or not re.fullmatch(r"[A-Za-z0-9_.-]+", str(set_stmt_name)):
+        raise ValueError("set_stmt_name is invalid")
+    set_stmt_name = str(set_stmt_name)
+
+    allowed_expr_kinds = {
+        "ip saddr": "addr",
+        "ip daddr": "addr",
+        "tcp dport": "port",
+        "udp dport": "port",
+    }
+    if set_stmt_expr is None:
+        raise ValueError("set_stmt_expr is required for dynamic set statements")
+    set_stmt_expr = str(set_stmt_expr).lower()
+    if set_stmt_expr not in allowed_expr_kinds:
+        raise ValueError("set_stmt_expr must be one of: ip saddr, ip daddr, tcp dport, udp dport")
+
+    if set_stmt_timeout is None:
+        raise ValueError("set_stmt_timeout is required for dynamic set statements")
+    set_stmt_timeout = str(set_stmt_timeout).lower()
+    if not re.fullmatch(r"[0-9]+(ms|s|m|h|d)", set_stmt_timeout):
+        raise ValueError("set_stmt_timeout must be like 10s, 1m, or 500ms")
+
+    if set_stmt_comment is not None:
+        raise ValueError("set_stmt_comment is not supported by current nft runtime profile")
+
+    sets_data = read_sets_fn() if read_sets_fn is not None else {}
+    target_kind = None
+    target = None
+    for set_kind in ("addr", "port", "iface"):
+        for item in (sets_data or {}).get(set_kind, []):
+            if isinstance(item, dict) and str(item.get("name") or "") == set_stmt_name:
+                target_kind = set_kind
+                target = item
+                break
+        if target is not None:
+            break
+    if target is None:
+        raise ValueError(f'dynamic set "{set_stmt_name}" is not found')
+    if not target.get("enabled", True):
+        raise ValueError(f'dynamic set "{set_stmt_name}" must be enabled')
+    if not target.get("dynamic"):
+        raise ValueError(f'dynamic set "{set_stmt_name}" must have dynamic=true')
+    if not target.get("size"):
+        raise ValueError(f'dynamic set "{set_stmt_name}" must have size')
+    if not (target.get("timeout") or set_stmt_timeout):
+        raise ValueError(f'dynamic set "{set_stmt_name}" must have timeout')
+    if target_kind != allowed_expr_kinds[set_stmt_expr]:
+        raise ValueError("target set kind is not compatible with set_stmt_expr")
+
+    return {
+        "set_stmt_op": set_stmt_op,
+        "set_stmt_name": set_stmt_name,
+        "set_stmt_expr": set_stmt_expr,
+        "set_stmt_timeout": set_stmt_timeout,
+        "set_stmt_comment": set_stmt_comment,
+    }
+
+
+def _infer_vmap_key_type_from_entries(entries):
+    for entry in entries or []:
+        if not entry or ":" not in str(entry):
+            continue
+        key, _value = str(entry).split(":", 1)
+        key = key.strip()
+        if key:
+            from . import collection_ops
+
+            return collection_ops.infer_map_token_type(key)
+    return None
+
+
+def normalize_vmap_statement_fields(
+    vmap_stmt_expr,
+    vmap_stmt_name,
+    family,
+    action,
+    read_maps_fn=None,
+):
+    has_statement = any(value is not None for value in (vmap_stmt_expr, vmap_stmt_name))
+    if not has_statement:
+        return {
+            "vmap_stmt_expr": None,
+            "vmap_stmt_name": None,
+        }
+
+    if family != "inet":
+        raise ValueError("vmap statements are supported only for family=inet in current runtime profile")
+    if action:
+        raise ValueError("vmap statements cannot be combined with terminal action in first implementation scope")
+
+    allowed_expr_key_types = {
+        "meta l4proto": "inet_proto",
+    }
+    if vmap_stmt_expr is None:
+        raise ValueError("vmap_stmt_expr is required for vmap statements")
+    vmap_stmt_expr = str(vmap_stmt_expr).lower()
+    if vmap_stmt_expr not in allowed_expr_key_types:
+        raise ValueError("vmap_stmt_expr must be one of: meta l4proto")
+
+    if vmap_stmt_name is None or not re.fullmatch(r"[A-Za-z0-9_.-]+", str(vmap_stmt_name)):
+        raise ValueError("vmap_stmt_name is invalid")
+    vmap_stmt_name = str(vmap_stmt_name)
+
+    maps_data = read_maps_fn() if read_maps_fn is not None else {}
+    target = None
+    for item in (maps_data or {}).get("vmap", []):
+        if isinstance(item, dict) and str(item.get("name") or "") == vmap_stmt_name:
+            target = item
+            break
+    if target is None:
+        raise ValueError(f'vmap "{vmap_stmt_name}" is not found')
+    if not target.get("enabled", True):
+        raise ValueError(f'vmap "{vmap_stmt_name}" must be enabled')
+
+    target_key_type = _infer_vmap_key_type_from_entries(target.get("entries") or [])
+    if target_key_type != allowed_expr_key_types[vmap_stmt_expr]:
+        raise ValueError("target vmap key type is not compatible with vmap_stmt_expr")
+
+    return {
+        "vmap_stmt_expr": vmap_stmt_expr,
+        "vmap_stmt_name": vmap_stmt_name,
     }
 
 
@@ -1031,9 +1275,9 @@ def validate_bridge_disallowed_fields(family, field_values):
     for field_name, field_value in field_values:
         if isinstance(field_value, bool):
             if field_value:
-                raise ValueError(f"{field_name} is not supported for family=bridge in Policy v2 MVP")
+                raise ValueError(f"{field_name} is not supported for family=bridge in unified Policy")
         elif field_value is not None:
-            raise ValueError(f"{field_name} is not supported for family=bridge in Policy v2 MVP")
+            raise ValueError(f"{field_name} is not supported for family=bridge in unified Policy")
 
 
 def validate_netdev_restrictions(family, selected_chain, selected_device, field_values):
@@ -1041,14 +1285,16 @@ def validate_netdev_restrictions(family, selected_chain, selected_device, field_
         return
     selected_hook = str((selected_chain or {}).get("hook") or "").lower()
     selected_type = str((selected_chain or {}).get("chain_type") or "filter").lower()
+    if selected_hook == "egress":
+        raise ValueError("netdev egress hook is not supported by current nft runtime profile")
     if selected_type != "filter" or selected_hook != "ingress" or selected_device is None:
         raise ValueError("family=netdev requires a custom filter chain with hook=ingress and device")
     for field_name, field_value in field_values:
         if isinstance(field_value, bool):
             if field_value:
-                raise ValueError(f"{field_name} is not supported for family=netdev in Policy3")
+                raise ValueError(f"{field_name} is not supported for family=netdev in unified Policy")
         elif field_value is not None:
-            raise ValueError(f"{field_name} is not supported for family=netdev in Policy3")
+            raise ValueError(f"{field_name} is not supported for family=netdev in unified Policy")
 
 
 def validate_family_specific_restrictions(
@@ -1314,6 +1560,13 @@ def build_normalized_rule_payload(
     fwd_family,
     counter,
     enabled,
+    set_stmt_op=None,
+    set_stmt_name=None,
+    set_stmt_expr=None,
+    set_stmt_timeout=None,
+    set_stmt_comment=None,
+    vmap_stmt_expr=None,
+    vmap_stmt_name=None,
 ):
     return {
         "id": str(raw_rule_id or id_factory()),
@@ -1405,12 +1658,26 @@ def build_normalized_rule_payload(
         "fwd_to": fwd_to,
         "fwd_dev": fwd_dev,
         "fwd_family": fwd_family,
+        "set_stmt_op": set_stmt_op,
+        "set_stmt_name": set_stmt_name,
+        "set_stmt_expr": set_stmt_expr,
+        "set_stmt_timeout": set_stmt_timeout,
+        "set_stmt_comment": set_stmt_comment,
+        "vmap_stmt_expr": vmap_stmt_expr,
+        "vmap_stmt_name": vmap_stmt_name,
         "counter": counter,
         "enabled": enabled,
     }
 
 
 def render_firewall_rule(rule, table_family="inet"):
+    if table_family == "bridge":
+        for field_name in ("nat_type", "raw_expr", "dup_to", "dup_dev"):
+            if rule.get(field_name):
+                if field_name in ("dup_to", "dup_dev"):
+                    raise ValueError("dup_to/dup_dev are not supported for family=bridge in runtime renderer")
+                raise ValueError(f"{field_name} is not supported for family=bridge in runtime renderer")
+
     def _detect_ip_family(value):
         raw = str(value or "").strip()
         if not raw:
@@ -1424,6 +1691,11 @@ def render_firewall_rule(rule, table_family="inet"):
 
     def _render_port_value(raw):
         value = str(raw)
+        if value.startswith("@"):
+            return value
+        if "," in value:
+            parts = [part.strip().replace(":", "-") for part in value.split(",")]
+            return "{ " + ", ".join(parts) + " }"
         if ":" in value:
             return value.replace(":", "-")
         return value
@@ -1440,15 +1712,28 @@ def render_firewall_rule(rule, table_family="inet"):
         }
         return mapping.get(value, value)
 
+    def _render_transport_proto(raw):
+        value = str(raw or "").strip().lower()
+        return {"6": "tcp", "17": "udp"}.get(value, value)
+
+    def _render_dscp_selector():
+        return "ip6 dscp" if table_family == "ip6" else "ip dscp"
+
+    def _render_interface_match(raw):
+        value = str(raw)
+        if value.startswith("@"):
+            return value
+        return f'"{value}"'
+
     parts = []
     if table_family == "bridge" and rule.get("ibrname"):
         parts.append(f'ibrname "{rule["ibrname"]}"')
     elif rule["in_interface"]:
-        parts.append(f'iifname "{rule["in_interface"]}"')
+        parts.append(f'iifname {_render_interface_match(rule["in_interface"])}')
     if table_family == "bridge" and rule.get("obrname"):
         parts.append(f'obrname "{rule["obrname"]}"')
     elif rule["out_interface"]:
-        parts.append(f'oifname "{rule["out_interface"]}"')
+        parts.append(f'oifname {_render_interface_match(rule["out_interface"])}')
     if rule["src"]:
         prefix = "ip6" if ":" in str(rule["src"]) else "ip"
         parts.append(f'{prefix} saddr {rule["src"]}')
@@ -1479,11 +1764,11 @@ def render_firewall_rule(rule, table_family="inet"):
         else:
             parts.append(f'meta hour "{rule["hour"]}"')
     if rule.get("dscp"):
-        parts.append(f'ip dscp {rule["dscp"]}')
+        parts.append(f'{_render_dscp_selector()} {rule["dscp"]}')
     if rule["sport"]:
-        parts.append(f'{rule["proto"]} sport {_render_port_value(rule["sport"])}')
+        parts.append(f'{_render_transport_proto(rule["proto"])} sport {_render_port_value(rule["sport"])}')
     if rule["dport"]:
-        parts.append(f'{rule["proto"]} dport {_render_port_value(rule["dport"])}')
+        parts.append(f'{_render_transport_proto(rule["proto"])} dport {_render_port_value(rule["dport"])}')
     if rule.get("limit_rate"):
         parts.append(f'limit rate {rule["limit_rate"]}')
     if rule.get("limit_name"):
@@ -1601,6 +1886,16 @@ def render_firewall_rule(rule, table_family="inet"):
         parts.append(f'ct timeout set "{rule["ct_timeout_set"]}"')
     if rule.get("ct_expectation_set"):
         parts.append(f'ct expectation set "{rule["ct_expectation_set"]}"')
+    if rule.get("set_stmt_op"):
+        set_stmt = f'{rule["set_stmt_op"]} @{rule["set_stmt_name"]} {{ {rule["set_stmt_expr"]}'
+        if rule.get("set_stmt_timeout"):
+            set_stmt += f' timeout {rule["set_stmt_timeout"]}'
+        if rule.get("set_stmt_comment"):
+            set_stmt += f' comment "{rule["set_stmt_comment"]}"'
+        set_stmt += " }"
+        parts.append(set_stmt)
+    if rule.get("vmap_stmt_expr"):
+        parts.append(f'{rule["vmap_stmt_expr"]} vmap @{rule["vmap_stmt_name"]}')
     if rule.get("dup_to"):
         if rule.get("dup_dev"):
             parts.append(f'dup to {rule["dup_to"]} device "{rule["dup_dev"]}"')
@@ -1653,7 +1948,7 @@ def render_firewall_rule(rule, table_family="inet"):
                 parts.append(f'fwd {family} to {rule["fwd_to"]} device "{rule["fwd_dev"]}"')
             else:
                 parts.append(f'fwd to {rule["fwd_to"]} device "{rule["fwd_dev"]}"')
-        else:
+        elif action:
             parts.append(action)
     if rule["comment"]:
         parts.append(f'comment "{rule["comment"]}"')
@@ -1811,6 +2106,10 @@ def reorder_rules(
         out.extend(reordered_table_rules)
 
     write_rules_fn(out)
-    if apply_now:
-        apply_rules_fn()
+    try:
+        if apply_now:
+            apply_rules_fn()
+    except Exception:
+        write_rules_fn(rules)
+        raise
     return reordered_table_rules

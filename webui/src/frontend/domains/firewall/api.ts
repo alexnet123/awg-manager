@@ -5,8 +5,8 @@ export type FirewallRule = {
   table: string
   family: 'inet' | 'ip' | 'ip6' | 'bridge' | 'netdev'
   chain: string
-  action: 'accept' | 'drop' | 'reject' | 'jump' | 'goto' | 'return' | 'queue' | 'fwd'
-  proto?: 'tcp' | 'udp' | 'icmp' | 'icmpv6' | null
+  action: '' | 'accept' | 'drop' | 'reject' | 'jump' | 'goto' | 'return' | 'queue' | 'fwd'
+  proto?: string | null
   src?: string | null
   dst?: string | null
   in_interface?: string | null
@@ -89,6 +89,13 @@ export type FirewallRule = {
   fwd_to?: string | null
   fwd_dev?: string | null
   fwd_family?: 'ip' | 'ip6' | null
+  set_stmt_op?: 'add' | 'update' | null
+  set_stmt_name?: string | null
+  set_stmt_expr?: 'ip saddr' | 'ip daddr' | 'tcp dport' | 'udp dport' | null
+  set_stmt_timeout?: string | null
+  set_stmt_comment?: string | null
+  vmap_stmt_expr?: 'meta l4proto' | null
+  vmap_stmt_name?: string | null
   limit_rate?: string | null
   counter?: boolean
   runtime_packets?: number
@@ -106,6 +113,9 @@ export type FirewallSetItem = {
   enabled?: boolean
   comment?: string | null
   timeout?: string | null
+  dynamic?: boolean
+  size?: number | null
+  gc_interval?: string | null
   created_at?: number | null
   timeout_started_at?: number | null
   timeout_seconds?: number | null

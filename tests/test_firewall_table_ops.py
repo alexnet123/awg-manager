@@ -140,6 +140,60 @@ class FirewallTableOpsTest(unittest.TestCase):
         self.assertEqual([x["id"] for x in objects_state["objects"]], ["o2"])
         self.assertEqual(applied["count"], 2)
 
+    def test_delete_table_skips_object_write_when_no_related_objects(self):
+        tables_state = {
+            "tables": [
+                {
+                    "id": "t1",
+                    "family": "bridge",
+                    "table_name": "br_filter",
+                    "chain_name": "forward",
+                    "hook": "forward",
+                    "priority": -200,
+                }
+            ]
+        }
+        objects_state = {
+            "objects": [
+                {"id": "o1", "family": "inet", "table": "filter"},
+                {"id": "o2", "family": "bridge", "table": "other_bridge"},
+            ]
+        }
+        object_writes = {"count": 0}
+        applied = {"count": 0}
+
+        def _read_tables():
+            return {"tables": [dict(x) for x in tables_state["tables"]]}
+
+        def _write_tables(data):
+            tables_state["tables"] = [dict(x) for x in data.get("tables", [])]
+
+        def _read_objects():
+            return {"objects": [dict(x) for x in objects_state["objects"]]}
+
+        def _write_objects(data):
+            object_writes["count"] += 1
+            objects_state["objects"] = [dict(x) for x in data.get("objects", [])]
+
+        def _apply():
+            applied["count"] += 1
+
+        deleted = table_ops.delete_table(
+            table_id="t1",
+            read_tables_fn=_read_tables,
+            write_tables_fn=_write_tables,
+            read_objects_fn=_read_objects,
+            write_objects_fn=_write_objects,
+            apply_rules_fn=_apply,
+            default_family="inet",
+        )
+
+        self.assertEqual(deleted["id"], "t1")
+        self.assertEqual(tables_state["tables"], [])
+        self.assertEqual([x["id"] for x in objects_state["objects"]], ["o1", "o2"])
+        self.assertEqual(object_writes["count"], 0)
+        self.assertEqual(applied["count"], 1)
+
     def test_delete_table_raises_for_missing_id(self):
         def _read_tables():
             return {"tables": []}

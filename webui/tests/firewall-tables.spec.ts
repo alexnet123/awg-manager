@@ -91,6 +91,22 @@ test('firewall tables: add and delete custom table chain', async ({ page }) => {
   }, { timeout: 15_000 }).toBeFalsy()
 })
 
+test('firewall tables: netdev table builder explains device and egress limits', async ({ page }) => {
+  await login(page)
+  await openFirewall(page)
+  await page.getByRole('tab', { name: 'table builder' }).click()
+
+  const tablePanel = page.locator('div.rounded-xl.border').first()
+  await tablePanel.locator('button').filter({ hasText: 'Add' }).first().click()
+  await expect(page.getByText('Add Table Chain')).toBeVisible()
+
+  const modal = page.locator('div.fixed.inset-0.z-40').last()
+  await modal.locator("label:has-text('Family')").locator('..').locator('select').selectOption('netdev')
+  await expect(modal.getByText('netdev tables use filter/ingress on one device.')).toBeVisible()
+  await expect(modal.getByText('Device is required for netdev ingress, for example eth0.')).toBeVisible()
+  await expect(modal.getByText('netdev egress is not enabled on the current runtime profile.')).toBeVisible()
+})
+
 test('firewall policy: click custom table and create rule in it', async ({ page }) => {
   await login(page)
   await openFirewall(page)

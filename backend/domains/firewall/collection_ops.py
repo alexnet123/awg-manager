@@ -10,6 +10,8 @@ def infer_map_token_type(token):
     t = str(token or "").strip()
     if not t:
         return "ifname"
+    if t.lower() in ("tcp", "udp", "udplite", "icmp", "icmpv6", "sctp", "dccp"):
+        return "inet_proto"
     if t.lower() in ("established", "related", "new", "invalid", "untracked"):
         return "ct_state"
     if t.lower() in (
@@ -94,35 +96,49 @@ def append_runtime_collection_script_lines(
     maps_data,
     normalize_value_fn,
 ):
+    def _build_set_options(item, base_flags):
+        flags = list(base_flags)
+        if item.get("dynamic"):
+            flags.append("dynamic")
+        timeout = normalize_value_fn(item.get("timeout"))
+        if timeout:
+            flags.append("timeout")
+        flags = list(dict.fromkeys(flags))
+        flags_clause = f' flags {",".join(flags)};' if flags else ""
+        timeout_clause = f" timeout {timeout};" if timeout else ""
+        gc_interval = normalize_value_fn(item.get("gc_interval"))
+        gc_clause = f" gc-interval {gc_interval};" if gc_interval else ""
+        size = normalize_value_fn(item.get("size"))
+        size_clause = f" size {size};" if size else ""
+        return flags_clause, timeout_clause, gc_clause, size_clause
+
     for item in sets_data.get("addr", []):
         if item.get("name") and item.get("enabled", True):
             elems = [x for x in (item.get("elements") or []) if x]
             flags = []
             if any("/" in str(x) for x in elems):
                 flags.append("interval")
-            timeout = normalize_value_fn(item.get("timeout"))
-            if timeout:
-                flags.append("timeout")
-            flags_clause = f' flags {",".join(flags)};' if flags else ""
-            timeout_clause = f" timeout {timeout};" if timeout else ""
-            script_lines.append(f'add set {table_family} {table_name} {item["name"]} {{ type ipv4_addr;{flags_clause}{timeout_clause} }}')
+            flags_clause, timeout_clause, gc_clause, size_clause = _build_set_options(item, flags)
+            script_lines.append(
+                f'add set {table_family} {table_name} {item["name"]} {{ type ipv4_addr;{flags_clause}{timeout_clause}{gc_clause}{size_clause} }}'
+            )
             if elems:
                 script_lines.append(f'add element {table_family} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
     for item in sets_data.get("port", []):
         if item.get("name") and item.get("enabled", True):
-            timeout = normalize_value_fn(item.get("timeout"))
-            flags_clause = " flags timeout;" if timeout else ""
-            timeout_clause = f" timeout {timeout};" if timeout else ""
-            script_lines.append(f'add set {table_family} {table_name} {item["name"]} {{ type inet_service;{flags_clause}{timeout_clause} }}')
+            flags_clause, timeout_clause, gc_clause, size_clause = _build_set_options(item, [])
+            script_lines.append(
+                f'add set {table_family} {table_name} {item["name"]} {{ type inet_service;{flags_clause}{timeout_clause}{gc_clause}{size_clause} }}'
+            )
             elems = [x for x in (item.get("elements") or []) if x]
             if elems:
                 script_lines.append(f'add element {table_family} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
     for item in sets_data.get("iface", []):
         if item.get("name") and item.get("enabled", True):
-            timeout = normalize_value_fn(item.get("timeout"))
-            flags_clause = " flags timeout;" if timeout else ""
-            timeout_clause = f" timeout {timeout};" if timeout else ""
-            script_lines.append(f'add set {table_family} {table_name} {item["name"]} {{ type ifname;{flags_clause}{timeout_clause} }}')
+            flags_clause, timeout_clause, gc_clause, size_clause = _build_set_options(item, [])
+            script_lines.append(
+                f'add set {table_family} {table_name} {item["name"]} {{ type ifname;{flags_clause}{timeout_clause}{gc_clause}{size_clause} }}'
+            )
             elems = [f'"{x}"' for x in (item.get("elements") or []) if x]
             if elems:
                 script_lines.append(f'add element {table_family} {table_name} {item["name"]} {{ {", ".join(elems)} }}')
@@ -153,6 +169,7 @@ def list_collections(
     apply_rules_fn,
 ):
     data = read_fn()
+    previous_data = {kind: [dict(row) for row in data.get(kind, [])] for kind in kinds}
     changed = False
     removed_active = 0
     now_ts = int(time.time())
@@ -171,8 +188,14 @@ def list_collections(
         response[kind] = response_rows
     if changed:
         write_fn(data)
-        if removed_active > 0:
-            apply_rules_fn()
+        try:
+            if removed_active > 0:
+                apply_rules_fn()
+        except Exception:
+            for kind, rows in previous_data.items():
+                data[kind] = rows
+            write_fn(data)
+            raise
     return response
 
 
@@ -195,6 +218,7 @@ def upsert_collection(
     if kind not in tuple(allowed_kinds):
         raise ValueError(str(invalid_kind_error))
     data = read_fn()
+    previous_rows = [dict(row) for row in data.get(kind, [])]
     item = normalize_item_fn(payload, kind)
     now_ts = int(time.time())
     out, item, runtime_changed = store.upsert_collection_rows(
@@ -213,8 +237,13 @@ def upsert_collection(
     )
     data[kind] = out
     write_fn(data)
-    if runtime_changed:
-        apply_rules_fn()
+    try:
+        if runtime_changed:
+            apply_rules_fn()
+    except Exception:
+        data[kind] = previous_rows
+        write_fn(data)
+        raise
     return enrich_item_fn(item)
 
 
@@ -231,6 +260,7 @@ def delete_collection(
     if kind not in tuple(allowed_kinds):
         raise ValueError(str(invalid_kind_error))
     data = read_fn()
+    previous_rows = [dict(row) for row in data.get(kind, [])]
     out, existing, runtime_changed = store.delete_collection_row(
         data.get(kind, []),
         item_id,
@@ -238,6 +268,11 @@ def delete_collection(
     )
     data[kind] = out
     write_fn(data)
-    if runtime_changed:
-        apply_rules_fn()
+    try:
+        if runtime_changed:
+            apply_rules_fn()
+    except Exception:
+        data[kind] = previous_rows
+        write_fn(data)
+        raise
     return existing

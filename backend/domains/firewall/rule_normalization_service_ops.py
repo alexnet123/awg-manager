@@ -18,6 +18,8 @@ def normalize_firewall_rule(
     ct_states,
     read_tables_fn,
     load_effective_objects_fn,
+    read_sets_fn=None,
+    read_maps_fn=None,
     validate_runtime_objects=False,
     id_factory=None,
 ):
@@ -115,10 +117,27 @@ def normalize_firewall_rule(
         limit_rate,
         counter,
         enabled,
+        set_stmt_op,
+        set_stmt_name,
+        set_stmt_expr,
+        set_stmt_timeout,
+        set_stmt_comment,
+        vmap_stmt_expr,
+        vmap_stmt_name,
     ) = rule_ops.extract_normalized_rule_inputs(
         payload=payload,
         normalize_value_fn=normalize_value_fn,
     )
+
+    has_dynamic_set_statement = any(
+        value is not None
+        for value in (set_stmt_op, set_stmt_name, set_stmt_expr, set_stmt_timeout, set_stmt_comment)
+    )
+    if has_dynamic_set_statement and str(family).lower() != default_family:
+        raise ValueError("dynamic set statements are supported only for family=inet in current runtime profile")
+    has_vmap_statement = any(value is not None for value in (vmap_stmt_expr, vmap_stmt_name))
+    if has_vmap_statement and str(family).lower() != default_family:
+        raise ValueError("vmap statements are supported only for family=inet in current runtime profile")
 
     table_chain_ctx = rule_ops.resolve_table_chain_context(
         family=family,
@@ -141,6 +160,7 @@ def normalize_firewall_rule(
         proto=proto,
         dport=dport,
         sport=sport,
+        allow_empty_action=has_vmap_statement,
     )
     proto = action_proto_fields["proto"]
     queue_dup_fwd = rule_ops.normalize_queue_dup_fwd_fields(
@@ -162,6 +182,29 @@ def normalize_firewall_rule(
     fwd_to = queue_dup_fwd["fwd_to"]
     fwd_dev = queue_dup_fwd["fwd_dev"]
     fwd_family = queue_dup_fwd["fwd_family"]
+    dynamic_set_statement = rule_ops.normalize_dynamic_set_statement_fields(
+        set_stmt_op=set_stmt_op,
+        set_stmt_name=set_stmt_name,
+        set_stmt_expr=set_stmt_expr,
+        set_stmt_timeout=set_stmt_timeout,
+        set_stmt_comment=set_stmt_comment,
+        family=family,
+        read_sets_fn=read_sets_fn,
+    )
+    set_stmt_op = dynamic_set_statement["set_stmt_op"]
+    set_stmt_name = dynamic_set_statement["set_stmt_name"]
+    set_stmt_expr = dynamic_set_statement["set_stmt_expr"]
+    set_stmt_timeout = dynamic_set_statement["set_stmt_timeout"]
+    set_stmt_comment = dynamic_set_statement["set_stmt_comment"]
+    vmap_statement = rule_ops.normalize_vmap_statement_fields(
+        vmap_stmt_expr=vmap_stmt_expr,
+        vmap_stmt_name=vmap_stmt_name,
+        family=family,
+        action=action,
+        read_maps_fn=read_maps_fn,
+    )
+    vmap_stmt_expr = vmap_statement["vmap_stmt_expr"]
+    vmap_stmt_name = vmap_statement["vmap_stmt_name"]
     basic_match_fields = rule_ops.normalize_proto_and_basic_match_fields(
         proto=proto,
         dport=dport,
@@ -515,4 +558,11 @@ def normalize_firewall_rule(
         fwd_family=fwd_family,
         counter=counter,
         enabled=enabled,
+        set_stmt_op=set_stmt_op,
+        set_stmt_name=set_stmt_name,
+        set_stmt_expr=set_stmt_expr,
+        set_stmt_timeout=set_stmt_timeout,
+        set_stmt_comment=set_stmt_comment,
+        vmap_stmt_expr=vmap_stmt_expr,
+        vmap_stmt_name=vmap_stmt_name,
     )

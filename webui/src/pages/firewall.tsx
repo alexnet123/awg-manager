@@ -5,43 +5,37 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import type { AuthState, FirewallMapsState, FirewallNamedObjects, FirewallRule, FirewallSchema, FirewallSetsState, FirewallState, FirewallTableItem, FirewallTablesState } from './api'
-import { getPolicyAdvancedCapabilities } from './firewall/capabilities'
+import { getFirewallObjects } from './api'
 import { CollectionsSection } from './firewall/CollectionsSection'
 import { FirewallModalStack } from './firewall/FirewallModalStack'
-import { PolicyAdvancedPage } from './firewall/PolicyAdvancedPage'
-import { formatPolicyV2ObjectSummary } from './firewall/policyV2ObjectSummary'
+import { FirewallObjectsPanel } from './firewall/FirewallObjectsPanel'
+import { formatFirewallObjectSummary } from './firewall/firewallObjectSummary'
 import { PolicyRulesTable } from './firewall/PolicyRulesTable'
 import { FirewallSectionTabs } from './firewall/FirewallSectionTabs'
 import { PolicySectionToolbar } from './firewall/PolicySectionToolbar'
 import { TablesSection } from './firewall/TablesSection'
-import { usePolicyAdvancedData } from './firewall/usePolicyAdvancedData'
-import { defaultPolicyV2ObjectForm, type PolicyV2ObjectForm } from './firewall/policyV2ObjectForm'
-import { usePolicyAdvancedObjectActions } from './firewall/usePolicyAdvancedObjectActions'
-import { usePolicyAdvancedObjectEditor } from './firewall/usePolicyAdvancedObjectEditor'
-import { usePolicyAdvancedBindings } from './firewall/usePolicyAdvancedBindings'
-import { usePolicyAdvancedContextSync } from './firewall/usePolicyAdvancedContextSync'
-import { usePolicyAdvancedRuleActions } from './firewall/usePolicyAdvancedRuleActions'
-import { usePolicyAdvancedTableContext } from './firewall/usePolicyAdvancedTableContext'
+import { defaultFirewallObjectForm, type FirewallObjectForm } from './firewall/firewallObjectForm'
+import type { DynamicSetStatementOption, VmapStatementOption } from './firewall/PolicyRuleEditorActionTab'
+import { useFirewallObjectActions } from './firewall/useFirewallObjectActions'
+import { useFirewallObjectEditor } from './firewall/useFirewallObjectEditor'
+import { useFirewallObjectBindings } from './firewall/useFirewallObjectBindings'
 import { useFirewallDataSync } from './firewall/useFirewallDataSync'
 import { useFirewallPageGuards } from './firewall/useFirewallPageGuards'
 import { buildEmptyLiveChart, LIVE_CHART_WINDOW, type LiveChartPoint } from './firewall/policyLiveChart'
-import { buildPolicyV2BridgeExprSummary, formatBitrate, formatBytesIEC, formatCounter, formatDateTime, formatDurationClock, formatPacketRate, getCollectionRemainingSeconds, normalizeCollectionTimeoutInput } from './firewall/policyUtils'
+import { formatBitrate, formatBytesIEC, formatCounter, formatDateTime, formatDurationClock, formatPacketRate, getCollectionRemainingSeconds, normalizeCollectionTimeoutInput } from './firewall/policyUtils'
 import { usePolicyRuleFormContext } from './firewall/usePolicyRuleFormContext'
 import { usePolicyRuleLiveStats } from './firewall/usePolicyRuleLiveStats'
 import { usePolicyRulesView } from './firewall/usePolicyRulesView'
 import { ToggleLine } from './firewall/RuleFieldControls'
-import { getDefaultPolicyRuleForm } from './firewall/ruleForm'
-import { getPolicyAdvancedSection, isPolicyAdvancedSection } from './firewall/sections'
 import { computeSelection, sortIndicator, type SortDirection } from './firewall/selectionUtils'
 import { useDraggableWindow } from './firewall/useDraggableWindow'
-import { usePolicyAdvancedRuleEditor } from './firewall/usePolicyAdvancedRuleEditor'
 import { useFirewallBulkActions } from './firewall/useFirewallBulkActions'
 import { useFirewallCollectionsTablesView } from './firewall/useFirewallCollectionsTablesView'
 import { useFirewallSelections } from './firewall/useFirewallSelections'
 import { usePolicyRuleReorder } from './firewall/usePolicyRuleReorder'
 import { usePolicyRuleEditorActions } from './firewall/usePolicyRuleEditorActions'
 import { usePolicyRuleEditorSync } from './firewall/usePolicyRuleEditorSync'
-import { usePolicyV2RuleObjectState } from './firewall/usePolicyV2RuleObjectState'
+import { useFirewallObjectState } from './firewall/useFirewallObjectState'
 import { useCollectionsEditor } from './firewall/useCollectionsEditor'
 import { useTableBuilderEditor } from './firewall/useTableBuilderEditor'
 
@@ -126,6 +120,13 @@ const defaultRule: Partial<FirewallRule> = {
   fwd_to: null,
   fwd_dev: null,
   fwd_family: null,
+  set_stmt_op: null,
+  set_stmt_name: null,
+  set_stmt_expr: null,
+  set_stmt_timeout: null,
+  set_stmt_comment: null,
+  vmap_stmt_expr: null,
+  vmap_stmt_name: null,
   limit_rate: null,
   counter: false,
 }
@@ -133,7 +134,7 @@ const defaultRule: Partial<FirewallRule> = {
 type EditorTab = 'base' | 'advanced' | 'action' | 'stats'
 
 type FirewallPolicyTab = 'filter' | 'nat' | 'raw' | 'mangle'
-type FirewallSectionTab = 'policy' | 'policy_v2' | 'policy_v3' | 'collections' | 'table_builder'
+type FirewallSectionTab = 'policy' | 'collections' | 'objects' | 'table_builder'
 type CollectionKind = 'addr' | 'port' | 'iface' | 'map' | 'vmap'
 type CollectionSortKey = 'kind' | 'name' | 'values' | 'timeout' | 'created_at'
 type TableSortKey = 'family' | 'table_name' | 'chain_name' | 'chain_type' | 'hook' | 'device' | 'priority' | 'policy' | 'origin' | 'status'
@@ -141,10 +142,8 @@ type PolicySortKey = 'chain' | 'action' | 'proto' | 'src' | 'dst' | 'sport' | 'd
 type TableChainType = 'filter' | 'nat' | 'route'
 type TableHook = 'prerouting' | 'input' | 'forward' | 'output' | 'postrouting' | 'ingress'
 type TableFamily = 'inet' | 'ip' | 'ip6' | 'bridge' | 'netdev'
-type PolicyV2Family = 'bridge' | 'netdev'
-type PolicyV2DataTab = 'rules' | 'objects'
-type PolicyV2RulesFilter = 'all' | 'with_objects' | 'without_objects'
-type PolicyV2ObjectsFilter = 'all' | 'used' | 'unused'
+type ObjectRulesFilter = 'all' | 'with_objects' | 'without_objects'
+type FirewallObjectsFilter = 'all' | 'used' | 'unused'
 
 const TABLE_ALLOWED_HOOKS: Record<TableChainType, TableHook[]> = {
   filter: ['prerouting', 'input', 'forward', 'output', 'postrouting', 'ingress'],
@@ -197,27 +196,22 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   const [form, setForm] = React.useState<Partial<FirewallRule>>(defaultRule)
   const [isBusy, setIsBusy] = React.useState(false)
   const [activeSection, setActiveSection] = React.useState<FirewallSectionTab>('policy')
-  const [activePolicyV2Family, setActivePolicyV2Family] = React.useState<PolicyV2Family>('bridge')
-  const [activePolicyV2TableName, setActivePolicyV2TableName] = React.useState<string>('')
-  const [policyV2DataTab, setPolicyV2DataTab] = React.useState<PolicyV2DataTab>('rules')
-  const [policyV2Rules, setPolicyV2Rules] = React.useState<FirewallRule[]>([])
-  const [policyV2RulesFilter, setPolicyV2RulesFilter] = React.useState<PolicyV2RulesFilter>('all')
-  const [policyV2RuleObjectFilterKey, setPolicyV2RuleObjectFilterKey] = React.useState<string | null>(null)
-  const [selectedPolicyV2RuleIds, setSelectedPolicyV2RuleIds] = React.useState<string[]>([])
-  const [policyV2RuleAnchorId, setPolicyV2RuleAnchorId] = React.useState<string | null>(null)
-  const [policyV2EditorOpen, setPolicyV2EditorOpen] = React.useState(false)
-  const [editingPolicyV2RuleId, setEditingPolicyV2RuleId] = React.useState<string | null>(null)
-  const [policyV2Form, setPolicyV2Form] = React.useState<Partial<FirewallRule>>(getDefaultPolicyRuleForm('bridge'))
-  const [policyV2Objects, setPolicyV2Objects] = React.useState<FirewallNamedObjects | null>(null)
-  const [policyV2ObjectOpen, setPolicyV2ObjectOpen] = React.useState(false)
-  const [policyV2ObjectForm, setPolicyV2ObjectForm] = React.useState<PolicyV2ObjectForm>(defaultPolicyV2ObjectForm)
-  const [editingPolicyV2ObjectId, setEditingPolicyV2ObjectId] = React.useState<string | null>(null)
-  const [selectedPolicyV2ObjectIds, setSelectedPolicyV2ObjectIds] = React.useState<string[]>([])
-  const [policyV2ObjectAnchorId, setPolicyV2ObjectAnchorId] = React.useState<string | null>(null)
-  const [policyV2ObjectsFilter, setPolicyV2ObjectsFilter] = React.useState<PolicyV2ObjectsFilter>('all')
-  const [policyV2ObjectFocusKey, setPolicyV2ObjectFocusKey] = React.useState<string | null>(null)
+  const [objectRules, setObjectRules] = React.useState<FirewallRule[]>([])
+  const [objectRulesFilter, setObjectRulesFilter] = React.useState<ObjectRulesFilter>('all')
+  const [objectRuleObjectFilterKey, setObjectRuleObjectFilterKey] = React.useState<string | null>(null)
+  const [firewallObjects, setFirewallObjects] = React.useState<FirewallNamedObjects | null>(null)
+  const [firewallObjectOpen, setFirewallObjectOpen] = React.useState(false)
+  const [firewallObjectForm, setFirewallObjectForm] = React.useState<FirewallObjectForm>(defaultFirewallObjectForm)
+  const [editingFirewallObjectId, setEditingFirewallObjectId] = React.useState<string | null>(null)
+  const [selectedFirewallObjectIds, setSelectedFirewallObjectIds] = React.useState<string[]>([])
+  const [firewallObjectAnchorId, setFirewallObjectAnchorId] = React.useState<string | null>(null)
+  const [firewallObjectsFilter, setFirewallObjectsFilter] = React.useState<FirewallObjectsFilter>('all')
+  const [firewallObjectFocusKey, setFirewallObjectFocusKey] = React.useState<string | null>(null)
   const [activePolicyTab, setActivePolicyTab] = React.useState<FirewallPolicyTab>('filter')
   const [activeRuleTableName, setActiveRuleTableName] = React.useState<string>('filter')
+  const [activeRuleTableFamily, setActiveRuleTableFamily] = React.useState<TableFamily>('inet')
+  const [activeObjectTableName, setActiveObjectTableName] = React.useState<string>('')
+  const [activeObjectTableFamily, setActiveObjectTableFamily] = React.useState<TableFamily>('bridge')
   const [selectedRuleIds, setSelectedRuleIds] = React.useState<string[]>([])
   const [ruleAnchorId, setRuleAnchorId] = React.useState<string | null>(null)
   const [addOpen, setAddOpen] = React.useState(false)
@@ -292,23 +286,69 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     customTables: tablesState.custom,
     form,
     activeRuleTableName,
+    activeRuleTableFamily,
     activePolicyTab,
   })
 
-  const selectedAction = form.nat_type || form.action || 'accept'
+  const selectedAction = form.nat_type || (form.vmap_stmt_name ? '' : (form.action || 'accept'))
   const isNatActionSelected = ['dnat', 'snat', 'masquerade', 'redirect'].includes(String(selectedAction))
+  const natActionOptions = React.useMemo(() => {
+    if (contextMode !== 'nat') return []
+    const chain = String(form.chain || activeChainOptions[0] || 'prerouting')
+    return (schema?.tables?.nat?.nat_types_by_chain?.[chain] || []).filter(Boolean).map(String)
+  }, [activeChainOptions, contextMode, form.chain, schema])
+  const dynamicSetOptions = React.useMemo<DynamicSetStatementOption[]>(() => {
+    const dynamicAddr = setsState.addr
+      .filter((item) => item.enabled !== false && item.dynamic && item.timeout && item.size)
+      .map((item) => ({
+        kind: 'addr' as const,
+        name: item.name,
+        expressions: ['ip saddr', 'ip daddr'] as DynamicSetStatementOption['expressions'],
+      }))
+    const dynamicPorts = setsState.port
+      .filter((item) => item.enabled !== false && item.dynamic && item.timeout && item.size)
+      .map((item) => ({
+        kind: 'port' as const,
+        name: item.name,
+        expressions: ['tcp dport', 'udp dport'] as DynamicSetStatementOption['expressions'],
+      }))
+    return [...dynamicAddr, ...dynamicPorts]
+      .filter((item) => item.name)
+      .sort((a, b) => `${a.kind}:${a.name}`.localeCompare(`${b.kind}:${b.name}`))
+  }, [setsState.addr, setsState.port])
+  const vmapStatementOptions = React.useMemo<VmapStatementOption[]>(() => {
+    const protocolTokens = new Set(['tcp', 'udp', 'udplite', 'icmp', 'icmpv6', 'sctp', 'dccp'])
+    return mapsState.vmap
+      .filter((item) => item.enabled !== false && item.name)
+      .filter((item) => {
+        const entries = item.entries || []
+        if (!entries.length) return false
+        return entries.every((entry) => {
+          const [key] = String(entry || '').split(':', 1)
+          return protocolTokens.has(key.trim().toLowerCase())
+        })
+      })
+      .map((item) => ({
+        kind: 'vmap' as const,
+        name: item.name,
+        expressions: ['meta l4proto'] as VmapStatementOption['expressions'],
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }, [mapsState.vmap])
   const { refresh, refreshCollections } = useFirewallDataSync({
     auth: props.auth,
     refreshNonce: props.refreshNonce,
     activeSection,
-    activePolicyV2Family,
-    activePolicyV2TableName,
+    activeRuleTableFamily,
+    activeRuleTableName,
+    activeObjectTableFamily,
+    activeObjectTableName,
     setState,
     setSetsState,
     setMapsState,
     setTablesState,
-    setPolicyV2Rules,
-    setPolicyV2Objects,
+    setObjectRules,
+    setFirewallObjects,
     setSchema,
     setError,
     setCollectionsNowSec,
@@ -317,6 +357,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     addOpen,
     editingRuleId,
     activeRuleTableName,
+    activeRuleTableFamily,
     activeChainOptions,
     form,
     contextMode,
@@ -352,6 +393,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     form,
     editingRuleId,
     activeRuleTableName,
+    activeRuleTableFamily,
     activeChainOptions,
     defaultRule,
     advancedSectionsClosed: ADVANCED_SECTIONS_CLOSED,
@@ -378,10 +420,13 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   } = usePolicyRulesView({
     state,
     activeRuleTableName,
+    activeRuleTableFamily,
     policySort,
     setPolicySort,
     visibleColumns,
     policyColumnOrder: POLICY_COLUMN_ORDER,
+    objectRulesFilter: objectRulesFilter,
+    objectRuleObjectFilterKey: objectRuleObjectFilterKey,
   })
 
   const { onReorderDrop, onReorderDropToEnd } = usePolicyRuleReorder({
@@ -401,26 +446,9 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
   })
 
   const isCollectionsTab = activeSection === 'collections'
+  const isObjectsTab = activeSection === 'objects'
   const isTablesTab = activeSection === 'table_builder'
-  const isPolicyAdvancedTab = isPolicyAdvancedSection(activeSection)
   const isPolicyTab = activeSection === 'policy'
-  const {
-    policyAdvancedCaps,
-    policyAdvancedLabel,
-    policyAdvancedFamily,
-    policyAdvancedTableHint,
-    policyAdvancedRuleLabel,
-    policyAdvancedRulesColSpan,
-    policyV2TableNames,
-    policyV2TableRows,
-    policyV2ChainOptions,
-    policyV2ChainMetaByName,
-  } = usePolicyAdvancedTableContext({
-    activeSection,
-    activePolicyV2Family,
-    activePolicyV2TableName,
-    customTables: tablesState.custom,
-  })
   useFirewallPageGuards({
     allowedHooksForChainType,
     newHook,
@@ -429,94 +457,147 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
     setNewDevice,
     activePolicyTab,
     setActiveRuleTableName,
+    activeRuleTableFamily,
+    setActiveRuleTableFamily,
     activeRuleTableName,
     customTables: tablesState.custom,
-    policyV2EditorOpen,
-    policyV2ChainOptions,
-    policyV2Form,
-    setPolicyV2Form,
   })
-  const isCustomRuleTableActive = !['filter', 'nat', 'raw', 'mangle'].includes(activeRuleTableName)
-  const customTableNames = Array.from(new Set(
-    tablesState.custom
-      .filter((x) => x.enabled !== false && String(x.family || 'inet').toLowerCase() === 'inet')
-      .map((x) => x.table_name)
-  )).sort((a, b) => a.localeCompare(b))
+  const isCustomRuleTableActive = activeRuleTableFamily !== 'inet' || !['filter', 'nat', 'raw', 'mangle'].includes(activeRuleTableName)
+  const customTableOptions = React.useMemo(() => {
+    const builtinOptions = ['filter', 'nat', 'raw', 'mangle'].map((tableName) => ({
+      key: `inet:${tableName}`,
+      family: 'inet' as TableFamily,
+      tableName,
+      label: tableName,
+    }))
+    const seen = new Set(builtinOptions.map((x) => x.key))
+    const customOptions = tablesState.custom
+      .filter((x) => x.enabled !== false)
+      .map((x) => {
+        const family = (String(x.family || 'inet').toLowerCase() as TableFamily)
+        const tableName = String(x.table_name || '').toLowerCase()
+        return {
+          key: `${family}:${tableName}`,
+          family,
+          tableName,
+          label: family === 'inet' ? tableName : `${family} / ${tableName}`,
+        }
+      })
+      .filter((x) => x.tableName && ['inet', 'ip', 'ip6', 'bridge', 'netdev'].includes(x.family))
+      .filter((x) => {
+        if (seen.has(x.key)) return false
+        seen.add(x.key)
+        return true
+      })
+      .sort((a, b) => a.label.localeCompare(b.label))
+    return [...builtinOptions, ...customOptions]
+  }, [tablesState.custom])
   const tableRows = React.useMemo(() => [...tablesState.custom, ...tablesState.builtin], [tablesState.builtin, tablesState.custom])
+  React.useEffect(() => {
+    if (activeObjectTableName) return
+    const firstBridge = customTableOptions.find((x) => x.family === 'bridge')
+    const firstAny = customTableOptions[0]
+    const next = firstBridge || firstAny
+    if (!next) return
+    setActiveObjectTableFamily(next.family)
+    setActiveObjectTableName(next.tableName)
+  }, [activeObjectTableName, customTableOptions])
   const {
-    policyV2CounterNames,
-    policyV2LimitNames,
-    policyV2QuotaNames,
-    policyV2CtHelperNames,
-    policyV2CtTimeoutNames,
-    policyV2ManagedObjects,
-    policyV2ObjectUsageByKey,
-    policyV2FilteredObjects,
-    policyV2FilteredRules,
-    policyV2RulesWithObjectsCount,
-    policyV2RulesWithoutObjectsCount,
-    policyV2ObjectsUsedCount,
-    policyV2ObjectsFreeCount,
-    policyV2FormObjectBindings,
-  } = usePolicyV2RuleObjectState({
-    policyV2Objects,
-    policyV2Rules,
-    policyV2Form,
-    policyV2ObjectsFilter,
-    policyV2ObjectFocusKey,
-    setPolicyV2ObjectFocusKey,
-    policyV2RulesFilter,
-    policyV2RuleObjectFilterKey,
-    setPolicyV2RuleObjectFilterKey,
-    policyV2RuleAnchorId,
-    setPolicyV2RuleAnchorId,
-    setSelectedPolicyV2RuleIds,
-    policyV2ObjectAnchorId,
-    setPolicyV2ObjectAnchorId,
-    setSelectedPolicyV2ObjectIds,
+    objectCounterNames,
+    objectLimitNames,
+    objectQuotaNames,
+    objectCtHelperNames,
+    objectCtTimeoutNames,
+    objectCtExpectationNames,
+    firewallManagedObjects,
+    firewallObjectUsageByKey,
+    firewallFilteredObjects,
+    firewallObjectsUsedCount,
+    firewallObjectsFreeCount,
+  } = useFirewallObjectState({
+    firewallObjects,
+    objectRules,
+    firewallObjectsFilter,
+    firewallObjectFocusKey,
+    setFirewallObjectFocusKey,
+    objectRulesFilter,
+    objectRuleObjectFilterKey,
+    setObjectRuleObjectFilterKey,
+    firewallObjectAnchorId,
+    setFirewallObjectAnchorId,
+    setSelectedFirewallObjectIds,
   })
-  const { refreshPolicyV2Rules, refreshPolicyV2Objects } = usePolicyAdvancedData({
-    auth: props.auth,
-    activeSection,
-    activePolicyV2Family,
-    activePolicyV2TableName,
-    refreshNonce: props.refreshNonce,
-    setPolicyV2Rules,
-    setPolicyV2Objects,
+  const activeFirewallObjectFamily = isObjectsTab ? activeObjectTableFamily : 'bridge'
+  const activeFirewallObjectTableName = isObjectsTab ? activeObjectTableName : (activeSection === 'policy' && activeRuleTableFamily === 'bridge' ? activeRuleTableName : '')
+  const refreshFirewallObjects = React.useCallback(async () => {
+    if (!activeFirewallObjectTableName) {
+      setFirewallObjects(null)
+      return
+    }
+    setFirewallObjects(await getFirewallObjects(props.auth, { family: activeFirewallObjectFamily, table: activeFirewallObjectTableName }))
+  }, [activeFirewallObjectFamily, activeFirewallObjectTableName, props.auth])
+  const activeCustomPolicyChainOptions = React.useMemo(() => (
+    tablesState.custom
+      .filter((row) => (
+        row.enabled !== false
+        && String(row.family || 'inet').toLowerCase() === activeRuleTableFamily
+        && row.table_name === activeRuleTableName
+      ))
+      .map((row) => row.chain_name)
+      .filter(Boolean)
+  ), [activeRuleTableFamily, activeRuleTableName, tablesState.custom])
+  const activeObjectRuleChainOptions = React.useMemo(() => (
+    tablesState.custom
+      .filter((row) => (
+        row.enabled !== false
+        && String(row.family || 'inet').toLowerCase() === activeObjectTableFamily
+        && row.table_name === activeObjectTableName
+      ))
+      .map((row) => row.chain_name)
+      .filter(Boolean)
+  ), [activeObjectTableFamily, activeObjectTableName, tablesState.custom])
+  const openCreateUnifiedPolicyWindow = React.useCallback(() => {
+    if (activeRuleTableFamily === 'bridge' || activeRuleTableFamily === 'netdev') {
+      if (!activeCustomPolicyChainOptions[0]) {
+        setError(`No enabled ${activeRuleTableFamily} chains in selected table.`)
+        return
+      }
+    }
+    openCreateWindow()
+  }, [
+    activeCustomPolicyChainOptions,
+    activeRuleTableFamily,
+    openCreateWindow,
     setError,
-  })
-  const { openCreatePolicyV2Window, openEditPolicyV2Window } = usePolicyAdvancedRuleEditor({
-    activePolicyV2Family,
-    activePolicyV2TableName,
-    policyAdvancedLabel,
-    policyV2ChainOptions,
-    policyV2EditorOpen,
-    policyV2Form,
-    setPolicyV2Form,
-    setEditingPolicyV2RuleId,
-    setPolicyV2EditorOpen,
-    setWinPos,
-    setError,
-  })
-  usePolicyAdvancedContextSync({
-    activeSection,
-    activePolicyV2Family,
-    activePolicyV2TableName,
-    policyV2DataTab,
-    policyV2TableNames,
-    policyV2RulesFilter,
-    setActivePolicyV2Family,
-    setPolicyV2DataTab,
-    setPolicyV2Objects,
-    setSelectedPolicyV2ObjectIds,
-    setPolicyV2ObjectFocusKey,
-    setPolicyV2RuleObjectFilterKey,
-    setActivePolicyV2TableName,
-    setPolicyV2Rules,
-    setSelectedPolicyV2RuleIds,
-    setPolicyV2RulesFilter,
-  })
-
+  ])
+  const openEditUnifiedPolicyWindow = React.useCallback((rule: FirewallRule) => {
+    openEditWindow(rule)
+  }, [openEditWindow])
+  const openCreateRuleFromObjects = React.useCallback((prefill?: Partial<FirewallRule>) => {
+    if (activeObjectTableFamily === 'netdev') {
+      setError('Rule prefill from Objects is not supported for netdev tables.')
+      return
+    }
+    if (!activeObjectTableName || !activeObjectRuleChainOptions[0]) {
+      setError('Select object table with an enabled chain first.')
+      return
+    }
+    setActiveSection('policy')
+    setActiveRuleTableFamily(activeObjectTableFamily)
+    setActiveRuleTableName(activeObjectTableName)
+    setEditingRuleId(null)
+    setRuleEditorTab('base')
+    setAdvOpen({ ...ADVANCED_SECTIONS_CLOSED })
+    setForm({
+      ...defaultRule,
+      family: activeObjectTableFamily,
+      table: activeObjectTableName,
+      chain: activeObjectRuleChainOptions[0],
+      ...(prefill || {}),
+    })
+    setWinPos({ x: Math.max(8, Math.floor((window.innerWidth - 560) / 2)), y: Math.max(8, Math.floor((window.innerHeight - 760) / 2) - 60) })
+    setAddOpen(true)
+  }, [activeObjectRuleChainOptions, activeObjectTableFamily, activeObjectTableName, setWinPos])
   const {
     allCollectionItems,
     sortedCollectionItems,
@@ -541,86 +622,54 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
 
   const {
     selectedRules,
-    selectedPolicyV2Rules,
-    selectedPolicyV2Objects,
+    selectedFirewallObjects,
   } = useFirewallSelections({
     visibleRules,
     selectedRuleIds,
-    policyV2Rules,
-    selectedPolicyV2RuleIds,
-    policyV2ManagedObjects,
-    selectedPolicyV2ObjectIds,
+    firewallManagedObjects,
+    selectedFirewallObjectIds,
   })
-  const {
-    onSavePolicyV2,
-    onDeleteSelectedPolicyV2Rules,
-    onSetEnabledSelectedPolicyV2Rules,
-  } = usePolicyAdvancedRuleActions({
+  const { onSaveFirewallObject, onDeleteSelectedFirewallObjects } = useFirewallObjectActions({
     auth: props.auth,
-    activePolicyV2Family,
-    activePolicyV2TableName,
-    policyV2Form,
-    editingPolicyV2RuleId,
-    policyV2ChainMetaByName,
-    selectedPolicyV2Rules,
+    activeObjectFamily: activeFirewallObjectFamily,
+    activeObjectTableName: activeFirewallObjectTableName,
+    firewallObjectForm,
+    editingFirewallObjectId,
+    selectedFirewallObjects,
     setError,
     setIsBusy,
-    setPolicyV2EditorOpen,
-    setEditingPolicyV2RuleId,
-    setSelectedPolicyV2RuleIds,
-    setPolicyV2RuleAnchorId,
-    refresh,
-    refreshPolicyV2Rules,
-  })
-  const { onSavePolicyV2Object, onDeleteSelectedPolicyV2Objects } = usePolicyAdvancedObjectActions({
-    auth: props.auth,
-    activePolicyV2TableName,
-    policyV2ObjectForm,
-    editingPolicyV2ObjectId,
-    selectedPolicyV2Objects,
-    setError,
-    setIsBusy,
-    setPolicyV2ObjectOpen,
-    setEditingPolicyV2ObjectId,
-    setSelectedPolicyV2ObjectIds,
-    setPolicyV2ObjectAnchorId,
-    refreshPolicyV2Objects,
+    setFirewallObjectOpen,
+    setEditingFirewallObjectId,
+    setSelectedFirewallObjectIds,
+    setFirewallObjectAnchorId,
+    refreshFirewallObjects,
   })
   const {
-    openCreatePolicyV2ObjectWindow,
-    openEditPolicyV2ObjectWindow,
-    applyPolicyV2ObjectPreset,
-  } = usePolicyAdvancedObjectEditor({
-    activePolicyV2Family,
-    activePolicyV2TableName,
+    openCreateFirewallObjectWindow,
+    openEditFirewallObjectWindow,
+    applyFirewallObjectPreset,
+  } = useFirewallObjectEditor({
+    activeObjectFamily: activeFirewallObjectFamily,
+    activeObjectTableName: activeFirewallObjectTableName,
     setError,
-    setEditingPolicyV2ObjectId,
-    setPolicyV2ObjectForm,
-    setPolicyV2ObjectOpen,
+    setEditingFirewallObjectId,
+    setFirewallObjectForm,
+    setFirewallObjectOpen,
   })
   const {
     onFilterRulesByObject,
-    onFilterObjectsByRuleBinding,
     onCreateRuleWithObject,
     onCreateRuleFromSelectedObjects,
-    onOpenBindingObjectFromEditor,
-    onUnbindObjectInEditor,
-  } = usePolicyAdvancedBindings({
-    selectedPolicyV2Objects,
-    openCreatePolicyV2Window,
+  } = useFirewallObjectBindings({
+    selectedFirewallObjects,
+    openCreateObjectRuleWindow: openCreateRuleFromObjects,
     setError,
-    setPolicyV2DataTab,
-    setPolicyV2RulesFilter,
-    setPolicyV2RuleObjectFilterKey,
-    setSelectedPolicyV2RuleIds,
-    setPolicyV2RuleAnchorId,
-    setPolicyV2ObjectsFilter,
-    setPolicyV2ObjectFocusKey,
-    setSelectedPolicyV2ObjectIds,
-    setPolicyV2ObjectAnchorId,
-    setPolicyV2EditorOpen,
-    setEditingPolicyV2RuleId,
-    setPolicyV2Form,
+    setObjectRulesFilter,
+    setObjectRuleObjectFilterKey,
+    setFirewallObjectsFilter,
+    setFirewallObjectFocusKey,
+    setSelectedFirewallObjectIds,
+    setFirewallObjectAnchorId,
   })
   const {
     openCreateSetWindow,
@@ -725,13 +774,6 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
           <FirewallSectionTabs
             activeSection={activeSection}
             setActiveSection={setActiveSection}
-            onSectionChange={(next) => {
-              if (isPolicyAdvancedSection(next)) {
-                const nextCaps = getPolicyAdvancedCapabilities(getPolicyAdvancedSection(next))
-                setActivePolicyV2Family(nextCaps.family)
-                if (!nextCaps.supportsObjectsTab) setPolicyV2DataTab('rules')
-              }
-            }}
           />
           {isPolicyTab ? (
             <PolicySectionToolbar
@@ -739,7 +781,9 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
               activePolicyTab={activePolicyTab}
               setActivePolicyTab={setActivePolicyTab}
               setActiveRuleTableName={setActiveRuleTableName}
-              customTableNames={customTableNames}
+              activeRuleTableFamily={activeRuleTableFamily}
+              setActiveRuleTableFamily={setActiveRuleTableFamily}
+              customTableOptions={customTableOptions}
               activeRuleTableName={activeRuleTableName}
               customTables={tablesState.custom}
               setSelectedTableIds={setSelectedTableIds}
@@ -747,7 +791,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
               setActiveSection={setActiveSection}
               isBusy={isBusy}
               selectedRuleIdsLength={selectedRuleIds.length}
-              openCreateWindow={openCreateWindow}
+              openCreateWindow={openCreateUnifiedPolicyWindow}
               onDeleteSelectedRules={onDeleteSelectedRules}
               onSetEnabledSelectedRules={onSetEnabledSelectedRules}
               onResetCounters={onResetPolicyCounters}
@@ -758,61 +802,80 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
               visibleColumns={visibleColumns}
               setVisibleColumns={setVisibleColumns}
             />
-          ) : isPolicyAdvancedTab ? (
-            <PolicyAdvancedPage
-              policyAdvancedFamily={policyAdvancedFamily}
-              activePolicyV2TableName={activePolicyV2TableName}
-              setActivePolicyV2TableName={setActivePolicyV2TableName}
-              policyAdvancedTableHint={policyAdvancedTableHint}
-              policyV2TableNames={policyV2TableNames}
-              policyAdvancedCaps={policyAdvancedCaps}
-              policyV2DataTab={policyV2DataTab}
-              setPolicyV2DataTab={setPolicyV2DataTab}
-              isBusy={isBusy}
-              openCreatePolicyV2Window={openCreatePolicyV2Window}
-              onDeleteSelectedPolicyV2Rules={onDeleteSelectedPolicyV2Rules}
-              onSetEnabledSelectedPolicyV2Rules={onSetEnabledSelectedPolicyV2Rules}
-              policyV2RulesFilter={policyV2RulesFilter}
-              setPolicyV2RulesFilter={setPolicyV2RulesFilter}
-              policyV2RulesWithObjectsCount={policyV2RulesWithObjectsCount}
-              policyV2RulesWithoutObjectsCount={policyV2RulesWithoutObjectsCount}
-              policyV2RuleObjectFilterKey={policyV2RuleObjectFilterKey}
-              setPolicyV2RuleObjectFilterKey={setPolicyV2RuleObjectFilterKey}
-              policyV2FilteredRules={policyV2FilteredRules}
-              policyV2RulesCount={policyV2Rules.length}
-              activePolicyV2Family={activePolicyV2Family}
-              policyAdvancedRulesColSpan={policyAdvancedRulesColSpan}
-              formatCounter={formatCounter}
-              buildPolicyV2BridgeExprSummary={buildPolicyV2BridgeExprSummary}
-              onRuleRowDoubleClick={openEditPolicyV2Window}
-              onFilterObjectsByRuleBinding={onFilterObjectsByRuleBinding}
-              openCreatePolicyV2ObjectWindow={openCreatePolicyV2ObjectWindow}
-              onCreateRuleFromSelectedObjects={onCreateRuleFromSelectedObjects}
-              onDeleteSelectedPolicyV2Objects={onDeleteSelectedPolicyV2Objects}
-              policyV2ObjectsFilter={policyV2ObjectsFilter}
-              setPolicyV2ObjectsFilter={setPolicyV2ObjectsFilter}
-              policyV2ObjectsUsedCount={policyV2ObjectsUsedCount}
-              policyV2ObjectsFreeCount={policyV2ObjectsFreeCount}
-              policyV2ObjectFocusKey={policyV2ObjectFocusKey}
-              setPolicyV2ObjectFocusKey={setPolicyV2ObjectFocusKey}
-              applyPolicyV2ObjectPreset={applyPolicyV2ObjectPreset}
-              policyV2FilteredObjects={policyV2FilteredObjects}
-              policyV2ManagedObjectsCount={policyV2ManagedObjects.length}
-              selectedPolicyV2ObjectIds={selectedPolicyV2ObjectIds}
-              policyV2ObjectUsageByKey={policyV2ObjectUsageByKey}
-              formatPolicyV2ObjectSummary={formatPolicyV2ObjectSummary}
-              onObjectRowDoubleClick={openEditPolicyV2ObjectWindow}
-              onFilterRulesByObject={onFilterRulesByObject}
-              onCreateRuleWithObject={onCreateRuleWithObject}
-              selectedPolicyV2RuleIds={selectedPolicyV2RuleIds}
-              policyV2RuleAnchorId={policyV2RuleAnchorId}
-              setSelectedPolicyV2RuleIds={setSelectedPolicyV2RuleIds}
-              setPolicyV2RuleAnchorId={setPolicyV2RuleAnchorId}
-              policyV2ObjectAnchorId={policyV2ObjectAnchorId}
-              setSelectedPolicyV2ObjectIds={setSelectedPolicyV2ObjectIds}
-              setPolicyV2ObjectAnchorId={setPolicyV2ObjectAnchorId}
-              computeSelection={computeSelection}
-            />
+          ) : null}
+          {isObjectsTab ? (
+            <div className='flex min-h-0 flex-1 flex-col gap-2'>
+              <div className='flex flex-wrap items-end gap-2 rounded-xl border bg-muted/10 p-2'>
+                <div className='space-y-1.5'>
+                  <Label className='text-[11px]'>Object table</Label>
+                  <select
+                    className='h-8 min-w-[260px] rounded-md border bg-background px-2.5 text-xs'
+                    value={activeObjectTableName ? `${activeObjectTableFamily}:${activeObjectTableName}` : ''}
+                    onChange={(e) => {
+                      const [family, tableName] = e.target.value.split(':')
+                      setActiveObjectTableFamily((family || 'bridge') as TableFamily)
+                      setActiveObjectTableName(tableName || '')
+                      setSelectedFirewallObjectIds([])
+                      setFirewallObjectAnchorId(null)
+                      setFirewallObjectFocusKey(null)
+                      setObjectRuleObjectFilterKey(null)
+                      setObjectRulesFilter('all')
+                    }}
+                  >
+                    <option value=''>Select custom table</option>
+                    {customTableOptions.map((opt) => (
+                      <option key={opt.key} value={opt.key}>{opt.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className='pb-1 text-[11px] text-muted-foreground'>
+                  nftables named objects are scoped by family/table. Rule prefill is enabled for inet/ip/ip6/bridge tables; netdev object bindings stay disabled by backend validation.
+                </div>
+              </div>
+              <FirewallObjectsPanel
+                isBusy={isBusy}
+                activeFamily={activeObjectTableFamily}
+                activeTableName={activeObjectTableName}
+                selectedObjectIdsCount={selectedFirewallObjectIds.length}
+                openCreateObjectWindow={openCreateFirewallObjectWindow}
+                onCreateRuleFromSelectedObjects={onCreateRuleFromSelectedObjects}
+                onDeleteSelectedObjects={onDeleteSelectedFirewallObjects}
+                objectsFilter={firewallObjectsFilter}
+                setObjectsFilter={setFirewallObjectsFilter}
+                objectsUsedCount={firewallObjectsUsedCount}
+                objectsFreeCount={firewallObjectsFreeCount}
+                objectFocusKey={firewallObjectFocusKey}
+                setObjectFocusKey={setFirewallObjectFocusKey}
+                onCreateObjectWithPreset={(preset) => {
+                  openCreateFirewallObjectWindow()
+                  applyFirewallObjectPreset(preset)
+                }}
+                filteredObjects={firewallFilteredObjects}
+                managedObjectsCount={firewallManagedObjects.length}
+                selectedObjectIds={selectedFirewallObjectIds}
+                objectUsageByKey={firewallObjectUsageByKey}
+                formatObjectSummary={formatFirewallObjectSummary}
+                onObjectRowMouseDown={(e) => {
+                  if (e.shiftKey) e.preventDefault()
+                }}
+                onObjectRowClick={(row, e) => {
+                  const ordered = firewallFilteredObjects.map((x) => x.id)
+                  const next = computeSelection(ordered, selectedFirewallObjectIds, firewallObjectAnchorId, row.id, e)
+                  setSelectedFirewallObjectIds(next.selected)
+                  setFirewallObjectAnchorId(next.anchor)
+                }}
+                onObjectRowDoubleClick={openEditFirewallObjectWindow}
+                onFilterRulesByObject={(kind, name) => {
+                  if (activeObjectTableFamily !== 'netdev') {
+                    setActiveRuleTableFamily(activeObjectTableFamily)
+                    setActiveRuleTableName(activeObjectTableName)
+                    setActiveSection('policy')
+                    onFilterRulesByObject(kind, name)
+                  }
+                }}
+                onCreateRuleWithObject={onCreateRuleWithObject}
+              />
+            </div>
           ) : isCollectionsTab ? (
             <CollectionsSection
               isBusy={isBusy}
@@ -857,6 +920,23 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
               hasAnyTables={!!(tablesState.builtin.length || tablesState.custom.length)}
             />
           ) : null}
+          {isPolicyTab && activeRuleTableFamily !== 'netdev' && (objectRuleObjectFilterKey || objectRulesFilter !== 'all') ? (
+            <div className='flex items-center gap-2 rounded-md border border-blue-300 bg-blue-50 px-2 py-1 text-[11px] text-blue-900'>
+              <span>
+                rules filter: {objectRuleObjectFilterKey ? `object: ${objectRuleObjectFilterKey}` : objectRulesFilter}
+              </span>
+              <button
+                type='button'
+                className='rounded border border-blue-300 bg-background px-1.5 py-0.5 text-[11px] hover:bg-muted'
+                onClick={() => {
+                  setObjectRulesFilter('all')
+                  setObjectRuleObjectFilterKey(null)
+                }}
+              >
+                clear
+              </button>
+            </div>
+          ) : null}
           {isPolicyTab ? (
             <PolicyRulesTable
               visibleColumns={visibleColumns}
@@ -871,7 +951,7 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
               ruleAnchorId={ruleAnchorId}
               setRuleAnchorId={setRuleAnchorId}
               computeSelection={computeSelection}
-              openEditWindow={openEditWindow}
+              openEditWindow={openEditUnifiedPolicyWindow}
               dragRuleId={dragRuleId}
               setDragRuleId={setDragRuleId}
               dragOverRuleId={dragOverRuleId}
@@ -897,12 +977,13 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
           editingRuleId,
           ruleEditorTab,
           setRuleEditorTab,
-          onClose: () => { setAddOpen(false); setEditingRuleId(null) },
+          onClose: () => { setAddOpen(false); setEditingRuleId(null); setForm(defaultRule) },
           onSubmit: onSave,
           isBusy,
           form,
           setForm,
           hasSupport,
+          natActionOptions,
           generalFieldState,
           schema,
           builtinRuleTables,
@@ -923,41 +1004,26 @@ export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {
           statsChart,
           statsSeries,
           setStatsSeries,
+          objectCounterNames,
+          objectLimitNames,
+          objectQuotaNames,
+          objectCtHelperNames,
+          objectCtTimeoutNames,
+          objectCtExpectationNames,
+          dynamicSetOptions,
+          vmapStatementOptions,
         }}
-        policyAdvancedRuleEditor={{
-          open: policyV2EditorOpen,
-          winPos,
-          onDragStart,
-          editingPolicyV2RuleId,
-          policyAdvancedRuleLabel,
+        firewallObject={{
+          open: firewallObjectOpen,
           isBusy,
-          activePolicyV2TableName,
-          onClose: () => { setPolicyV2EditorOpen(false); setEditingPolicyV2RuleId(null) },
-          onSubmit: onSavePolicyV2,
-          policyV2Form,
-          setPolicyV2Form,
-          policyV2ChainOptions,
-          policyAdvancedCaps,
-          policyV2FormObjectBindings,
-          onOpenBindingObjectFromEditor,
-          onUnbindObjectInEditor,
-          family: policyAdvancedFamily,
-          policyV2CounterNames,
-          policyV2LimitNames,
-          policyV2QuotaNames,
-          policyV2CtHelperNames,
-          policyV2CtTimeoutNames,
-        }}
-        policyBridgeObject={{
-          open: policyV2ObjectOpen,
-          isBusy,
-          activePolicyV2TableName,
-          editingPolicyV2ObjectId,
-          policyV2ObjectForm,
-          setPolicyV2ObjectForm,
-          setPolicyV2ObjectOpen,
-          onSavePolicyV2Object,
-          applyPolicyV2ObjectPreset,
+          activeObjectFamily: activeFirewallObjectFamily,
+          activeObjectTableName: activeFirewallObjectTableName,
+          editingFirewallObjectId,
+          firewallObjectForm,
+          setFirewallObjectForm,
+          setFirewallObjectOpen,
+          onSaveFirewallObject,
+          applyFirewallObjectPreset,
         }}
         collections={{
           open: setOpen,

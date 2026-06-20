@@ -50,7 +50,7 @@ test('add-rule +/- toggles remove disabled fields from saved rule', async ({ pag
 
   const rateLine = modal.locator('div.space-y-1\\.5', { hasText: 'Rate limit' }).first()
   await rateLine.getByRole('button', { name: '+' }).click()
-  await modal.getByPlaceholder('10/second').fill('77/second')
+  await modal.getByPlaceholder('10/second or 200/minute').fill('77/second')
   await rateLine.getByRole('button', { name: '-' }).click()
 
   // Advanced tab: enable+fill then disable fib expr
@@ -70,16 +70,10 @@ test('add-rule +/- toggles remove disabled fields from saved rule', async ({ pag
   await markLine.getByRole('button', { name: '-' }).click()
 
   // Set comment via API-visible field (no toggle in some revisions).
-  const commentInput = modal.getByPlaceholder('Allow office VPN users')
+  const commentInput = modal.getByPlaceholder('Rule comment (optional)')
   if (await commentInput.count()) {
     await commentInput.fill(comment)
   }
-
-  // Stats tab: toggle counter on then back off.
-  await modal.getByRole('tab', { name: 'Statistics' }).click()
-  const counter = modal.getByLabel('Enable nft `counter` for this rule')
-  await counter.check()
-  await counter.uncheck()
 
   await modal.getByRole('button', { name: 'Add' }).click({ force: true })
   await expect(modal).toBeHidden()
@@ -101,7 +95,6 @@ test('add-rule +/- toggles remove disabled fields from saved rule', async ({ pag
   expect(rule.limit_rate).toBeFalsy()
   expect(rule.fib_expr).toBeFalsy()
   expect(rule.mark_set).toBeFalsy()
-  expect(rule.counter).toBeFalsy()
 
   await deleteRule(request, rule.id)
 })

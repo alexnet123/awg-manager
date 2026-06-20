@@ -1,5 +1,7 @@
 import { expect, test, type APIRequestContext } from '@playwright/test'
 
+test.describe.configure({ mode: 'serial' })
+
 function authHeaders() {
   const apiKey = process.env.PLAYWRIGHT_API_KEY || ''
   return {
@@ -29,6 +31,31 @@ function getRuleLineByComment(ruleset: string, comment: string): string {
   const lines = String(ruleset || '').split('\n')
   return lines.find((line) => line.includes(`comment "${comment}"`)) || ''
 }
+
+test('block B2: packet priority editor explains QoS priority', async ({ page }) => {
+  await page.goto('/')
+  await page.evaluate((apiKey) => {
+    sessionStorage.setItem('awg_manager_auth_v1', JSON.stringify({ apiKey }))
+  }, process.env.PLAYWRIGHT_API_KEY || '')
+  await page.reload()
+
+  await page.getByRole('button', { name: 'Firewall' }).click()
+  await page.getByRole('button', { name: 'Add' }).first().click({ force: true })
+  const modal = page.locator('div.fixed.inset-0.z-40').last()
+  await expect(modal.getByText('Add Firewall Rule')).toBeVisible()
+
+  await modal.getByRole('tab', { name: 'Advanced match' }).click()
+  if (await modal.getByRole('button', { name: 'Meta match +' }).isVisible()) {
+    await modal.getByRole('button', { name: 'Meta match +' }).click()
+  }
+  const priorityLine = modal.locator('div.space-y-1\\.5', { hasText: 'set packet priority (QoS)' }).first()
+  await priorityLine.getByRole('button', { name: '+' }).click()
+  await expect(priorityLine.getByText('Common values')).toBeVisible()
+  await expect(priorityLine.getByText('Expert QoS action')).toBeVisible()
+  await expect(priorityLine.getByText('not firewall rule order')).toBeVisible()
+  await priorityLine.getByRole('button', { name: '1:10 tc classid major:minor' }).click()
+  await expect(priorityLine.getByPlaceholder('1:10 / 0x10 / 10')).toHaveValue('1:10')
+})
 
 test('block B2: meta priority/cpu + ct direction/expiration map to runtime', async ({ request }) => {
   const comment = `block-b2-${Date.now()}`

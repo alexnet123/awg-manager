@@ -1,6 +1,6 @@
 # Карта Модулей (RU)
 
-Обновлено: 2026-05-27
+Обновлено: 2026-05-28
 
 Документ фиксирует зоны ответственности модулей в процессе модульного рефакторинга и показывает, какие функции за что отвечают.
 
@@ -71,7 +71,7 @@
     - wiring firewall JSON store/runtime теперь выполняется через callable-ы facade (`_read/_write_firewall_*`, `_collect_firewall_table_defs`) и прямые callback-и доменных `store/adapter` в `apply_firewall_rules`
     - facade `read/write` callback-и firewall store централизованы как именованные helper callable-ы (и partial там, где нужно), с сохранением динамического `_state_paths()`
     - managed-table/runtime/append-script callback-и в facade `apply/reset` путях централизованы в shared callable-ы (именованные helper-ы/partial; без lambda-адаптеров в callback-объявлениях)
-    - helper wiring collection/object также локализован в facade (без sourcing из внутренних helper-ов `awg_core` для нормализации set/map/table/object, timeout/runtime signatures, table script assembly, effective object merge)
+    - wiring collection runtime helper-ов firewall (`normalize/timeout/enrich/cleanup/runtime-signature`) делегирован через `firewall_compat_entry_ops.build_collection_runtime_helpers`; wiring нормализации object/set/map/table и merge effective object остается в facade
     - пути `normalize_item_fn` в firewall service централизованы через shared facade callable-ы (`_normalize_firewall_*`), делегирующие в доменные normalizer-ы (без дублирования inline lambda в call-sites)
     - wiring callback-ов named-object parse/validation централизован через shared facade callback-ы (`_parse_firewall_named_objects_query`, `_validate_firewall_named_object_table_exists`)
     - wiring генерации rule-id в пути нормализации firewall централизован через callback `_generate_firewall_rule_id`
@@ -81,6 +81,7 @@
     - wiring firewall schema берется напрямую из `backend.domains.firewall.schema.FIREWALL_SCHEMA` (без sourcing из `awg_core`)
   - fallback-маршрутизация:
     - `_backend_or_fallback` переключает вызов на service-wrapper в legacy-target модуле при ошибке backend-пути
+    - ошибки firewall backend-валидации/отсутствующих ресурсов (`ValueError`, `LookupError`) пробрасываются из `_backend_or_fallback` напрямую и не уходят в legacy fallback, чтобы сохранить доменные/API-ответы валидации без изменения non-firewall compatibility fallback
     - dispatch fallback-вызова идет через `legacy_manager_bridge.call_manager_method` (единый app-layer seam для remove-cycle)
     - row-access fallback cursor резолвится через `legacy_manager_bridge.get_manager_attr("c")`; crypto fallback примитивы резолвятся через `legacy_manager_bridge.get_manager_attr("Fernet"/"InvalidToken")`
     - fallback call-site-ы (`_backend_or_fallback`, row-access, crypto и `__getattr__`) маршрутизируются через helper-ы `_legacy_manager_call` / `_legacy_manager_attr`
@@ -136,8 +137,10 @@
   - `list_rules`, `create_rule`, `update_rule`, `delete_rule`, `reorder_rules`, `reset_counters`
 - `runtime_adapter.py`: интеграция с nft/runtime.
   - `apply_rules`, `list_tables`, `delete_table`, `build_runtime_counters_by_rule`
+  - `parse_runtime_collections_from_ruleset_json`, `list_runtime_collections`: best-effort парсинг runtime-only overlay set/map/vmap из `nft -j list ruleset` без записи в manager state.
 - `store.py`: JSON-персистентность и примитивы нормализации.
   - `read_*`/`write_*`, `normalize_set_item`, `normalize_map_item`, helper-ы по named-object/table
+  - `normalize_map_item` владеет нормализацией entries для map/vmap и allowlist-валидацией verdict values для `vmap`.
 - `schema.py`: канонические firewall-константы для compat-слоя и backend-facade.
   - `FIREWALL_TABLE_FAMILY`, `FIREWALL_SUPPORTED_TABLE_FAMILIES`, `FIREWALL_NAMED_OBJECT_KINDS`
   - `FIREWALL_TABLE_PREFIX`, `FIREWALL_SCHEMA`, `FIREWALL_DEFAULT_TABLE_DEFS`, `FIREWALL_RESERVED_PRIORITIES`
@@ -154,30 +157,36 @@
   - `render_firewall_rule`
   - `append_enabled_rule_script_lines`
   - `resolve_table_chain_context`
-  - `validate_action_target_reject_and_proto_fields`
-  - `normalize_proto_and_basic_match_fields`
+  - `resolve_table_chain_context` владеет built-in `inet` table context и custom table context для `inet/ip/ip6/bridge/netdev`
+  - `validate_action_target_reject_and_proto_fields` владеет валидацией `action`/`target_chain`/`reject_type`, а также L4 protocol token validation для именованных протоколов (`tcp`/`udp`/`icmp`/`icmpv6`) и numeric protocol ID (`0..255`), включая проверку допустимости портов для `tcp`/`udp`/`6`/`17`.
+  - `normalize_proto_and_basic_match_fields` владеет базовой L3 address match валидацией для одного IP/CIDR-префикса или одной `@collection` ссылки в `src`/`dst`.
   - `validate_l4_icmp_literal_fields`
   - `normalize_nat_raw_fields`, `normalize_log_fields`
   - `normalize_meta_ct_fib_fields`, `normalize_l2_mark_fields`
+  - `normalize_dynamic_set_statement_fields`
+  - `normalize_vmap_statement_fields` владеет валидацией/рендер-полями первого scope named `vmap` rule statement (`vmap_stmt_expr`, `vmap_stmt_name`) для `inet` + `meta l4proto`.
   - `validate_bridge_disallowed_fields`, `validate_netdev_restrictions`
   - `validate_family_specific_restrictions`
 - `rule_normalization_service_ops.py`: композиционный workflow полной нормализации firewall-правил.
   - `normalize_firewall_rule` (extract/validate/normalize/build payload pipeline)
+  - validation target set для dynamic set statement подключена через существующий sets reader, при этом логика валидации остается в `rule_ops.py`; facade-нормализация принимает runtime validation flag от service layer и остается backend-first.
+  - validation target named `vmap` statement подключена через существующий maps reader, при этом проверка expression/key-type остается в `rule_ops.py`.
   - default fallback генерации rule-id централизован через `_default_rule_id_factory`
 - `named_object_ops.py`: нормализация named-objects, рендеринг, проверка ссылок.
   - `normalize_named_object_payload`, `render_named_object_add_statement`, `ensure_named_object_exists`
+  - `normalize_named_object_payload` владеет eligibility matrix named-object family/kind: `ct_helper`/`ct_timeout` не поддерживаются для `netdev`, `ct_expectation` ограничен `inet/ip/ip6`, а `l3proto` должен совпадать с object family `ip`/`ip6`
   - default fallback генерации named-object id централизован через `_default_named_object_id_factory`
-  - `validate_runtime_named_object_references`
+  - `validate_runtime_named_object_references` проверяет enabled named-object ссылки для non-netdev families правил (`inet/ip/ip6/bridge`)
   - `append_enabled_named_object_script_lines`
 - `collection_ops.py`, `table_ops.py`, `state_ops.py`, `schema_ops.py`, `runtime_ops.py`: специализированные helper-модули для collection/table/state/schema/runtime сценариев.
-  - `collection_ops.py`: `infer_map_token_type`, `format_map_token`, `build_map_declaration_and_elements`, `append_runtime_collection_script_lines`
+  - `collection_ops.py`: `infer_map_token_type`, `format_map_token`, `build_map_declaration_and_elements`, `append_runtime_collection_script_lines`; `infer_map_token_type` также владеет protocol-token typing (`tcp/udp/icmp/...` -> `inet_proto`) для named `vmap` declarations.
 - `service_layer_ops.py`: слой firewall compatibility-композиции для legacy compatibility service-оберток.
   - wiring rules/runtime/state: `list_rules`, `apply_rules`, `create_rule`, `update_rule`, `delete_rule`, `reorder_rules`, `reset_counters`, `get_state`
   - wiring collections/maps/tables/named-objects/schema: `list_sets`, `upsert_set`, `delete_set`, `list_maps`, `upsert_map`, `delete_map`, `list_tables`, `list_named_objects`, `upsert_named_object`, `create_named_object`, `update_named_object`, `delete_named_object`, `upsert_table`, `delete_table`, `get_schema`
   - callback-и межвкладочной уникальности set/map (`other_names`) централизованы через shared helper-итераторы и `functools.partial`
 - `compat_entry_ops.py`: compat entry-слой firewall, который используется `backend.app.legacy_manager_compat`.
   - делегирует compat-обертки поверх `service_layer_ops` для paths rules/runtime/state и collections/maps/tables/named-objects/schema
-  - фабрика collection runtime helper-ов для compat wiring: `build_collection_runtime_helpers`
+  - фабрика collection runtime helper-ов, используемая и в `backend.app.legacy_manager_compat`, и в `backend.app.manager_facade`: `build_collection_runtime_helpers`
 
 ### `backend/domains/awg`
 
@@ -361,6 +370,9 @@
 
 - Клиент контрактов Firewall API:
   - state/rules: `getFirewallState`, `getFirewallRules`, `createFirewallRule`, `updateFirewallRule`, `deleteFirewallRule`, `reorderFirewallRules`, `applyFirewallRules`, `resetFirewallCounters`
+  - rules выставляют optional поля dynamic set statement `set_stmt_*` без изменения обязательной формы payload.
+  - rules выставляют optional поля named verdict map statement `vmap_stmt_*` без изменения обязательной формы payload.
+  - sets выставляют optional safety/runtime поля `dynamic`, `size`, `gc_interval`.
   - objects/sets/maps/tables: `getFirewallObjects`, `upsertFirewallObject`, `deleteFirewallObject`, `getFirewallSets`, `upsertFirewallSet`, `getFirewallMaps`, `upsertFirewallMap`, `getFirewallTables`, `upsertFirewallTable`
 
 ### `webui/src/frontend/domains/interfaces_clients/api.ts`
@@ -375,6 +387,19 @@
 - Клиент контрактов IPsec API:
   - CRUD: `getIpsecPeers`, `upsertIpsecPeer`, `deleteIpsecPeer`, `getIpsecPolicies`, `upsertIpsecPolicy`, `deleteIpsecPolicy`, `deleteIpsecIdentity`, `deleteIpsecPhase1Profile`, `deleteIpsecPhase2Proposal`
   - runtime/actions: `applyIpsec`, `getIpsecActivePeers`, `getIpsecInstalledSas`, `getIpsecConfigPreview`, `initiateIpsecPolicy`, `terminateIpsecPeer`
+
+## Frontend: владение Firewall UI
+
+### `webui/src/pages/firewall.tsx` и `webui/src/pages/firewall/*`
+
+- `FirewallSectionTabs`: владеет верхними секциями Firewall. `policy2`/`policy3` больше не показываются как отдельные верхние вкладки; bridge/netdev rules доступны из единого раздела `policy`, а управление nftables named-objects вынесено в отдельный раздел `objects` после `collections`.
+- `PolicySectionToolbar`: владеет выбором таблицы в Policy. Быстрые `filter`/`nat`/`raw`/`mangle` остаются `inet`-контекстом; custom selector стал family-aware и хранит контекст таблицы как `(family, table)`.
+- `PolicyRuleEditorDialog` и `PolicyRuleEditor*Tab`: владеют единой Add/Edit формой правил для `inet/ip/ip6/bridge/netdev` контекстов. Add/Edit правил bridge/netdev теперь использует тот же Policy modal; bridge-specific interface поля, non-netdev named-object bindings с быстрым unlink, inet/ip/ip6 `ct_expectation_set`, runtime-safe controls dynamic set statement для `inet`, runtime-safe controls named `vmap` для `inet` и netdev `fwd`/общий `queue` включаются по `family`. Action tab владеет короткими why-disabled подсказками для `inet`-only dynamic set/verdict map controls, доступности NAT actions по контексту family/table/chain, отключенного `ct_expectation` в `bridge` и отключенных named-object bindings в `netdev`.
+- `FirewallObjectsPanel`: владеет управлением named-objects в отдельном разделе `objects`. Переиспользует существующий API `/firewall/objects` и `FirewallObjectModal`, scoped по выбранным `family/table`, включает `use-in-rule` для `inet/ip/ip6/bridge` и оставляет netdev object bindings выключенными.
+- `useFirewallPageGuards`, `usePolicyRuleFormContext`, `usePolicyRuleEditorSync`, `usePolicyRuleEditorActions`, `usePolicyRulesView`: владеют wiring единого Policy-контекста для выбранной family/name таблицы правил, списка chain, default create/edit значений, save-payload sanitization и фильтрации видимых правил, включая object-binding фильтры для non-netdev policy tables из единого object panel; `usePolicyRuleEditorActions` также очищает `set_stmt_*`, если выбранная family или состояние формы вне поддержанного `inet` scope dynamic set statement.
+- `useFirewallDataSync`: владеет refresh orchestration страницы Firewall и подгружает named objects для non-netdev policy tables, чтобы Add/Edit rule selectors оставались синхронизированы после Objects `use in rule`.
+- `firewallObjectForm`, `firewallObjectSummary`, `firewallObjectBindings`, `useFirewallObjectState`, `useFirewallObjectActions`, `useFirewallObjectEditor`, `useFirewallObjectBindings` и `FirewallObjectModal`: владеют состоянием object form, summaries, binding usage keys, selection/filter state, create/edit/delete actions, modal presets, create/edit `ct_expectation` object для `inet/ip/ip6` и non-netdev use-in-rule orchestration за `FirewallObjectsPanel`. Исторические `PolicyAdvancedPage`/`PolicyAdvancedSection`, старый `PolicyAdvancedRuleEditor*` и старые имена helper-ов `PolicyV2`/`PolicyBridgeObject` удалены из активного UI bundle.
+- Старые entrypoint-ы делегируют через единый Policy shell: скрытые возможности `policy2`/`policy3` выбираются по family (`bridge`/`netdev`), а не по видимым вкладкам; API payload и backend validation не менялись.
 
 ## Правило для новых шагов рефакторинга
 

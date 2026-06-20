@@ -1,6 +1,6 @@
 import type { FirewallNamedObjectKind } from '../api'
 
-export type PolicyV2ObjectForm = {
+export type FirewallObjectForm = {
   id: string | null
   kind: FirewallNamedObjectKind
   name: string
@@ -23,7 +23,7 @@ export type PolicyV2ObjectForm = {
   size: string
 }
 
-export function defaultPolicyV2ObjectForm(): PolicyV2ObjectForm {
+export function defaultFirewallObjectForm(): FirewallObjectForm {
   return {
     id: null,
     kind: 'counter',

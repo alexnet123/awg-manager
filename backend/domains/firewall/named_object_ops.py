@@ -9,6 +9,18 @@ def _default_named_object_id_factory():
     return uuid.uuid4().hex
 
 
+def _normalize_l3proto_for_family(raw_l3proto, family, normalize_value_fn):
+    l3proto = normalize_value_fn(raw_l3proto)
+    if l3proto is None:
+        return None
+    l3proto = str(l3proto).lower()
+    if l3proto not in ("ip", "ip6"):
+        raise ValueError("l3proto must be ip|ip6")
+    if family in ("ip", "ip6") and l3proto != family:
+        raise ValueError(f"l3proto must match family={family}")
+    return l3proto
+
+
 def normalize_named_object_payload(
     payload,
     normalize_value_fn,
@@ -28,8 +40,10 @@ def normalize_named_object_payload(
     family = (normalize_value_fn(payload.get("family")) or default_family).lower()
     if family not in tuple(supported_families or ()):
         raise ValueError("family must be one of: inet, ip, ip6, bridge, netdev")
+    if family == "netdev" and kind in ("ct_helper", "ct_timeout", "ct_expectation"):
+        raise ValueError(f"{kind} is not supported for family=netdev")
     if family == "bridge" and kind == "ct_expectation":
-        raise ValueError("ct_expectation is planned for family=bridge and is temporarily disabled")
+        raise ValueError(f"ct_expectation is not supported for family={family}")
     table_name = normalize_value_fn(payload.get("table"))
     if table_name is None or not re.fullmatch(r"[A-Za-z0-9_.-]+", str(table_name)):
         raise ValueError("table is invalid")
@@ -88,11 +102,7 @@ def normalize_named_object_payload(
         l4proto = (normalize_value_fn(payload.get("l4proto")) or "").lower()
         if l4proto not in ("tcp", "udp"):
             raise ValueError("l4proto must be tcp|udp")
-        l3proto = normalize_value_fn(payload.get("l3proto"))
-        if l3proto is not None:
-            l3proto = str(l3proto).lower()
-            if l3proto not in ("ip", "ip6"):
-                raise ValueError("l3proto must be ip|ip6")
+        l3proto = _normalize_l3proto_for_family(payload.get("l3proto"), family, normalize_value_fn)
         config["helper_type"] = helper_type.lower()
         config["l4proto"] = l4proto
         if l3proto is not None:
@@ -111,11 +121,7 @@ def normalize_named_object_payload(
             raise ValueError("timeout_policy contains invalid characters")
         if ":" not in policy:
             raise ValueError("timeout_policy must contain state:value pairs")
-        l3proto = normalize_value_fn(payload.get("l3proto"))
-        if l3proto is not None:
-            l3proto = str(l3proto).lower()
-            if l3proto not in ("ip", "ip6"):
-                raise ValueError("l3proto must be ip|ip6")
+        l3proto = _normalize_l3proto_for_family(payload.get("l3proto"), family, normalize_value_fn)
         config["l4proto"] = l4proto
         config["timeout_policy"] = policy
         if l3proto is not None:
@@ -137,11 +143,7 @@ def normalize_named_object_payload(
             raise ValueError("size must be unsigned integer")
         if int(size_raw) < 1:
             raise ValueError("size must be greater than zero")
-        l3proto = normalize_value_fn(payload.get("l3proto"))
-        if l3proto is not None:
-            l3proto = str(l3proto).lower()
-            if l3proto not in ("ip", "ip6"):
-                raise ValueError("l3proto must be ip|ip6")
+        l3proto = _normalize_l3proto_for_family(payload.get("l3proto"), family, normalize_value_fn)
         config["l4proto"] = l4proto
         config["dport"] = int(dport)
         config["timeout"] = timeout
@@ -289,7 +291,7 @@ def validate_runtime_named_object_references(
     load_effective_objects_fn,
     ensure_exists_fn=ensure_named_object_exists,
 ):
-    if not (validate_runtime_objects and family == "bridge"):
+    if not validate_runtime_objects or family == "netdev":
         return
 
     needs_named_objects = any(

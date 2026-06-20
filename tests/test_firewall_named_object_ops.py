@@ -44,13 +44,27 @@ class FirewallNamedObjectOpsTest(unittest.TestCase):
         named_object_ops.validate_runtime_named_object_references(
             validate_runtime_objects=False,
             family="bridge",
-            nft_table="policy2",
+            nft_table="bridge_policy_tbl",
             ct_helper_set="h1",
             ct_timeout_set="t1",
             ct_expectation_set=None,
             counter_name=None,
             limit_name=None,
             quota_name=None,
+            load_effective_objects_fn=_load_effective_objects,
+        )
+        self.assertEqual(load_calls, [])
+
+        named_object_ops.validate_runtime_named_object_references(
+            validate_runtime_objects=True,
+            family="netdev",
+            nft_table="edge_ingress",
+            ct_helper_set="h1",
+            ct_timeout_set="t1",
+            ct_expectation_set="e1",
+            counter_name="c1",
+            limit_name="l1",
+            quota_name="q1",
             load_effective_objects_fn=_load_effective_objects,
         )
         self.assertEqual(load_calls, [])
@@ -60,19 +74,19 @@ class FirewallNamedObjectOpsTest(unittest.TestCase):
             family="inet",
             nft_table="filter",
             ct_helper_set="h1",
-            ct_timeout_set=None,
-            ct_expectation_set=None,
-            counter_name=None,
-            limit_name=None,
-            quota_name=None,
+            ct_timeout_set="t1",
+            ct_expectation_set="e1",
+            counter_name="c1",
+            limit_name="l1",
+            quota_name="q1",
             load_effective_objects_fn=_load_effective_objects,
         )
-        self.assertEqual(load_calls, [])
+        self.assertEqual(load_calls, [("inet", "filter")])
 
         named_object_ops.validate_runtime_named_object_references(
             validate_runtime_objects=True,
             family="bridge",
-            nft_table="policy2",
+            nft_table="bridge_policy_tbl",
             ct_helper_set="h1",
             ct_timeout_set="t1",
             ct_expectation_set="e1",
@@ -81,13 +95,13 @@ class FirewallNamedObjectOpsTest(unittest.TestCase):
             quota_name="q1",
             load_effective_objects_fn=_load_effective_objects,
         )
-        self.assertEqual(load_calls, [("bridge", "policy2")])
+        self.assertEqual(load_calls, [("inet", "filter"), ("bridge", "bridge_policy_tbl")])
 
         with self.assertRaisesRegex(ValueError, 'ct_helper_set references missing ct helper object "missing"'):
             named_object_ops.validate_runtime_named_object_references(
                 validate_runtime_objects=True,
-                family="bridge",
-                nft_table="policy2",
+                family="ip",
+                nft_table="filter",
                 ct_helper_set="missing",
                 ct_timeout_set=None,
                 ct_expectation_set=None,
@@ -135,6 +149,22 @@ class FirewallNamedObjectOpsTest(unittest.TestCase):
             normalize_value_fn=_norm,
         )
         self.assertEqual(stmt_limit, "add limit inet filter l1 { rate over 10/second burst 5 packets; }")
+
+        stmt_expectation = named_object_ops.render_named_object_add_statement(
+            {
+                "kind": "ct_expectation",
+                "family": "inet",
+                "table": "filter",
+                "name": "exp_ftp",
+                "comment": "ftp expectation",
+                "config": {"l4proto": "tcp", "dport": 21, "timeout": "2m", "size": 8, "l3proto": "ip"},
+            },
+            normalize_value_fn=_norm,
+        )
+        self.assertEqual(
+            stmt_expectation,
+            'add ct expectation inet filter exp_ftp { protocol tcp; dport 21; timeout 2m; size 8; l3proto ip; comment "ftp expectation"; }',
+        )
 
         with self.assertRaisesRegex(ValueError, "unsupported object kind"):
             named_object_ops.render_named_object_add_statement(
@@ -192,6 +222,33 @@ class FirewallNamedObjectOpsTest(unittest.TestCase):
         self.assertEqual(item["config"]["burst"], "5")
         self.assertTrue(item["config"]["over"])
 
+        ct_expectation = named_object_ops.normalize_named_object_payload(
+            payload={
+                "kind": "ct_expectation",
+                "family": "inet",
+                "table": "filter",
+                "name": "EXP-FTP",
+                "l4proto": "tcp",
+                "dport": "21",
+                "timeout": "2m",
+                "size": "8",
+                "l3proto": "ip",
+            },
+            normalize_value_fn=_norm,
+            normalize_bool_fn=_norm_bool,
+            normalize_timeout_fn=_norm_timeout,
+            validate_table_exists_fn=_validate_table_exists,
+            default_family="inet",
+            supported_families=("inet", "ip", "ip6", "bridge", "netdev"),
+            supported_kinds=("counter", "limit", "quota", "ct_helper", "ct_timeout", "ct_expectation"),
+            id_factory=lambda: "exp-id",
+        )
+        self.assertEqual(ct_expectation["kind"], "ct_expectation")
+        self.assertEqual(ct_expectation["name"], "exp-ftp")
+        self.assertEqual(ct_expectation["config"]["dport"], 21)
+        self.assertEqual(ct_expectation["config"]["timeout"], "2m")
+        self.assertEqual(ct_expectation["config"]["size"], 8)
+
         with self.assertRaisesRegex(ValueError, "table is invalid"):
             named_object_ops.normalize_named_object_payload(
                 payload={"kind": "counter", "family": "inet", "table": "bad space", "name": "x"},
@@ -202,6 +259,97 @@ class FirewallNamedObjectOpsTest(unittest.TestCase):
                 default_family="inet",
                 supported_families=("inet", "ip", "ip6", "bridge", "netdev"),
                 supported_kinds=("counter", "limit", "quota", "ct_helper", "ct_timeout", "ct_expectation"),
+            )
+
+    def test_normalize_named_object_payload_family_kind_matrix(self):
+        def _norm(v):
+            if v is None:
+                return None
+            t = str(v).strip()
+            return t or None
+
+        def _norm_bool(v):
+            if isinstance(v, bool):
+                return v
+            return str(v).lower() in ("1", "true", "yes", "on")
+
+        def _norm_timeout(v):
+            return _norm(v)
+
+        supported_families = ("inet", "ip", "ip6", "bridge", "netdev")
+        supported_kinds = ("counter", "limit", "quota", "ct_helper", "ct_timeout", "ct_expectation")
+        payload_by_kind = {
+            "counter": {"packets": "1", "bytes": "2"},
+            "limit": {"rate": "10/second"},
+            "quota": {"mode": "over", "bytes": "20 mbytes"},
+            "ct_helper": {"helper_type": "ftp", "l4proto": "tcp", "l3proto": "ip"},
+            "ct_timeout": {"l4proto": "tcp", "timeout_policy": "established:120"},
+            "ct_expectation": {"l4proto": "tcp", "dport": "21", "timeout": "2m", "size": "8", "l3proto": "ip"},
+        }
+
+        for family in supported_families:
+            for kind in supported_kinds:
+                extra = dict(payload_by_kind[kind])
+                if family == "ip6" and "l3proto" in extra:
+                    extra["l3proto"] = "ip6"
+                payload = {
+                    "kind": kind,
+                    "family": family,
+                    "table": f"{family}_tbl",
+                    "name": f"{kind}_obj",
+                    **extra,
+                }
+                if (kind == "ct_expectation" and family == "bridge") or (kind in ("ct_helper", "ct_timeout", "ct_expectation") and family == "netdev"):
+                    error = f"{kind} is not supported for family={family}"
+                    with self.subTest(family=family, kind=kind):
+                        with self.assertRaisesRegex(ValueError, error):
+                            named_object_ops.normalize_named_object_payload(
+                                payload=payload,
+                                normalize_value_fn=_norm,
+                                normalize_bool_fn=_norm_bool,
+                                normalize_timeout_fn=_norm_timeout,
+                                validate_table_exists_fn=lambda _family, _table: None,
+                                default_family="inet",
+                                supported_families=supported_families,
+                                supported_kinds=supported_kinds,
+                                id_factory=lambda: "matrix-id",
+                            )
+                    continue
+
+                with self.subTest(family=family, kind=kind):
+                    item = named_object_ops.normalize_named_object_payload(
+                        payload=payload,
+                        normalize_value_fn=_norm,
+                        normalize_bool_fn=_norm_bool,
+                        normalize_timeout_fn=_norm_timeout,
+                        validate_table_exists_fn=lambda _family, _table: None,
+                        default_family="inet",
+                        supported_families=supported_families,
+                        supported_kinds=supported_kinds,
+                        id_factory=lambda: "matrix-id",
+                    )
+                    self.assertEqual(item["family"], family)
+                    self.assertEqual(item["kind"], kind)
+
+        with self.assertRaisesRegex(ValueError, "l3proto must match family=ip6"):
+            named_object_ops.normalize_named_object_payload(
+                payload={
+                    "kind": "ct_helper",
+                    "family": "ip6",
+                    "table": "ip6_tbl",
+                    "name": "bad_l3",
+                    "helper_type": "ftp",
+                    "l4proto": "tcp",
+                    "l3proto": "ip",
+                },
+                normalize_value_fn=_norm,
+                normalize_bool_fn=_norm_bool,
+                normalize_timeout_fn=_norm_timeout,
+                validate_table_exists_fn=lambda _family, _table: None,
+                default_family="inet",
+                supported_families=supported_families,
+                supported_kinds=supported_kinds,
+                id_factory=lambda: "matrix-id",
             )
 
     def test_list_named_objects_handles_inactive_and_active_tables(self):
@@ -380,6 +528,45 @@ class FirewallNamedObjectOpsTest(unittest.TestCase):
                 list_rules_fn=lambda: [dict(x) for x in rules_state["rules"]],
                 normalize_value_fn=_normalize_value,
             )
+
+    def test_delete_named_object_rolls_back_on_apply_error(self):
+        objects_state = {
+            "objects": [
+                {"id": "o1", "family": "inet", "table": "filter", "kind": "counter", "name": "c1", "enabled": True},
+                {"id": "o2", "family": "inet", "table": "filter", "kind": "limit", "name": "l1", "enabled": True},
+            ]
+        }
+        writes = {"count": 0}
+
+        def _read_objects():
+            return {"objects": [dict(x) for x in objects_state["objects"]]}
+
+        def _write_objects(data):
+            writes["count"] += 1
+            objects_state["objects"] = [dict(x) for x in data.get("objects", [])]
+
+        def _normalize_value(v):
+            if v is None:
+                return None
+            t = str(v).strip()
+            return t or None
+
+        def _apply_fail():
+            raise RuntimeError("apply failed")
+
+        with self.assertRaisesRegex(RuntimeError, "apply failed"):
+            named_object_ops.delete_named_object(
+                object_id="o1",
+                apply_now=True,
+                read_objects_fn=_read_objects,
+                write_objects_fn=_write_objects,
+                apply_rules_fn=_apply_fail,
+                list_rules_fn=lambda: [],
+                normalize_value_fn=_normalize_value,
+            )
+
+        self.assertEqual([x["id"] for x in objects_state["objects"]], ["o1", "o2"])
+        self.assertEqual(writes["count"], 2)
 
 
 if __name__ == "__main__":

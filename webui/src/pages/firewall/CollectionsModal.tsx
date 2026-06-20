@@ -33,6 +33,9 @@ type Props = {
 
 export function CollectionsModal(props: Props) {
   if (!props.open) return null
+  const usageHint = props.collectionKind === 'map' || props.collectionKind === 'vmap'
+    ? 'Use maps in rule statement selectors by name.'
+    : `Use ${props.collectionKind} collections in rule fields as @set_name.`
 
   return (
     <div className='fixed inset-0 z-40'>
@@ -54,6 +57,9 @@ export function CollectionsModal(props: Props) {
                 <option value='map'>map</option>
                 <option value='vmap'>vmap</option>
               </select>
+              <div className='rounded-md border border-dashed px-2.5 py-1.5 text-[11px] text-muted-foreground'>
+                {usageHint}
+              </div>
             </div>
             <div className='space-y-1.5'>
               <Label>Name</Label>

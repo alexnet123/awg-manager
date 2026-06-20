@@ -3,6 +3,7 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { TabsContent } from '@/components/ui/tabs'
+import type { FirewallRule } from '../api'
 
 type LiveChartPoint = {
   slot: number
@@ -13,8 +14,9 @@ type LiveChartPoint = {
 
 type Props = {
   hasSupport: (key: string) => boolean
-  form: { counter?: boolean | null }
+  form: Partial<FirewallRule>
   setForm: React.Dispatch<React.SetStateAction<any>>
+  objectCounterNames: string[]
   formatCounter: (value?: number) => string
   formatBytesIEC: (bytes: number) => string
   formatBitrate: (bitsPerSec: number) => string
@@ -29,9 +31,40 @@ type Props = {
 }
 
 export function PolicyRuleEditorStatsTab(props: Props) {
+  const family = String(props.form.family || 'inet').toLowerCase()
+  const supportsObjectBindings = family !== 'netdev'
+
   return (
     <TabsContent value='stats' className='mt-2 space-y-2.5'>
-      {props.hasSupport('counter') ? <label className='flex items-center gap-2 text-xs'><input type='checkbox' className='h-4 w-4' checked={!!props.form.counter} onChange={(e) => props.setForm((p: any) => ({ ...p, counter: e.target.checked }))} />Enable nft `counter` for this rule</label> : null}
+      {props.hasSupport('counter') && !supportsObjectBindings ? <label className='flex items-center gap-2 text-xs'><input type='checkbox' className='h-4 w-4' checked={!!props.form.counter} onChange={(e) => props.setForm((p: any) => ({ ...p, counter: e.target.checked }))} />Enable nft `counter` for this rule</label> : null}
+      {supportsObjectBindings ? (
+        <div className='rounded-md border p-2'>
+          <div className='mb-2 text-[11px] font-semibold text-muted-foreground'>Counter object</div>
+          <label className='flex items-center gap-2 text-xs'>
+            <input
+              type='checkbox'
+              className='h-4 w-4'
+              checked={!!props.form.counter}
+              disabled={!!props.form.counter_name}
+              onChange={(e) => props.setForm((p: Partial<FirewallRule>) => ({ ...p, counter: e.target.checked }))}
+            />
+            anonymous counter
+          </label>
+          <div className='mt-2 space-y-1.5'>
+            <Label className='text-[11px]'>counter object</Label>
+            <select
+              className='h-7 w-full rounded-md border bg-background px-2.5 text-xs'
+              value={props.form.counter_name || '__none__'}
+              disabled={!!props.form.counter || (!props.form.counter_name && props.objectCounterNames.length === 0)}
+              onChange={(e) => props.setForm((p: Partial<FirewallRule>) => ({ ...p, counter_name: e.target.value === '__none__' ? null : e.target.value, counter: e.target.value === '__none__' ? p.counter : false }))}
+            >
+              <option value='__none__'>{props.objectCounterNames.length ? 'Select counter object' : 'No counter objects in table'}</option>
+              {props.form.counter_name && !props.objectCounterNames.includes(props.form.counter_name) ? <option value={props.form.counter_name}>{props.form.counter_name} (missing)</option> : null}
+              {props.objectCounterNames.map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+          </div>
+        </div>
+      ) : null}
       <div className='grid grid-cols-2 gap-2'>
         <div className='space-y-1'>
           <Label className='text-[11px]'>packets</Label>

@@ -92,6 +92,16 @@ class FirewallRuntimeAdapterTest(unittest.TestCase):
         self.assertFalse(runtime_adapter.reset_table_named_quotas("inet", "filter"))
 
     @mock.patch("backend.domains.firewall.runtime_adapter.subprocess.run")
+    def test_reset_table_named_quotas_returns_true_on_success(self, run_mock):
+        run_mock.return_value = types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        self.assertTrue(runtime_adapter.reset_table_named_quotas("inet", "filter"))
+        self.assertEqual(
+            run_mock.call_args.args[0],
+            ["nft", "reset", "quotas", "table", "inet", "filter"],
+        )
+        self.assertTrue(run_mock.call_args.kwargs["check"])
+
+    @mock.patch("backend.domains.firewall.runtime_adapter.subprocess.run")
     def test_get_ruleset_text_returns_stdout(self, run_mock):
         run_mock.return_value = types.SimpleNamespace(stdout="table inet filter {}\n")
         self.assertEqual(runtime_adapter.get_ruleset_text(), "table inet filter {}\n")
@@ -141,6 +151,73 @@ class FirewallRuntimeAdapterTest(unittest.TestCase):
         active, index = runtime_adapter.get_ruleset_counter_index("")
         self.assertTrue(active)
         self.assertEqual(index[("inet", "filter", "input")][0], {"packets": 0, "bytes": 0})
+
+    def test_parse_runtime_collections_from_ruleset_json(self):
+        payload = {
+            "nftables": [
+                {"metainfo": {"json_schema_version": 1}},
+                {
+                    "set": {
+                        "family": "inet",
+                        "table": "FilterRuntime",
+                        "name": "rt_hosts",
+                        "type": "ipv4_addr",
+                        "elem": ["10.0.0.1", "10.0.0.2"],
+                    }
+                },
+                {
+                    "set": {
+                        "family": "inet",
+                        "table": "FilterRuntime",
+                        "name": "rt_ports",
+                        "type": "inet_service",
+                        "elem": [22, 443],
+                    }
+                },
+                {
+                    "map": {
+                        "family": "inet",
+                        "table": "FilterRuntime",
+                        "name": "rt_nat",
+                        "type": "ipv4_addr",
+                        "map": "ipv4_addr",
+                        "elem": [{"elem": {"val": "10.0.0.1", "data": "192.0.2.1"}}],
+                    }
+                },
+                {
+                    "map": {
+                        "family": "inet",
+                        "table": "FilterRuntime",
+                        "name": "rt_proto_vmap",
+                        "type": "inet_proto",
+                        "map": "verdict",
+                        "elem": [{"elem": {"val": "tcp", "data": {"accept": None}}}],
+                    }
+                },
+                {"set": {"family": "arp", "table": "ignored", "name": "arp_set", "type": "ifname"}},
+            ]
+        }
+
+        rows = runtime_adapter.parse_runtime_collections_from_ruleset_json(
+            payload,
+            supported_families=("inet", "ip", "ip6", "bridge", "netdev"),
+        )
+
+        self.assertEqual(rows["addr"][0]["name"], "rt_hosts")
+        self.assertEqual(rows["addr"][0]["table"], "FilterRuntime")
+        self.assertEqual(rows["addr"][0]["runtime_only"], True)
+        self.assertEqual(rows["addr"][0]["elements"], ["10.0.0.1", "10.0.0.2"])
+        self.assertEqual(rows["port"][0]["elements"], ["22", "443"])
+        self.assertEqual(rows["map"][0]["entries"], ["10.0.0.1:192.0.2.1"])
+        self.assertEqual(rows["vmap"][0]["entries"], ["tcp:accept"])
+        self.assertEqual({row["family"] for kind in rows for row in rows[kind]}, {"inet"})
+
+    @mock.patch("backend.domains.firewall.runtime_adapter.subprocess.run")
+    def test_list_runtime_collections_returns_empty_on_nft_error(self, run_mock):
+        run_mock.side_effect = RuntimeError("boom")
+        rows = runtime_adapter.list_runtime_collections(("inet", "ip"))
+        self.assertEqual(rows["addr"], [])
+        self.assertEqual(rows["vmap"], [])
 
     def test_build_runtime_counters_by_rule_aligns_rule_order_per_chain(self):
         rules = [

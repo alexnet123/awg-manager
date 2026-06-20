@@ -52,6 +52,46 @@ class ManagerAccessFacadeTest(unittest.TestCase):
             kw="value",
         )
 
+    def test_backend_or_fallback_does_not_fallback_on_validation_errors(self):
+        with mock.patch(
+            "backend.app.manager_facade.legacy_manager_bridge.call_manager_method",
+            side_effect=AssertionError("validation errors must not use legacy fallback"),
+        ) as bridge_call_mock:
+            with self.assertRaisesRegex(ValueError, "bad firewall payload"):
+                manager_facade._backend_or_fallback(  # pylint: disable=protected-access
+                    "create_firewall_named_object_service",
+                    lambda: (_ for _ in ()).throw(ValueError("bad firewall payload")),
+                )
+
+        bridge_call_mock.assert_not_called()
+
+    def test_backend_or_fallback_does_not_fallback_on_missing_resources(self):
+        with mock.patch(
+            "backend.app.manager_facade.legacy_manager_bridge.call_manager_method",
+            side_effect=AssertionError("missing resources must not use legacy fallback"),
+        ) as bridge_call_mock:
+            with self.assertRaisesRegex(LookupError, "missing firewall table"):
+                manager_facade._backend_or_fallback(  # pylint: disable=protected-access
+                    "update_firewall_named_object_service",
+                    lambda: (_ for _ in ()).throw(LookupError("missing firewall table")),
+                )
+
+        bridge_call_mock.assert_not_called()
+
+    def test_backend_or_fallback_keeps_non_firewall_validation_fallback(self):
+        with mock.patch(
+            "backend.app.manager_facade.legacy_manager_bridge.call_manager_method",
+            return_value="legacy-ok",
+        ) as bridge_call_mock:
+            out = manager_facade._backend_or_fallback(  # pylint: disable=protected-access
+                "create_interface_service",
+                lambda: (_ for _ in ()).throw(ValueError("legacy compatibility")),
+                {"wg_interface": "awg0"},
+            )
+
+        self.assertEqual(out, "legacy-ok")
+        bridge_call_mock.assert_called_once()
+
     def test_getattr_does_not_proxy_when_fallback_disabled(self):
         with mock.patch.dict(os.environ, {"AWG_MANAGER_ENABLE_AWG_CORE_FALLBACK": "0"}, clear=False):
             with self.assertRaises(AttributeError):
@@ -244,6 +284,31 @@ class ManagerAccessFacadeTest(unittest.TestCase):
             family="ip",
             table="nat",
         )
+
+    def test_create_firewall_rule_service_normalizer_accepts_runtime_validation_flag(self):
+        def fake_create_rule(**kwargs):
+            return kwargs["normalize_rule_fn"](
+                {
+                    "family": "inet",
+                    "table": "filter",
+                    "chain": "input",
+                    "action": "accept",
+                },
+                validate_runtime_objects=True,
+            )
+
+        with mock.patch(
+            "backend.app.manager_facade.firewall_service_layer_ops.create_rule",
+            side_effect=fake_create_rule,
+        ), mock.patch(
+            "backend.app.manager_facade.legacy_manager_bridge.call_manager_method",
+            side_effect=AssertionError("firewall create must stay on backend path"),
+        ):
+            out = manager_facade.create_firewall_rule_service({"chain": "input"}, apply_now=False)
+
+        self.assertEqual(out["family"], "inet")
+        self.assertEqual(out["table"], "filter")
+        self.assertEqual(out["chain"], "input")
 
     def test_apply_firewall_rules_prefers_backend_service_layer(self):
         with mock.patch(

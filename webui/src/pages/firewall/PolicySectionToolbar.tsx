@@ -7,18 +7,27 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import type { FirewallTableItem } from '../api'
 
 type FirewallPolicyTab = 'filter' | 'nat' | 'raw' | 'mangle'
+type TableFamily = 'inet' | 'ip' | 'ip6' | 'bridge' | 'netdev'
+type CustomTableOption = {
+  key: string
+  family: TableFamily
+  tableName: string
+  label: string
+}
 
 type Props = {
   isCustomRuleTableActive: boolean
   activePolicyTab: FirewallPolicyTab
   setActivePolicyTab: React.Dispatch<React.SetStateAction<FirewallPolicyTab>>
   setActiveRuleTableName: React.Dispatch<React.SetStateAction<string>>
-  customTableNames: string[]
+  activeRuleTableFamily: TableFamily
+  setActiveRuleTableFamily: React.Dispatch<React.SetStateAction<TableFamily>>
+  customTableOptions: CustomTableOption[]
   activeRuleTableName: string
   customTables: FirewallTableItem[]
   setSelectedTableIds: React.Dispatch<React.SetStateAction<string[]>>
   setTableAnchorId: React.Dispatch<React.SetStateAction<string | null>>
-  setActiveSection: React.Dispatch<React.SetStateAction<'policy' | 'policy_v2' | 'policy_v3' | 'collections' | 'table_builder'>>
+  setActiveSection: React.Dispatch<React.SetStateAction<'policy' | 'collections' | 'objects' | 'table_builder'>>
   isBusy: boolean
   selectedRuleIdsLength: number
   openCreateWindow: () => void
@@ -44,6 +53,7 @@ export function PolicySectionToolbar(props: Props) {
               const next = v as FirewallPolicyTab
               props.setActivePolicyTab(next)
               props.setActiveRuleTableName(next)
+              props.setActiveRuleTableFamily('inet')
             }}
           >
             <TabsList className='h-9'>
@@ -54,40 +64,42 @@ export function PolicySectionToolbar(props: Props) {
             </TabsList>
           </Tabs>
         </div>
-        {props.customTableNames.length ? (
-          <div className='min-w-0 max-w-full basis-0 flex-1'>
+        {props.customTableOptions.length ? (
+          <div className='min-w-0 max-w-full shrink-0'>
             <Select
-              value={props.isCustomRuleTableActive ? props.activeRuleTableName : '__none__'}
+              value={props.isCustomRuleTableActive ? `${props.activeRuleTableFamily}:${props.activeRuleTableName}` : '__none__'}
               onValueChange={(v) => {
                 if (v === '__none__') {
                   props.setActiveRuleTableName(props.activePolicyTab)
+                  props.setActiveRuleTableFamily('inet')
                   return
                 }
-                const row = props.customTables.find((x) => x.table_name === v)
+                const option = props.customTableOptions.find((x) => x.key === v)
+                if (!option) return
+                const row = props.customTables.find((x) => (
+                  String(x.family || 'inet').toLowerCase() === option.family && x.table_name === option.tableName
+                ))
                 if (row) {
                   props.setSelectedTableIds([row.id])
                   props.setTableAnchorId(row.id)
                 }
-                props.setActiveRuleTableName(v)
+                props.setActiveRuleTableName(option.tableName)
+                props.setActiveRuleTableFamily(option.family)
                 props.setActiveSection('policy')
               }}
             >
-              <SelectTrigger className='h-9 w-full border-amber-300 bg-amber-50 text-sm'>
+              <SelectTrigger className='h-9 w-[220px] max-w-full border-amber-300 bg-amber-50 text-sm'>
                 <SelectValue placeholder='Custom table (optional)' />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value='__none__'>System table only</SelectItem>
-                {props.customTableNames.map((name) => (
-                  <SelectItem key={name} value={name}>{name}</SelectItem>
+                {props.customTableOptions.map((option) => (
+                  <SelectItem key={option.key} value={option.key}>{option.label}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
         ) : null}
-      </div>
-
-      <div className='rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-900'>
-        This view is inet-only; use Policy v2 for bridge/ip/ip6/netdev.
       </div>
 
       <div className='flex gap-2'>

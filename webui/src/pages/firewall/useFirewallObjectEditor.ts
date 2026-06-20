@@ -1,19 +1,19 @@
 import * as React from 'react'
 import type { FirewallNamedObjectItem } from '../api'
-import { defaultPolicyV2ObjectForm, type PolicyV2ObjectForm } from './policyV2ObjectForm'
+import { defaultFirewallObjectForm, type FirewallObjectForm } from './firewallObjectForm'
 
-export type PolicyV2ObjectPreset = 'counter_ssh' | 'limit_dns' | 'quota_bridge' | 'helper_ftp' | 'timeout_tcp'
+export type FirewallObjectPreset = 'counter_ssh' | 'limit_dns' | 'quota_bridge' | 'helper_ftp' | 'timeout_tcp' | 'expectation_ftp'
 
 type Params = {
-  activePolicyV2Family: 'bridge' | 'netdev'
-  activePolicyV2TableName: string
+  activeObjectFamily: 'inet' | 'ip' | 'ip6' | 'bridge' | 'netdev'
+  activeObjectTableName: string
   setError: React.Dispatch<React.SetStateAction<string | null>>
-  setEditingPolicyV2ObjectId: React.Dispatch<React.SetStateAction<string | null>>
-  setPolicyV2ObjectForm: React.Dispatch<React.SetStateAction<PolicyV2ObjectForm>>
-  setPolicyV2ObjectOpen: React.Dispatch<React.SetStateAction<boolean>>
+  setEditingFirewallObjectId: React.Dispatch<React.SetStateAction<string | null>>
+  setFirewallObjectForm: React.Dispatch<React.SetStateAction<FirewallObjectForm>>
+  setFirewallObjectOpen: React.Dispatch<React.SetStateAction<boolean>>
 }
 
-function buildPolicyV2ObjectFormFromItem(item: FirewallNamedObjectItem): PolicyV2ObjectForm {
+function buildFirewallObjectFormFromItem(item: FirewallNamedObjectItem): FirewallObjectForm {
   const cfg = item.config || {}
   return {
     id: item.id,
@@ -39,52 +39,44 @@ function buildPolicyV2ObjectFormFromItem(item: FirewallNamedObjectItem): PolicyV
   }
 }
 
-export function usePolicyAdvancedObjectEditor(params: Params) {
-  const openCreatePolicyV2ObjectWindow = React.useCallback(() => {
-    if (params.activePolicyV2Family !== 'bridge') {
-      params.setError('Policy v2 objects are bridge-only in this sprint.')
+export function useFirewallObjectEditor(params: Params) {
+  const openCreateFirewallObjectWindow = React.useCallback(() => {
+    if (!params.activeObjectTableName) {
+      params.setError('Select object table first.')
       return
     }
-    if (!params.activePolicyV2TableName) {
-      params.setError('Select bridge table first in Policy v2.')
-      return
-    }
-    params.setEditingPolicyV2ObjectId(null)
-    params.setPolicyV2ObjectForm(defaultPolicyV2ObjectForm())
-    params.setPolicyV2ObjectOpen(true)
+    params.setEditingFirewallObjectId(null)
+    params.setFirewallObjectForm(defaultFirewallObjectForm())
+    params.setFirewallObjectOpen(true)
   }, [params])
 
-  const openEditPolicyV2ObjectWindow = React.useCallback((item: FirewallNamedObjectItem) => {
-    if (item.kind === 'ct_expectation') {
-      params.setError('ct_expectation is planned for bridge and temporarily disabled. Delete and recreate later when enabled.')
-      return
-    }
-    params.setEditingPolicyV2ObjectId(item.id)
-    params.setPolicyV2ObjectForm(buildPolicyV2ObjectFormFromItem(item))
-    params.setPolicyV2ObjectOpen(true)
+  const openEditFirewallObjectWindow = React.useCallback((item: FirewallNamedObjectItem) => {
+    params.setEditingFirewallObjectId(item.id)
+    params.setFirewallObjectForm(buildFirewallObjectFormFromItem(item))
+    params.setFirewallObjectOpen(true)
   }, [params])
 
-  const applyPolicyV2ObjectPreset = React.useCallback((preset: PolicyV2ObjectPreset) => {
+  const applyFirewallObjectPreset = React.useCallback((preset: FirewallObjectPreset) => {
     const now = Date.now()
     if (preset === 'counter_ssh') {
-      params.setPolicyV2ObjectForm((p) => ({
+      params.setFirewallObjectForm((p) => ({
         ...p,
         kind: 'counter',
         name: `cnt_ssh_${now}`,
         enabled: true,
-        comment: 'Count SSH attempts in bridge policy',
+        comment: 'Count SSH attempts in firewall policy',
         packets: '',
         bytes: '',
       }))
       return
     }
     if (preset === 'limit_dns') {
-      params.setPolicyV2ObjectForm((p) => ({
+      params.setFirewallObjectForm((p) => ({
         ...p,
         kind: 'limit',
         name: `lim_dns_${now}`,
         enabled: true,
-        comment: 'Limit DNS burst on bridge',
+        comment: 'Limit DNS burst',
         rate: '30/second',
         burst: '100 packets',
         over: false,
@@ -92,7 +84,7 @@ export function usePolicyAdvancedObjectEditor(params: Params) {
       return
     }
     if (preset === 'quota_bridge') {
-      params.setPolicyV2ObjectForm((p) => ({
+      params.setFirewallObjectForm((p) => ({
         ...p,
         kind: 'quota',
         name: `quo_bridge_${now}`,
@@ -105,7 +97,7 @@ export function usePolicyAdvancedObjectEditor(params: Params) {
       return
     }
     if (preset === 'helper_ftp') {
-      params.setPolicyV2ObjectForm((p) => ({
+      params.setFirewallObjectForm((p) => ({
         ...p,
         kind: 'ct_helper',
         name: `hlp_ftp_${now}`,
@@ -117,7 +109,26 @@ export function usePolicyAdvancedObjectEditor(params: Params) {
       }))
       return
     }
-    params.setPolicyV2ObjectForm((p) => ({
+    if (preset === 'expectation_ftp') {
+      if (params.activeObjectFamily === 'bridge' || params.activeObjectFamily === 'netdev') {
+        params.setError(`ct_expectation is not supported for family=${params.activeObjectFamily}.`)
+        return
+      }
+      params.setFirewallObjectForm((p) => ({
+        ...p,
+        kind: 'ct_expectation',
+        name: `exp_ftp_${now}`,
+        enabled: true,
+        comment: 'FTP conntrack expectation',
+        l4proto: 'tcp',
+        l3proto: params.activeObjectFamily === 'ip6' ? 'ip6' : 'ip',
+        dport: '21',
+        timeout: '2m',
+        size: '8',
+      }))
+      return
+    }
+    params.setFirewallObjectForm((p) => ({
       ...p,
       kind: 'ct_timeout',
       name: `tmo_tcp_${now}`,
@@ -130,8 +141,8 @@ export function usePolicyAdvancedObjectEditor(params: Params) {
   }, [params])
 
   return {
-    openCreatePolicyV2ObjectWindow,
-    openEditPolicyV2ObjectWindow,
-    applyPolicyV2ObjectPreset,
+    openCreateFirewallObjectWindow,
+    openEditFirewallObjectWindow,
+    applyFirewallObjectPreset,
   }
 }

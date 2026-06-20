@@ -1,6 +1,6 @@
 import type { FirewallNamedObjectItem } from '../api'
 
-export function formatPolicyV2ObjectSummary(item: FirewallNamedObjectItem) {
+export function formatFirewallObjectSummary(item: FirewallNamedObjectItem) {
   const cfg = item.config || {}
   if (item.kind === 'counter') {
     const p = cfg.packets === undefined || cfg.packets === null ? 'auto' : String(cfg.packets)

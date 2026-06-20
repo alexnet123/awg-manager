@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { login } from './helpers'
 
 function authHeaders() {
@@ -15,6 +15,10 @@ function unique(prefix: string) {
 
 function uniquePriority(offset = 0) {
   return -(25000 + (Date.now() % 100000) + offset)
+}
+
+function toggleLine(modal: Locator, label: string) {
+  return modal.locator(`label:has-text('${label}')`).locator('xpath=ancestor::div[contains(@class,"space-y-1.5")]').first()
 }
 
 async function openFirewall(page: Page) {
@@ -41,6 +45,79 @@ async function createBridgeTable(request: APIRequestContext, tableName: string) 
   })
   const json = await res.json().catch(() => ({}))
   expect(res.ok(), `create bridge table failed: ${JSON.stringify(json)}`).toBeTruthy()
+  return json.item
+}
+
+async function createIpFilterTable(request: APIRequestContext, tableName: string) {
+  const res = await request.post('/firewall/tables', {
+    headers: authHeaders(),
+    data: {
+      family: 'ip',
+      table_name: tableName,
+      chain_name: 'input',
+      chain_type: 'filter',
+      hook: 'input',
+      priority: uniquePriority(2),
+      policy: 'accept',
+    },
+  })
+  const json = await res.json().catch(() => ({}))
+  expect(res.ok(), `create ip filter table failed: ${JSON.stringify(json)}`).toBeTruthy()
+  return json.item
+}
+
+async function createIp6FilterTable(request: APIRequestContext, tableName: string) {
+  const res = await request.post('/firewall/tables', {
+    headers: authHeaders(),
+    data: {
+      family: 'ip6',
+      table_name: tableName,
+      chain_name: 'input',
+      chain_type: 'filter',
+      hook: 'input',
+      priority: uniquePriority(3),
+      policy: 'accept',
+    },
+  })
+  const json = await res.json().catch(() => ({}))
+  expect(res.ok(), `create ip6 filter table failed: ${JSON.stringify(json)}`).toBeTruthy()
+  return json.item
+}
+
+async function createL3FilterTable(request: APIRequestContext, family: 'ip' | 'ip6', tableName: string, chainName: string, hook: 'input' | 'output') {
+  const res = await request.post('/firewall/tables', {
+    headers: authHeaders(),
+    data: {
+      family,
+      table_name: tableName,
+      chain_name: chainName,
+      chain_type: 'filter',
+      hook,
+      priority: uniquePriority(hook === 'output' ? 12 : 11),
+      policy: 'accept',
+    },
+  })
+  const json = await res.json().catch(() => ({}))
+  expect(res.ok(), `create ${family} filter table failed: ${JSON.stringify(json)}`).toBeTruthy()
+  return json.item
+}
+
+async function createL3NatTable(request: APIRequestContext, family: 'ip' | 'ip6', tableName: string, chainName: string, hook: 'prerouting' | 'postrouting') {
+  const natPriority = hook === 'postrouting' ? 101 : -101
+  const res = await request.post('/firewall/tables', {
+    headers: authHeaders(),
+    data: {
+      family,
+      table_name: tableName,
+      chain_name: chainName,
+      chain_type: 'nat',
+      hook,
+      priority: natPriority,
+      policy: 'accept',
+    },
+  })
+  const json = await res.json().catch(() => ({}))
+  expect(res.ok(), `create ${family} nat table failed: ${JSON.stringify(json)}`).toBeTruthy()
   return json.item
 }
 
@@ -90,19 +167,21 @@ async function deleteNamedObject(request: APIRequestContext, id: string) {
   return { res, payload }
 }
 
-test('policy v2 bridge: UI creates rule and list endpoint returns it', async ({ page, request }) => {
+test('unified Policy bridge: UI creates rule and list endpoint returns it', async ({ page, request }) => {
   const tableName = unique('br_tbl')
   const table = await createBridgeTable(request, tableName)
   try {
     await login(page)
     await openFirewall(page)
-    await page.getByRole('tab', { name: 'policy v2' }).click()
 
-    await page.locator("label:has-text('Table')").locator('..').locator('select').selectOption(tableName)
+    await page.getByText('System table only', { exact: true }).click()
+    await page.getByText(`bridge / ${tableName}`, { exact: true }).click()
     await page.getByRole('button', { name: 'Add' }).first().click()
-    await expect(page.getByText('Add Bridge Rule (Policy v2)')).toBeVisible()
+    await expect(page.getByText('Add Firewall Rule')).toBeVisible()
+    await expect(page.getByText('Bridge input')).toBeVisible()
 
     await page.locator("label:has-text('Chain')").locator('..').locator('select').selectOption('forward')
+    await page.getByRole('tab', { name: 'Action' }).click()
     await page.locator("label:has-text('Action')").locator('..').locator('select').selectOption('accept')
     await page.locator('div.fixed.inset-0.z-40').last().getByRole('button', { name: 'Add' }).click({ force: true })
 
@@ -112,6 +191,345 @@ test('policy v2 bridge: UI creates rule and list endpoint returns it', async ({ 
     }, { timeout: 30_000 }).toBeGreaterThan(0)
   } finally {
     await deleteTable(request, String(table.id))
+  }
+})
+
+test('unified Policy bridge: Add Rule action choices and object bindings match bridge context', async ({ page, request }) => {
+  const tableName = unique('br_tbl')
+  const table = await createBridgeTable(request, tableName)
+  try {
+    await login(page)
+    await openFirewall(page)
+
+    await page.getByText('System table only', { exact: true }).click()
+    await page.getByText(`bridge / ${tableName}`, { exact: true }).click()
+    await page.getByRole('button', { name: 'Add' }).first().click()
+    await expect(page.getByText('Add Firewall Rule')).toBeVisible()
+
+    await page.getByRole('tab', { name: 'Action' }).click()
+    const modal = page.locator('div.fixed.inset-0.z-40').last()
+    const actionSelect = modal.locator("label:has-text('Action')").locator('..').locator('select')
+
+    await expect(actionSelect.locator('option[value="accept"]')).toHaveCount(1)
+    await expect(actionSelect.locator('option[value="drop"]')).toHaveCount(1)
+    await expect(actionSelect.locator('option[value="reject"]')).toHaveCount(1)
+    await expect(actionSelect.locator('option[value="queue"]')).toHaveCount(1)
+    await expect(actionSelect.locator('option[value="fwd"]')).toHaveCount(0)
+    await expect(actionSelect.locator('option[value="dnat"]')).toHaveCount(0)
+    await expect(actionSelect.locator('option[value="snat"]')).toHaveCount(0)
+    await expect(actionSelect.locator('option[value="masquerade"]')).toHaveCount(0)
+    await expect(actionSelect.locator('option[value="redirect"]')).toHaveCount(0)
+    await expect(modal.getByText('NAT actions are not available for bridge/netdev rules.')).toBeVisible()
+    await expect(modal.getByText('Dynamic set update is available only for inet rules.')).toBeVisible()
+    await expect(modal.getByText('Verdict map is available only for inet rules.')).toBeVisible()
+
+    await expect(modal.getByText('Named objects', { exact: true })).toBeVisible()
+    await expect(modal.getByText('ct helper object')).toBeVisible()
+    await expect(modal.getByText('ct timeout object')).toBeVisible()
+    await expect(modal.getByText('ct expectation object', { exact: true })).toHaveCount(0)
+    await expect(modal.getByText('ct expectation object is available only for inet/ip/ip6 rules.')).toBeVisible()
+    await expect(modal.getByText('No named objects in this table yet. Create them from the Objects section.')).toBeVisible()
+
+    await actionSelect.selectOption('queue')
+    await expect(modal.getByText('queue num')).toBeVisible()
+    await expect(modal.getByText('queue flags')).toBeVisible()
+
+    await modal.getByRole('tab', { name: 'Statistics' }).click()
+    await expect(modal.getByText('anonymous counter')).toBeVisible()
+    await expect(modal.getByText('Counter object', { exact: true })).toBeVisible()
+  } finally {
+    await deleteTable(request, String(table.id))
+  }
+})
+
+test('unified Policy bridge walkthrough: creates drop rule and explains NAT unavailable', async ({ page, request }) => {
+  const tableName = unique('br_walk_tbl')
+  const comment = unique('bridge-walk-drop')
+  const table = await createBridgeTable(request, tableName)
+  try {
+    await login(page)
+    await openFirewall(page)
+
+    await page.getByText('System table only', { exact: true }).click()
+    await page.getByText(`bridge / ${tableName}`, { exact: true }).click()
+    await page.getByRole('button', { name: 'Add' }).first().click()
+    await expect(page.getByText('Add Firewall Rule')).toBeVisible()
+
+    const modal = page.locator('div.fixed.inset-0.z-40').last()
+    await modal.getByPlaceholder('Rule comment (optional)').fill(comment)
+    await modal.locator("label:has-text('Chain')").locator('..').locator('select').selectOption('forward')
+    await expect(modal.getByText('Bridge input')).toBeVisible()
+    await expect(modal.getByText('Bridge output')).toBeVisible()
+    await toggleLine(modal, 'Bridge input').getByRole('button', { name: '+' }).click()
+    await toggleLine(modal, 'Bridge input').locator('input').fill('br0')
+
+    await modal.getByRole('tab', { name: 'Action' }).click()
+    const actionSelect = modal.locator("label:has-text('Action')").locator('..').locator('select')
+    await expect(actionSelect.locator('option[value="dnat"]')).toHaveCount(0)
+    await expect(actionSelect.locator('option[value="snat"]')).toHaveCount(0)
+    await expect(actionSelect.locator('option[value="masquerade"]')).toHaveCount(0)
+    await expect(actionSelect.locator('option[value="redirect"]')).toHaveCount(0)
+    await expect(modal.getByText('NAT actions are not available for bridge/netdev rules.')).toBeVisible()
+    await actionSelect.selectOption('drop')
+    await modal.getByRole('button', { name: 'Add' }).click({ force: true })
+
+    await expect.poll(async () => {
+      const rows = await listBridgeRules(request, tableName)
+      return rows.find((rule: any) => rule.comment === comment) || null
+    }, { timeout: 30_000 }).not.toBeNull()
+
+    const rows = await listBridgeRules(request, tableName)
+    const createdRule = rows.find((rule: any) => rule.comment === comment)
+    expect((createdRule as any).family).toBe('bridge')
+    expect((createdRule as any).table).toBe(tableName)
+    expect((createdRule as any).chain).toBe('forward')
+    expect((createdRule as any).action).toBe('drop')
+    expect((createdRule as any).ibrname).toBe('br0')
+  } finally {
+    await deleteTable(request, String(table.id))
+  }
+})
+
+test('unified Policy bridge: base fields use bridge interface controls only', async ({ page, request }) => {
+  const tableName = unique('br_tbl')
+  const table = await createBridgeTable(request, tableName)
+  try {
+    await login(page)
+    await openFirewall(page)
+
+    await page.getByText('System table only', { exact: true }).click()
+    await page.getByText(`bridge / ${tableName}`, { exact: true }).click()
+    await page.getByRole('button', { name: 'Add' }).first().click()
+    await expect(page.getByText('Add Firewall Rule')).toBeVisible()
+
+    const modal = page.locator('div.fixed.inset-0.z-40').last()
+    await expect(modal.getByText('Bridge input')).toBeVisible()
+    await expect(modal.getByText('Bridge output')).toBeVisible()
+    await expect(modal.getByText('Input interface')).toHaveCount(0)
+    await expect(modal.getByText('Output interface')).toHaveCount(0)
+    await expect(modal.getByText('Connection state')).toBeVisible()
+  } finally {
+    await deleteTable(request, String(table.id))
+  }
+})
+
+test('unified Policy ip filter: UI hides NAT verdicts outside nat context', async ({ page, request }) => {
+  const tableName = unique('ip_filter_tbl')
+  const table = await createIpFilterTable(request, tableName)
+  try {
+    await login(page)
+    await openFirewall(page)
+
+    await page.getByText('System table only', { exact: true }).click()
+    await page.getByText(`ip / ${tableName}`, { exact: true }).click()
+    await page.getByRole('button', { name: 'Add' }).first().click()
+    await expect(page.getByText('Add Firewall Rule')).toBeVisible()
+
+    await page.getByRole('tab', { name: 'Action' }).click()
+    const actionSelect = page.locator("label:has-text('Action')").locator('..').locator('select')
+    await expect(actionSelect.locator('option[value=\"dnat\"]')).toHaveCount(0)
+    await expect(actionSelect.locator('option[value=\"snat\"]')).toHaveCount(0)
+    await expect(actionSelect.locator('option[value=\"masquerade\"]')).toHaveCount(0)
+    await expect(actionSelect.locator('option[value=\"redirect\"]')).toHaveCount(0)
+    await expect(actionSelect.locator('option[value=\"reject\"]')).toHaveCount(1)
+    await expect(page.getByText('NAT actions are shown only when the selected family/table/chain supports NAT.')).toBeVisible()
+  } finally {
+    await deleteTable(request, String(table.id))
+  }
+})
+
+test('unified Policy ip/ip6 custom filter: base fields follow hook direction', async ({ page, request }) => {
+  const ipInputName = unique('ip_filter_in_tbl')
+  const ip6OutputName = unique('ip6_filter_out_tbl')
+  const ipInputTable = await createL3FilterTable(request, 'ip', ipInputName, 'input', 'input')
+  const ip6OutputTable = await createL3FilterTable(request, 'ip6', ip6OutputName, 'output', 'output')
+  try {
+    await login(page)
+    await openFirewall(page)
+
+    await page.getByText('System table only', { exact: true }).click()
+    await page.getByText(`ip / ${ipInputName}`, { exact: true }).click()
+    await page.getByRole('button', { name: 'Add' }).first().click()
+    await expect(page.getByText('Add Firewall Rule')).toBeVisible()
+
+    let modal = page.locator('div.fixed.inset-0.z-40').last()
+    await expect(modal.getByText('Input interface')).toBeVisible()
+    await expect(modal.getByText('Output interface')).toHaveCount(0)
+    await expect(modal.getByText('Connection state')).toBeVisible()
+    await modal.getByRole('button', { name: 'Cancel' }).click({ force: true })
+    await expect(modal).toBeHidden()
+
+    await page.getByText(`ip / ${ipInputName}`, { exact: true }).click()
+    await page.getByText(`ip6 / ${ip6OutputName}`, { exact: true }).click()
+    await page.getByRole('button', { name: 'Add' }).first().click()
+    await expect(page.getByText('Add Firewall Rule')).toBeVisible()
+
+    modal = page.locator('div.fixed.inset-0.z-40').last()
+    await expect(modal.getByText('Input interface')).toHaveCount(0)
+    await expect(modal.getByText('Output interface')).toBeVisible()
+    await expect(modal.getByText('Connection state')).toBeVisible()
+  } finally {
+    await deleteTable(request, String(ipInputTable.id))
+    await deleteTable(request, String(ip6OutputTable.id))
+  }
+})
+
+test('unified Policy ip/ip6: ct expectation object binding is available in Add Rule', async ({ page, request }) => {
+  const ipTableName = unique('ip_filter_tbl')
+  const ip6TableName = unique('ip6_filter_tbl')
+  const ipTable = await createIpFilterTable(request, ipTableName)
+  const ip6Table = await createIp6FilterTable(request, ip6TableName)
+  const objectIds: string[] = []
+  const ipExpectationName = unique('exp_ip')
+  const ip6ExpectationName = unique('exp_ip6')
+  try {
+    const ipExpectation = await upsertNamedObject(request, {
+      family: 'ip',
+      table: ipTableName,
+      kind: 'ct_expectation',
+      name: ipExpectationName,
+      enabled: true,
+      l3proto: 'ip',
+      l4proto: 'tcp',
+      dport: 2121,
+      timeout: '30s',
+      size: 8,
+    })
+    expect(ipExpectation.res.ok(), `create ip expectation failed: ${JSON.stringify(ipExpectation.payload)}`).toBeTruthy()
+    objectIds.push(String(ipExpectation.payload?.item?.id || ''))
+
+    const ip6Expectation = await upsertNamedObject(request, {
+      family: 'ip6',
+      table: ip6TableName,
+      kind: 'ct_expectation',
+      name: ip6ExpectationName,
+      enabled: true,
+      l3proto: 'ip6',
+      l4proto: 'tcp',
+      dport: 2121,
+      timeout: '30s',
+      size: 8,
+    })
+    expect(ip6Expectation.res.ok(), `create ip6 expectation failed: ${JSON.stringify(ip6Expectation.payload)}`).toBeTruthy()
+    objectIds.push(String(ip6Expectation.payload?.item?.id || ''))
+
+    await login(page)
+    await openFirewall(page)
+
+    await page.getByText('System table only', { exact: true }).click()
+    await page.getByText(`ip / ${ipTableName}`, { exact: true }).click()
+    await page.getByRole('button', { name: 'Add' }).first().click()
+    await expect(page.getByText('Add Firewall Rule')).toBeVisible()
+    await page.getByRole('tab', { name: 'Action' }).click()
+
+    let modal = page.locator('div.fixed.inset-0.z-40').last()
+    await expect(modal.getByText('ct expectation object')).toBeVisible()
+    await toggleLine(modal, 'ct expectation object').getByRole('button', { name: '+' }).click()
+    await expect(toggleLine(modal, 'ct expectation object').locator('select')).toContainText(ipExpectationName)
+    await expect(modal.getByText('No named objects in this table yet. Create them from the Objects section.')).toHaveCount(0)
+    await modal.getByRole('button', { name: 'Cancel' }).click({ force: true })
+    await expect(modal).toBeHidden()
+
+    await page.getByText(`ip / ${ipTableName}`, { exact: true }).click()
+    await page.getByText(`ip6 / ${ip6TableName}`, { exact: true }).click()
+    await page.getByRole('button', { name: 'Add' }).first().click()
+    await expect(page.getByText('Add Firewall Rule')).toBeVisible()
+    await page.getByRole('tab', { name: 'Action' }).click()
+
+    modal = page.locator('div.fixed.inset-0.z-40').last()
+    await expect(modal.getByText('ct expectation object')).toBeVisible()
+    await toggleLine(modal, 'ct expectation object').getByRole('button', { name: '+' }).click()
+    await expect(toggleLine(modal, 'ct expectation object').locator('select')).toContainText(ip6ExpectationName)
+  } finally {
+    for (const objectId of objectIds) {
+      if (objectId) await deleteNamedObject(request, objectId)
+    }
+    await deleteTable(request, String(ipTable.id))
+    await deleteTable(request, String(ip6Table.id))
+  }
+})
+
+test('unified Policy ip/ip6 custom nat: action choices follow custom nat chain', async ({ page, request }) => {
+  const ipPostroutingName = unique('ip_nat_post_tbl')
+  const ip6PreroutingName = unique('ip6_nat_pre_tbl')
+  let ipPostroutingTable: any = null
+  let ip6PreroutingTable: any = null
+  try {
+    ipPostroutingTable = await createL3NatTable(request, 'ip', ipPostroutingName, 'postrouting', 'postrouting')
+    ip6PreroutingTable = await createL3NatTable(request, 'ip6', ip6PreroutingName, 'prerouting', 'prerouting')
+
+    await login(page)
+    await openFirewall(page)
+
+    await page.getByText('System table only', { exact: true }).click()
+    await page.getByText(`ip / ${ipPostroutingName}`, { exact: true }).click()
+    await page.getByRole('button', { name: 'Add' }).first().click()
+    await expect(page.getByText('Add Firewall Rule')).toBeVisible()
+    await page.getByRole('tab', { name: 'Action' }).click()
+
+    let modal = page.locator('div.fixed.inset-0.z-40').last()
+    let actionSelect = modal.locator("label:has-text('Action')").locator('..').locator('select')
+    await expect(actionSelect.locator('option[value="snat"]')).toHaveCount(1)
+    await expect(actionSelect.locator('option[value="masquerade"]')).toHaveCount(1)
+    await expect(actionSelect.locator('option[value="dnat"]')).toHaveCount(0)
+    await expect(actionSelect.locator('option[value="redirect"]')).toHaveCount(0)
+    await modal.getByRole('button', { name: 'Cancel' }).click({ force: true })
+    await expect(modal).toBeHidden()
+
+    await page.getByText(`ip / ${ipPostroutingName}`, { exact: true }).click()
+    await page.getByText(`ip6 / ${ip6PreroutingName}`, { exact: true }).click()
+    await page.getByRole('button', { name: 'Add' }).first().click()
+    await expect(page.getByText('Add Firewall Rule')).toBeVisible()
+    await page.getByRole('tab', { name: 'Action' }).click()
+
+    modal = page.locator('div.fixed.inset-0.z-40').last()
+    actionSelect = modal.locator("label:has-text('Action')").locator('..').locator('select')
+    await expect(actionSelect.locator('option[value="dnat"]')).toHaveCount(1)
+    await expect(actionSelect.locator('option[value="redirect"]')).toHaveCount(1)
+    await expect(actionSelect.locator('option[value="snat"]')).toHaveCount(0)
+    await expect(actionSelect.locator('option[value="masquerade"]')).toHaveCount(0)
+  } finally {
+    if (ipPostroutingTable?.id) await deleteTable(request, String(ipPostroutingTable.id))
+    if (ip6PreroutingTable?.id) await deleteTable(request, String(ip6PreroutingTable.id))
+  }
+})
+
+test('unified Policy ip/ip6 custom nat: base fields follow hook direction', async ({ page, request }) => {
+  const ipPreroutingName = unique('ip_nat_pre_tbl')
+  const ip6PostroutingName = unique('ip6_nat_post_tbl')
+  let ipPreroutingTable: any = null
+  let ip6PostroutingTable: any = null
+  try {
+    ipPreroutingTable = await createL3NatTable(request, 'ip', ipPreroutingName, 'prerouting', 'prerouting')
+    ip6PostroutingTable = await createL3NatTable(request, 'ip6', ip6PostroutingName, 'postrouting', 'postrouting')
+
+    await login(page)
+    await openFirewall(page)
+
+    await page.getByText('System table only', { exact: true }).click()
+    await page.getByText(`ip / ${ipPreroutingName}`, { exact: true }).click()
+    await page.getByRole('button', { name: 'Add' }).first().click()
+    await expect(page.getByText('Add Firewall Rule')).toBeVisible()
+
+    let modal = page.locator('div.fixed.inset-0.z-40').last()
+    await expect(modal.getByText('Input interface')).toBeVisible()
+    await expect(modal.getByText('Output interface')).toHaveCount(0)
+    await expect(modal.getByText('Connection state')).toHaveCount(0)
+    await modal.getByRole('button', { name: 'Cancel' }).click({ force: true })
+    await expect(modal).toBeHidden()
+
+    await page.getByText(`ip / ${ipPreroutingName}`, { exact: true }).click()
+    await page.getByText(`ip6 / ${ip6PostroutingName}`, { exact: true }).click()
+    await page.getByRole('button', { name: 'Add' }).first().click()
+    await expect(page.getByText('Add Firewall Rule')).toBeVisible()
+
+    modal = page.locator('div.fixed.inset-0.z-40').last()
+    await expect(modal.getByText('Input interface')).toHaveCount(0)
+    await expect(modal.getByText('Output interface')).toBeVisible()
+    await expect(modal.getByText('Connection state')).toHaveCount(0)
+  } finally {
+    if (ipPreroutingTable?.id) await deleteTable(request, String(ipPreroutingTable.id))
+    if (ip6PostroutingTable?.id) await deleteTable(request, String(ip6PostroutingTable.id))
   }
 })
 
@@ -137,7 +555,7 @@ test('bridge rule API validation: invalid MAC is rejected', async ({ request }) 
   }
 })
 
-test('bridge rule API validation: proto/sport/dport/ct_state and nflog params are accepted in bridge policy v2', async ({ request }) => {
+test('bridge rule API validation: proto/sport/dport/ct_state and nflog params are accepted in bridge policy', async ({ request }) => {
   const tableName = unique('br_tbl')
   const table = await createBridgeTable(request, tableName)
   try {
@@ -389,13 +807,13 @@ test('bridge rule API validation: missing named stateful objects are rejected wi
       ct_expectation_set: 'expect-test',
     })
     expect(ctExpectationSet.res.ok()).toBeFalsy()
-    expect(String(ctExpectationSet.payload?.error || '')).toContain('ct_expectation_set is planned for family=bridge')
+    expect(String(ctExpectationSet.payload?.error || '')).toContain('ct_expectation_set is not supported for family=bridge')
   } finally {
     await deleteTable(request, String(table.id))
   }
 })
 
-test('bridge objects API: ct_expectation object is disabled as planned', async ({ request }) => {
+test('bridge objects API: ct_expectation object is not supported', async ({ request }) => {
   const tableName = unique('br_tbl')
   const table = await createBridgeTable(request, tableName)
   try {
@@ -411,7 +829,7 @@ test('bridge objects API: ct_expectation object is disabled as planned', async (
       size: 8,
     })
     expect(created.res.ok()).toBeFalsy()
-    expect(String(created.payload?.error || '')).toContain('ct_expectation is planned for family=bridge')
+    expect(String(created.payload?.error || '')).toContain('ct_expectation is not supported for family=bridge')
   } finally {
     await deleteTable(request, String(table.id))
   }
@@ -561,7 +979,7 @@ test('bridge named objects: one rule can reference multiple object bindings', as
   }
 })
 
-test('policy v2 bridge UI: object usage drilldown works both ways (objects -> rules -> objects)', async ({ page, request }) => {
+test('unified Policy bridge objects UI: object usage filters rules from object panel', async ({ page, request }) => {
   const tableName = unique('br_tbl')
   const table = await createBridgeTable(request, tableName)
   let objectId = ''
@@ -594,23 +1012,16 @@ test('policy v2 bridge UI: object usage drilldown works both ways (objects -> ru
 
     await login(page)
     await openFirewall(page)
-    await page.getByRole('tab', { name: 'policy v2' }).click()
-    await page.locator("label:has-text('Table')").locator('..').locator('select').selectOption(tableName)
-
+    await page.getByText('System table only', { exact: true }).click()
+    await page.getByText(`bridge / ${tableName}`, { exact: true }).click()
     await page.getByRole('tab', { name: 'objects' }).click()
+    await page.locator('select').selectOption(`bridge:${tableName}`)
     const objectRow = page.locator('tbody tr').filter({ hasText: objectName }).first()
     await expect(objectRow).toBeVisible()
     await objectRow.getByRole('button').first().click()
 
-    await expect(page.getByText(new RegExp(`object:\\s*counter:${objectName.toLowerCase()}`))).toBeVisible()
-    await expect(page.getByRole('tab', { name: 'rules' })).toBeVisible()
+    await expect(page.getByText(new RegExp(`rules filter:\\s*object:\\s*counter:${objectName.toLowerCase()}`))).toBeVisible()
     await expect(page.locator('tbody tr').filter({ hasText: 'drilldown-rule' }).first()).toBeVisible()
-
-    const ruleRow = page.locator('tbody tr').filter({ hasText: 'drilldown-rule' }).first()
-    await ruleRow.getByRole('button', { name: `counter:${objectName}` }).click()
-    await expect(page.getByText(new RegExp(`object:\\s*counter:${objectName.toLowerCase()}`))).toBeVisible()
-    await expect(page.getByRole('tab', { name: 'objects' })).toBeVisible()
-    await expect(page.locator('tbody tr').filter({ hasText: objectName }).first()).toBeVisible()
   } finally {
     if (ruleId) await request.delete(`/firewall/rules/${ruleId}`, { headers: authHeaders() })
     if (objectId) await deleteNamedObject(request, objectId)
@@ -618,7 +1029,7 @@ test('policy v2 bridge UI: object usage drilldown works both ways (objects -> ru
   }
 })
 
-test('policy v2 bridge UI: objects tab can open Add Rule prefilled with selected object binding', async ({ page, request }) => {
+test('unified Policy bridge objects UI: object row can open Add Rule prefilled with selected object binding', async ({ page, request }) => {
   const tableName = unique('br_tbl')
   const table = await createBridgeTable(request, tableName)
   let objectId = ''
@@ -637,15 +1048,16 @@ test('policy v2 bridge UI: objects tab can open Add Rule prefilled with selected
 
     await login(page)
     await openFirewall(page)
-    await page.getByRole('tab', { name: 'policy v2' }).click()
-    await page.locator("label:has-text('Table')").locator('..').locator('select').selectOption(tableName)
+    await page.getByText('System table only', { exact: true }).click()
+    await page.getByText(`bridge / ${tableName}`, { exact: true }).click()
     await page.getByRole('tab', { name: 'objects' }).click()
+    await page.locator('select').selectOption(`bridge:${tableName}`)
 
     const objectRow = page.locator('tbody tr').filter({ hasText: objectName }).first()
     await expect(objectRow).toBeVisible()
     await objectRow.getByRole('button', { name: 'use' }).click()
 
-    await expect(page.getByText('Add Bridge Rule (Policy v2)')).toBeVisible()
+    await expect(page.getByText('Add Firewall Rule')).toBeVisible()
     await expect(page.getByText(`counter:${objectName}`)).toBeVisible()
   } finally {
     if (objectId) await deleteNamedObject(request, objectId)
@@ -653,7 +1065,7 @@ test('policy v2 bridge UI: objects tab can open Add Rule prefilled with selected
   }
 })
 
-test('policy v2 bridge UI: limit object row can open Add Rule prefilled with limit binding', async ({ page, request }) => {
+test('unified Policy bridge objects UI: limit object row can open Add Rule prefilled with limit binding', async ({ page, request }) => {
   const tableName = unique('br_tbl')
   const table = await createBridgeTable(request, tableName)
   let counterId = ''
@@ -684,15 +1096,16 @@ test('policy v2 bridge UI: limit object row can open Add Rule prefilled with lim
 
     await login(page)
     await openFirewall(page)
-    await page.getByRole('tab', { name: 'policy v2' }).click()
-    await page.locator("label:has-text('Table')").locator('..').locator('select').selectOption(tableName)
+    await page.getByText('System table only', { exact: true }).click()
+    await page.getByText(`bridge / ${tableName}`, { exact: true }).click()
     await page.getByRole('tab', { name: 'objects' }).click()
+    await page.locator('select').selectOption(`bridge:${tableName}`)
 
     const limitRow = page.locator('tbody tr').filter({ hasText: limitName }).first()
     await expect(limitRow).toBeVisible()
     await limitRow.getByRole('button', { name: 'use' }).click()
 
-    await expect(page.getByText('Add Bridge Rule (Policy v2)')).toBeVisible()
+    await expect(page.getByText('Add Firewall Rule')).toBeVisible()
     await expect(page.getByText(`limit:${limitName}`)).toBeVisible({ timeout: 5000 })
   } finally {
     if (limitId) await deleteNamedObject(request, limitId)
@@ -701,7 +1114,7 @@ test('policy v2 bridge UI: limit object row can open Add Rule prefilled with lim
   }
 })
 
-test('policy v2 bridge UI: editor quick panel can unlink a prefilled object binding', async ({ page, request }) => {
+test('unified Policy bridge objects UI: editor quick panel can unlink a prefilled object binding', async ({ page, request }) => {
   const tableName = unique('br_tbl')
   const table = await createBridgeTable(request, tableName)
   let objectId = ''
@@ -719,14 +1132,15 @@ test('policy v2 bridge UI: editor quick panel can unlink a prefilled object bind
 
     await login(page)
     await openFirewall(page)
-    await page.getByRole('tab', { name: 'policy v2' }).click()
-    await page.locator("label:has-text('Table')").locator('..').locator('select').selectOption(tableName)
+    await page.getByText('System table only', { exact: true }).click()
+    await page.getByText(`bridge / ${tableName}`, { exact: true }).click()
     await page.getByRole('tab', { name: 'objects' }).click()
+    await page.locator('select').selectOption(`bridge:${tableName}`)
 
     const objectRow = page.locator('tbody tr').filter({ hasText: objectName }).first()
     await expect(objectRow).toBeVisible()
     await objectRow.getByRole('button', { name: 'use' }).click()
-    await expect(page.getByText('Add Bridge Rule (Policy v2)')).toBeVisible()
+    await expect(page.getByText('Add Firewall Rule')).toBeVisible()
     await expect(page.getByText(`counter:${objectName}`)).toBeVisible()
 
     await page.getByRole('button', { name: 'unlink' }).first().click()
@@ -734,26 +1148,6 @@ test('policy v2 bridge UI: editor quick panel can unlink a prefilled object bind
     await expect(page.getByRole('button', { name: 'unlink' })).toHaveCount(0)
   } finally {
     if (objectId) await deleteNamedObject(request, objectId)
-    await deleteTable(request, String(table.id))
-  }
-})
-
-test('policy v2 bridge UI: dup/fwd show planned strategy hints in editor', async ({ page, request }) => {
-  const tableName = unique('br_tbl')
-  const table = await createBridgeTable(request, tableName)
-  try {
-    await login(page)
-    await openFirewall(page)
-    await page.getByRole('tab', { name: 'policy v2' }).click()
-    await page.locator("label:has-text('Table')").locator('..').locator('select').selectOption(tableName)
-    await page.getByRole('button', { name: 'Add' }).first().click()
-    await expect(page.getByText('Add Bridge Rule (Policy v2)')).toBeVisible()
-
-    await expect(page.getByText(/dup.*planned for bridge.*rejected by backend validation/i)).toBeVisible()
-    await expect(page.getByText(/fwd.*netdev-only.*outside bridge policy v2/i)).toBeVisible()
-    await expect(page.getByText(/planned for bridge runtime/i).first()).toBeVisible()
-    await expect(page.getByText(/netdev-only \(planned\)/i).first()).toBeVisible()
-  } finally {
     await deleteTable(request, String(table.id))
   }
 })
@@ -881,7 +1275,7 @@ test('bridge rule API validation: reject requires input/prerouting hook chain', 
   }
 })
 
-test('policy v2 bridge: API CRUD + enable/disable + inet isolation', async ({ request }) => {
+test('unified Policy bridge: API CRUD + enable/disable + inet isolation', async ({ request }) => {
   const tableName = unique('br_tbl')
   const table = await createBridgeTable(request, tableName)
   try {

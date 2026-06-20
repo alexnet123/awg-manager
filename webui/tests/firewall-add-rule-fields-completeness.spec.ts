@@ -28,6 +28,7 @@ test('add-rule modal exposes required field groups and tabs', async ({ page }) =
   await expect(modal.getByText('L4 protocol and port match')).toBeVisible()
   await expect(modal.getByText('Interface match')).toBeVisible()
   await expect(modal.getByText('Connection tracking match')).toBeVisible()
+  await expect(modal.getByText('User ID')).toHaveCount(0)
 })
 
 test('add-rule modal supports all firewall table tabs without crash', async ({ page }) => {
@@ -59,8 +60,18 @@ test('add-rule key advanced toggles are present and context-aware', async ({ pag
   // Advanced raw expression block
   await modal.getByRole('tab', { name: 'Advanced match' }).click()
   await expect(modal.getByText('Raw expression & debug')).toBeVisible()
-  const rawExprLine = modal.locator("label:has-text('raw expression')").first()
+  await modal.getByRole('button', { name: /Raw expression & debug/ }).click()
+  await expect(modal.getByText(/raw expression.*raw table only/)).toBeVisible()
+  await expect(modal.getByText('nftrace (raw table only)')).toBeVisible()
+  await modal.getByRole('button', { name: 'Cancel' }).click({ force: true })
+  await expect(modal).toBeHidden()
+
+  await page.getByRole('tab', { name: 'raw' }).click({ force: true })
+  const rawModal = await openAddRuleModal(page)
+  await rawModal.getByRole('tab', { name: 'Advanced match' }).click()
+  await rawModal.getByRole('button', { name: /Raw expression & debug/ }).click()
+  const rawExprLine = rawModal.locator("label:has-text('raw expression')").first()
   await expect(rawExprLine).toBeVisible()
   await expect(rawExprLine.locator('xpath=ancestor::div[2]').locator('button', { hasText: '+' }).first()).toBeVisible()
-  await expect(modal.getByText('nftrace (raw table only)')).toBeVisible()
+  await expect(rawModal.getByText('nftrace', { exact: true })).toBeVisible()
 })

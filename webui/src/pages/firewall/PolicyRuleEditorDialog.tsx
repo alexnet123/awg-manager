@@ -1,6 +1,7 @@
 import * as React from 'react'
 import type { FirewallRule, FirewallSchema, FirewallTableItem } from '../api'
-import { PolicyRuleEditorActionTab } from './PolicyRuleEditorActionTab'
+import { getFirewallRuleObjectBindings } from './firewallObjectBindings'
+import { PolicyRuleEditorActionTab, type DynamicSetStatementOption, type VmapStatementOption } from './PolicyRuleEditorActionTab'
 import { PolicyRuleEditorAdvancedTab } from './PolicyRuleEditorAdvancedTab'
 import { PolicyRuleEditorBaseTab } from './PolicyRuleEditorBaseTab'
 import { PolicyRuleEditorModal } from './PolicyRuleEditorModal'
@@ -28,6 +29,7 @@ type Props = {
   form: Partial<FirewallRule>
   setForm: React.Dispatch<React.SetStateAction<Partial<FirewallRule>>>
   hasSupport: (key: string) => boolean
+  natActionOptions: string[]
   generalFieldState: (field: 'in_interface' | 'out_interface' | 'ct_state') => FieldState
   schema: FirewallSchema | null
   builtinRuleTables: Set<string>
@@ -52,9 +54,35 @@ type Props = {
   }
   statsSeries: 'packets' | 'bytes'
   setStatsSeries: React.Dispatch<React.SetStateAction<'packets' | 'bytes'>>
+  objectCounterNames: string[]
+  objectLimitNames: string[]
+  objectQuotaNames: string[]
+  objectCtHelperNames: string[]
+  objectCtTimeoutNames: string[]
+  objectCtExpectationNames: string[]
+  dynamicSetOptions: DynamicSetStatementOption[]
+  vmapStatementOptions: VmapStatementOption[]
 }
 
 export function PolicyRuleEditorDialog(props: Props) {
+  const firewallObjectBindings = React.useMemo(
+    () => String(props.form.family || 'inet').toLowerCase() !== 'netdev' ? getFirewallRuleObjectBindings(props.form) : [],
+    [props.form.family, props.form.counter_name, props.form.limit_name, props.form.quota_name, props.form.ct_helper_set, props.form.ct_timeout_set, props.form.ct_expectation_set],
+  )
+
+  const unlinkObjectBinding = React.useCallback((kind: string) => {
+    props.setForm((prev) => {
+      const next = { ...prev }
+      if (kind === 'counter') next.counter_name = null
+      else if (kind === 'limit') next.limit_name = null
+      else if (kind === 'quota') next.quota_name = null
+      else if (kind === 'ct_helper') next.ct_helper_set = null
+      else if (kind === 'ct_timeout') next.ct_timeout_set = null
+      else if (kind === 'ct_expectation') next.ct_expectation_set = null
+      return next
+    })
+  }, [props.setForm])
+
   return (
     <PolicyRuleEditorModal
       open={props.open}
@@ -67,6 +95,26 @@ export function PolicyRuleEditorDialog(props: Props) {
       onSubmit={props.onSubmit}
       isBusy={props.isBusy}
     >
+      {firewallObjectBindings.length ? (
+        <div className='mb-2 rounded-md border border-blue-300 bg-blue-50 px-2 py-1.5 text-[11px] text-blue-900'>
+          <div className='mb-1 font-medium'>Object bindings</div>
+          <div className='flex flex-wrap gap-1.5'>
+            {firewallObjectBindings.map((binding) => (
+              <span key={`${binding.kind}:${binding.name}`} className='inline-flex items-center gap-1 rounded border border-blue-300 bg-background px-1.5 py-0.5'>
+                {binding.label}
+                <button
+                  type='button'
+                  className='rounded border border-blue-300 px-1 text-[10px] hover:bg-muted'
+                  onClick={() => unlinkObjectBinding(binding.kind)}
+                >
+                  unlink
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       <PolicyRuleEditorBaseTab
         form={props.form}
         setForm={props.setForm}
@@ -92,6 +140,14 @@ export function PolicyRuleEditorDialog(props: Props) {
         form={props.form}
         setForm={props.setForm}
         hasSupport={props.hasSupport}
+        natActionOptions={props.natActionOptions}
+        objectLimitNames={props.objectLimitNames}
+        objectQuotaNames={props.objectQuotaNames}
+        objectCtHelperNames={props.objectCtHelperNames}
+        objectCtTimeoutNames={props.objectCtTimeoutNames}
+        objectCtExpectationNames={props.objectCtExpectationNames}
+        dynamicSetOptions={props.dynamicSetOptions}
+        vmapStatementOptions={props.vmapStatementOptions}
       />
 
       <PolicyRuleEditorStatsTab
@@ -109,6 +165,7 @@ export function PolicyRuleEditorDialog(props: Props) {
         statsChart={props.statsChart}
         statsSeries={props.statsSeries}
         setStatsSeries={props.setStatsSeries}
+        objectCounterNames={props.objectCounterNames}
       />
     </PolicyRuleEditorModal>
   )

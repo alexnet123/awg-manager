@@ -29,6 +29,28 @@
   - Этап 3 (remove-cycle `B1`-`B4`): `100%`.
   - Общий backend decomposition до remove-cycle completion: `100%`.
 
+## 2026-05-28 — Firewall: делегация сборки collection runtime helper-ов из facade в домен
+
+- Scope шага:
+  - в `backend/app/manager_facade.py` удалена локальная сборка `_normalize_nft_timeout`/`_timeout_to_seconds`/`_enrich_collection_item_runtime`/`_cleanup_expired_collection_rows`/`_set_runtime_signature`/`_map_runtime_signature`;
+  - вместо этого используется доменная фабрика `backend.domains.firewall.compat_entry_ops.build_collection_runtime_helpers`.
+- Что перенесено по ответственности:
+  - ответственность за композицию collection runtime helper-ов firewall закреплена в доменном модуле `backend/domains/firewall/compat_entry_ops.py`;
+  - `manager_facade` оставлен как thin wiring layer и использует готовый helper-bundle.
+- Какой legacy entrypoint теперь делегирует куда:
+  - entrypoint `backend/app/manager_facade.py` для firewall collection путей (`list/upsert` sets/maps и связанные normalize/runtime callbacks) теперь делегирует сборку helper-ов в `backend/domains/firewall/compat_entry_ops.build_collection_runtime_helpers`.
+- Документация владения:
+  - обновлены `docs/development/MODULE_MAP.md` и `docs/development/MODULE_MAP.ru.md` (RU/EN выровнены семантически).
+- Команды верификации:
+  - `python3 -m pytest -q tests/test_firewall_compat_entry_ops.py` -> `4 passed`
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` -> `43 passed`
+  - `python3 -m pytest -q tests/test_manager_facade_structure.py` -> `3 passed`
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` -> `20 passed`
+  - `python3 -m pytest -q tests/test_api_contract.py` -> `9 passed`
+  - `python3 -m pytest -q tests` -> `279 passed`
+- Краткий итог:
+  - backend-first firewall refactor step выполнен без изменения wire/API и без регрессий тестов.
+
 ## 2026-05-28 — Onboarding и единые правила для новых агентов
 
 - Добавлена пара onboarding-документов для быстрого старта:
@@ -3248,11 +3270,11 @@
 - [x] Rules table component:
   - `webui/src/pages/firewall/PolicyAdvancedRulesTable.tsx`
 - [x] Bridge objects table component:
-  - `webui/src/pages/firewall/PolicyBridgeObjectsTable.tsx`
+  - `webui/src/pages/firewall/FirewallObjectsTable.tsx`
 - [x] Rule editor modal shell:
   - `webui/src/pages/firewall/PolicyAdvancedRuleEditorModal.tsx`
 - [x] Bridge object modal extracted:
-  - `webui/src/pages/firewall/PolicyBridgeObjectModal.tsx`
+  - `webui/src/pages/firewall/FirewallObjectModal.tsx`
 - [x] Collections modal extracted:
   - `webui/src/pages/firewall/CollectionsModal.tsx`
 - [x] Table builder modal extracted:
@@ -3506,3 +3528,2918 @@
 - [x] Удален endpoint `/api/ipsec/config-status`; контрактный read-only endpoint `/api/ipsec/config-preview` оставлен.
 - [x] UI вкладки `Config` снова показывает только собранный VICI `load_conn` preview и metadata secrets без side-by-side loaded/diff сравнения.
 - [x] Владение логикой осталось в IPsec domain-layer; firewall-контракты и firewall-поведение не затрагивались.
+## 1.188) Firewall UI: первый шаг схлопывания policy2/policy3 в единый Policy
+
+- Step scope:
+  - скрыты верхние вкладки `policy2`/`policy3`; внешний вид `policy`, `collections`, `table builder`, а также `filter`/`nat`/`raw`/`mangle` сохранен.
+  - `Policy` получил family-aware custom table selector: custom table выбирается как `(family, table)`, включая `bridge` и `netdev`.
+  - bridge/netdev rules теперь отображаются в `Policy` при выборе соответствующей custom table.
+  - Add/Edit для `bridge`/`netdev` временно маршрутизируется в существующий advanced editor как compatibility-мост, без изменения API payload и backend validation.
+- Ownership moved:
+  - `PolicySectionToolbar` владеет выбором family-aware table context в Policy.
+  - `useFirewallPageGuards`, `usePolicyRuleFormContext`, `usePolicyRuleEditorSync`, `usePolicyRuleEditorActions`, `usePolicyRulesView` владеют единым Policy-контекстом `(family, table)` для фильтрации правил, chain options и default form values.
+  - `PolicyAdvancedRuleEditor*` остается временным compatibility-путем для bridge/netdev полей до полного merge в `PolicyRuleEditorDialog`.
+- Old entrypoint now delegates to:
+  - скрытые `policy2`/`policy3` возможности выбираются через unified `Policy` по family (`bridge`/`netdev`), а не через отдельные верхние вкладки.
+- Verification commands:
+  - `npm run build` — passed.
+  - stand `132.243.237.120:8787` — deployed bundle, verified visible tabs `policy|collections|table builder`, verified bridge custom table selection, verified bridge rule row in `Policy`, verified Add opens bridge rule editor without blank crash.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 43 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 279 passed.
+  - stand `132.243.237.120:8787` — deployed `webui/dist`; active dist backup `dist.backup.20260529150531`; HTTP `/ui/` serves `index-Bp8OEkav.js`.
+  - stand `132.243.237.120:8787` — deployed `webui/dist` and `backend/domains/firewall/rule_ops.py`; active web dist backup `webui/dist.backup.20260529145701`; backend file backup `backend/domains/firewall/rule_ops.py.backup.20260529145701`; restarted `api_core.py` as pid `94245`; HTTP `/ui/` serves `index-CC4qBCNO.js`.
+  - stand `132.243.237.120:8787` — deployed `webui/dist`; active dist backup `dist.backup.20260529144715`; HTTP `/ui/` serves `index-C2so5QIn.js`.
+  - in-app browser smoke — opened Firewall on `http://132.243.237.120:8787/ui/?v=objects-section`; top tabs show `policy/collections/objects/table builder`, `policy2/policy3` absent, console app errors empty.
+
+- Result summary:
+  - UI surface is now closer to the agreed target: only one visible `Policy` entrypoint; bridge/netdev are folded under the same Policy shell.
+  - Behavior is intentionally minimal and backend-first-safe: wire/API compatibility preserved, backend validation unchanged.
+
+## 1.189) Firewall UI: Add/Edit bridge/netdev rules moved into unified Policy form
+
+- Step scope:
+  - Add/Edit для bridge/netdev custom tables переведен из hidden `PolicyAdvancedRuleEditorDialog` в обычный `PolicyRuleEditorDialog`.
+  - `PolicyRuleEditorBaseTab` показывает bridge-specific interface fields `ibrname`/`obrname` при `family=bridge`.
+  - `PolicyRuleEditorActionTab` получил shared `queue` action и netdev-only `fwd` action; NAT actions скрыты для `bridge/netdev`.
+  - `usePolicyRuleEditorActions` расширен для edit payload parity и sanitization: queue/fwd/NAT/family-specific поля чистятся перед save, чтобы не отправлять несовместимые комбинации.
+  - e2e specs `firewall-policy-v2-bridge.spec.ts` и `firewall-policy-v3-netdev.spec.ts` обновлены под unified `Policy` selector вместо старых верхних вкладок `policy2`/`policy3`.
+- Ownership moved:
+  - `PolicyRuleEditorDialog` теперь владеет Add/Edit правил для `inet/ip/ip6/bridge/netdev` контекстов.
+  - `PolicyAdvancedRuleEditor*` остается временным fallback/compatibility слоем для bridge objects и старых скрытых internals до полного переноса objects.
+- Old entrypoint now delegates to:
+  - старые bridge/netdev rule Add/Edit потоки больше не открываются как отдельные visible policy2/policy3 screens; пользовательский entrypoint — custom table selector внутри `Policy`.
+- Verification commands:
+  - `npm run build` — passed (`index-DHYy79Me.js`).
+  - stand `132.243.237.120:8787` — deployed bundle, verified new bundle reference and unified Policy hint; in-app browser interaction was partially blocked by sidebar/automation instability during full click-through smoke.
+- Result summary:
+  - Основной rule Add/Edit путь схлопнут в текущую форму Policy без изменения wire/API контракта и backend validation.
+  - Следующий этап: перенос bridge named objects в контекст выбранной bridge table внутри `PolicyRuleEditorDialog`/Policy shell.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 43 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 279 passed.
+  - Local Playwright e2e not run in this pass: current `webui/tests/global-setup.ts` deletes stand interfaces/clients during setup, so running it against the shared stand would be destructive. Specs were updated for the new unified Policy flow.
+  - e2e update note: bridge/netdev rule UI tests were moved to unified Policy selector; old bridge object/advanced UI tests in `firewall-policy-v2-bridge.spec.ts` are marked skipped until bridge objects are migrated into the unified Policy shell.
+
+## 1.190) Firewall UI: bridge named-object bindings in unified Add Rule
+
+- Step scope:
+  - unified `PolicyRuleEditorDialog` now receives bridge named-object names for the selected bridge custom table.
+  - `useFirewallDataSync` loads `/firewall/objects?family=bridge&table=<active table>` when unified `Policy` is focused on a bridge custom table.
+  - `PolicyRuleEditorActionTab` exposes bridge object selectors for `limit_name`, `quota_name`, `ct_helper_set`, and `ct_timeout_set` without changing `/firewall/objects` API.
+  - `PolicyRuleEditorStatsTab` exposes bridge `counter_name` selector and keeps anonymous counter mutually exclusive with a named counter object.
+- Ownership moved:
+  - object binding selection for bridge rules moved from hidden `PolicyAdvancedRuleEditorActionSection` into the normal `PolicyRuleEditor*Tab` form path.
+  - object create/edit/list management remains in `PolicyAdvanced*` compatibility code until the next step.
+- Old entrypoint now delegates to:
+  - selected bridge custom table in unified `Policy`; the form reads existing objects from the same backend endpoint and table scope.
+- Verification commands:
+  - `npm run build` — passed (`index-BLq-WKPl.js`).
+  - stand `132.243.237.120:8787` — deployed bundle; active dist backup `dist.backup.20260529104149`.
+- Result summary:
+  - bridge rule Add/Edit can bind existing named objects inside the current Policy form while preserving backend/wire compatibility.
+  - remaining gap: move object create/edit/list controls from the hidden advanced flow into unified Policy.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 43 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 279 passed.
+
+## 1.191) Firewall UI: bridge object management moved into unified Policy shell
+
+- Step scope:
+  - Added `FirewallObjectsPanel` as the shared visible panel for bridge named-object management.
+  - Unified `Policy` now shows bridge object management below the toolbar when a bridge custom table is selected.
+  - Existing object modal and `/firewall/objects` API are reused for add/edit/delete; object `use in rule` opens the unified `Add Firewall Rule` flow with object bindings prefilled.
+  - `PolicyAdvancedSection` reuses `FirewallObjectsPanel` for hidden compatibility paths, avoiding duplicate object-management behavior.
+  - `useFirewallDataSync` loads both bridge rules and bridge objects for the selected bridge custom table so usage counts and object filters work in unified Policy.
+- Ownership moved:
+  - visible bridge object create/edit/list/delete/filter/use-in-rule ownership moved from old `policy2` tab flow into unified `Policy` via `FirewallObjectsPanel`.
+  - hidden `PolicyAdvanced*` modules remain compatibility internals, not visible top-level ownership.
+- Old entrypoint now delegates to:
+  - selected bridge custom table in unified `Policy`; old `policy2` tab remains hidden.
+- Verification commands:
+  - `npm run build` — passed (`index-Dbyud8AW.js`).
+  - stand `132.243.237.120:8787` — deployed bundle; active dist backup `dist.backup.20260529113322`.
+- Result summary:
+  - bridge rules and bridge objects are now both reachable from the current Policy UI without changing backend/wire API.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 43 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 279 passed.
+
+## 1.192) Firewall UI tests: bridge/netdev specs aligned with unified Policy entrypoint
+
+- Step scope:
+  - Renamed active netdev e2e scenarios from `policy3` wording to unified `Policy` wording.
+  - Updated netdev UI selectors to use the current custom table selector (`netdev / <table>`) and normal `Add/Edit Firewall Rule` modal titles.
+  - Updated bridge e2e wording/selectors for the unified `Policy` bridge custom table path and current `Add Firewall Rule` title.
+- Ownership moved:
+  - No runtime ownership moved in this step; this is test-plan alignment after moving visible bridge/netdev flows into unified `Policy`.
+- Old entrypoint now delegates to:
+  - selected bridge/netdev custom table in unified `Policy`; old `policy2`/`policy3` tab selectors are no longer used by active specs.
+- Verification commands:
+  - `cd webui && npx playwright test --list tests/firewall-policy-v2-bridge.spec.ts tests/firewall-policy-v3-netdev.spec.ts` — listed 28 tests.
+  - `cd webui && npm run build` — passed (`index-Dbyud8AW.js`).
+- Result summary:
+  - Active UI/API specs now describe the current unified `Policy` user path while preserving backend/wire compatibility.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 43 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 279 passed.
+
+## 1.193) Firewall UI: unified bridge object filters and binding quick panel
+
+- Step scope:
+  - Unified bridge `Policy` rules table now applies object-binding filters triggered from `FirewallObjectsPanel`.
+  - A compact rule-filter chip is shown in unified bridge `Policy` when object filtering is active, with a clear action.
+  - Unified `PolicyRuleEditorDialog` now shows bridge object bindings with quick `unlink`, so `use in rule` prefill is visible without opening the old advanced editor.
+  - Bridge object UI e2e specs were unskipped for object usage filter, use-in-rule prefill, limit prefill, and quick unlink paths.
+- Ownership moved:
+  - object-binding rule filtering now belongs to unified `usePolicyRulesView` for bridge tables.
+  - object binding quick-unlink ownership moved into the normal `PolicyRuleEditorDialog` path for bridge rules.
+- Old entrypoint now delegates to:
+  - selected bridge custom table in unified `Policy`; old `policy2` object/rule tab drilldown is no longer required for active object UI coverage.
+- Verification commands:
+  - `cd webui && npx playwright test --list tests/firewall-policy-v2-bridge.spec.ts tests/firewall-policy-v3-netdev.spec.ts` — listed 28 tests.
+  - `cd webui && npm run build` — passed (`index-CebzSBKV.js`).
+  - stand `132.243.237.120:8787` — deployed `webui/dist`; active dist backup `dist.backup.20260529115344`; HTTP `/ui/` serves `index-CebzSBKV.js`.
+- Result summary:
+  - bridge object management is closer to parity inside unified `Policy`: object usage can filter visible rules, and object prefill/unlink no longer depends on visible `policy2`.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 43 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 279 passed.
+
+## 1.194) Firewall UI tests: remove legacy skipped advanced bridge coverage
+
+- Step scope:
+  - Removed the skipped UI test that still opened the hidden old `policy v2` advanced editor for bridge `dup/fwd` planned hints.
+  - Kept active API coverage for bridge `dup` planned rejection and bridge `fwd` netdev-only rejection.
+  - Confirmed bridge/netdev e2e specs no longer contain `test.skip` or active old `policy v2`/`policy3` UI expectations.
+- Ownership moved:
+  - No runtime ownership moved in this step; this removes stale legacy UI coverage after the unified `Policy` object/rule paths became active.
+- Old entrypoint now delegates to:
+  - selected bridge custom table in unified `Policy`; old advanced editor UI is no longer required by the bridge/netdev spec set.
+- Verification commands:
+  - `cd webui && npx playwright test --list tests/firewall-policy-v2-bridge.spec.ts tests/firewall-policy-v3-netdev.spec.ts` — listed 27 active tests.
+- Result summary:
+  - The test suite now describes the current unified `Policy` surface without skipped assertions for the removed visible `policy2` tab.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 43 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 279 passed.
+
+## 1.195) Firewall UI: remove old PolicyAdvancedRuleEditor rule modal path
+
+- Step scope:
+  - Removed `PolicyAdvancedRuleEditor*` components and `usePolicyAdvancedRuleEditor`/`usePolicyAdvancedRuleActions` from the UI bundle.
+  - `FirewallModalStack` now renders only the unified `PolicyRuleEditorDialog`, bridge object modal, collection modal, and table builder modal.
+  - Removed stale advanced rule editor state/guards from `firewall.tsx`, `useFirewallPageGuards`, and `usePolicyV2RuleObjectState`.
+  - Kept `PolicyAdvancedPage`/`PolicyAdvancedSection` and object hooks as hidden compatibility internals for object paths until the next cleanup step.
+- Ownership moved:
+  - bridge/netdev rule Add/Edit ownership is now exclusively in `PolicyRuleEditorDialog` for the visible UI bundle.
+  - old advanced rule modal ownership is removed; bridge object management ownership remains with `FirewallObjectsPanel` and `FirewallObjectModal`.
+- Old entrypoint now delegates to:
+  - selected bridge/netdev custom table in unified `Policy`; the removed advanced rule modal is no longer imported or rendered.
+- Verification commands:
+  - `cd webui && npm run build` — passed (`index-DRa2b5xF.js`).
+  - stand `132.243.237.120:8787` — deployed `webui/dist`; active dist backup `dist.backup.20260529121001`; HTTP `/ui/` serves `index-DRa2b5xF.js`.
+- Result summary:
+  - UI bundle no longer contains the old advanced rule editor path, reducing dead compatibility surface while preserving current unified Policy behavior and wire/API compatibility.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 43 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 279 passed.
+
+## 1.196) Firewall UI: remove hidden PolicyAdvanced page/section path
+
+- Step scope:
+  - Removed hidden `PolicyAdvancedPage`, `PolicyAdvancedSection`, `PolicyAdvancedRulesTable`, legacy `capabilities`/`sections`, and advanced context/data/table hooks from the UI bundle.
+  - Simplified `FirewallSectionTab` to the visible sections only: `policy`, `collections`, `table_builder`.
+  - Kept bridge object create/edit/delete behavior via unified `FirewallObjectsPanel` plus `FirewallObjectModal`.
+  - Simplified bridge object refresh to the selected bridge custom table in unified `Policy`.
+- Ownership moved:
+  - bridge object visible ownership remains in `FirewallObjectsPanel`; modal orchestration remains in bridge object hooks/modal.
+  - old hidden `PolicyAdvancedPage/Section` no longer owns any visible or fallback UI behavior.
+- Old entrypoint now delegates to:
+  - selected bridge custom table in unified `Policy`; no `policy_v2`/`policy_v3` section path remains in frontend tab state.
+- Verification commands:
+  - `cd webui && npm run build` — passed (`index-ClVbYIrU.js`).
+  - stand `132.243.237.120:8787` — deployed `webui/dist`; active dist backup `dist.backup.20260529133758`; restarted `api_core.py` after the old process stopped responding to `/ui/`; HTTP `/ui/` serves `index-ClVbYIrU.js`.
+- Result summary:
+  - UI bundle no longer contains hidden PolicyAdvanced pages while preserving unified Policy bridge/netdev behavior and wire/API compatibility.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 43 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 279 passed.
+
+## 1.197) Firewall UI: bridge object naming cleanup after Policy unification
+
+- Step scope:
+  - Renamed remaining bridge object helper files from old `PolicyV2`/`PolicyAdvanced` naming to explicit bridge-owned module names:
+    - `firewallObjectForm.ts`
+    - `firewallObjectSummary.ts`
+    - `useFirewallObjectState.ts`
+    - `useFirewallObjectActions.ts`
+    - `useFirewallObjectEditor.ts`
+    - `useFirewallObjectBindings.ts`
+  - Renamed active state/prop/export identifiers in `firewall.tsx`, bridge object hooks, rule editor props, object bindings, selections, and bridge/netdev UI specs from `policyV2*` to `bridge*`.
+  - Kept public `/firewall/objects` API, rule payload shape, and visible Policy UI behavior unchanged.
+- Ownership moved:
+  - bridge object form, summary, binding usage, state, actions, editor presets, and use-in-rule orchestration are now explicitly owned by `PolicyBridgeObject*`/`usePolicyBridge*` modules.
+  - old `PolicyV2`/`PolicyAdvanced` helper names no longer own active bridge object behavior.
+- Old entrypoint now delegates to:
+  - selected bridge custom table in unified `Policy`; no old `policy2` helper naming remains in the active bridge object code path.
+- Verification commands:
+  - `cd webui && npm run build` — passed (`index-DpBS5Jfl.js`).
+  - `cd webui && npx playwright test --list tests/firewall-policy-v2-bridge.spec.ts tests/firewall-policy-v3-netdev.spec.ts` — listed 27 active tests.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 43 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 279 passed.
+  - stand `132.243.237.120:8787` — deployed `webui/dist`; active dist backup `dist.backup.20260529135254`; HTTP `/ui/` serves `index-DpBS5Jfl.js`.
+  - in-app browser smoke — opened Firewall section on `http://132.243.237.120:8787/ui/?v=policy-bridge-rename`; unified tabs `policy/collections/table builder` visible, `policy2/policy3` absent, console errors/warnings empty.
+- Result summary:
+  - This is a backend-neutral naming cleanup after the Policy2 collapse; behavior and wire/API compatibility are preserved.
+
+## 1.198) Firewall UI: named objects moved to a separate Objects section
+
+- Step scope:
+  - Added top-level Firewall section `objects` after `collections`.
+  - Moved visible named-object management out of the bridge-only `policy` panel into the separate `objects` section.
+  - Added object table selector scoped as `family/table` over enabled custom tables.
+  - Kept `/firewall/objects` API unchanged; object list/create/edit/delete uses the selected object table scope.
+  - Kept `Use in rule` enabled only for `family=bridge`, matching current backend rule validation for named-object bindings.
+- Ownership moved:
+  - visible named-object management now belongs to the `objects` section via `FirewallObjectsPanel`/`FirewallObjectModal`.
+  - unified `policy` now owns rules only; bridge object rule-filter/prefill actions route back from `objects` to the bridge `policy` table when used.
+- Old entrypoint now delegates to:
+  - selected `family/table` in the `objects` section; old bridge-only panel inside `policy` no longer renders.
+- Verification commands:
+  - `cd webui && npm run build` — passed (`index-C2so5QIn.js`).
+  - `cd webui && npx playwright test --list tests/firewall-policy-v2-bridge.spec.ts tests/firewall-policy-v3-netdev.spec.ts` — listed 27 active tests.
+  - `cd webui && npx playwright test tests/firewall-policy-v2-bridge.spec.ts -g "unified Policy bridge objects UI"` — skipped by environment: `PLAYWRIGHT_API_KEY is required for e2e tests`.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 43 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 279 passed.
+- Result summary:
+  - Objects are now visually grouped after Collections as their own nftables table-scoped resource, while bridge rule binding behavior remains compatible with the current backend sprint.
+
+## 1.199) Firewall backend/UI: named-object rule bindings beyond bridge
+
+- Step scope:
+  - Extended `normalize_limit_and_named_object_fields` so named-object rule bindings are accepted for `inet/ip/ip6/bridge`.
+  - Kept `netdev` object bindings rejected with a clear validation error.
+  - Kept `ct_expectation_set` planned/disabled for all families.
+  - Updated Objects UI `Use in rule` routing so object prefill works for `inet/ip/ip6/bridge` custom tables and remains disabled for `netdev`.
+  - Updated the rule editor quick binding panel from bridge-only display to non-netdev object binding display.
+- Ownership moved:
+  - backend family eligibility for named-object rule bindings is owned by `backend/domains/firewall/rule_ops.py`.
+  - Objects-section prefill eligibility is owned by `FirewallObjectsPanel` plus `useFirewallObjectBindings`/`firewall.tsx` orchestration.
+- Old entrypoint now delegates to:
+  - selected `family/table` in the `objects` section; `Use in rule` opens unified `PolicyRuleEditorDialog` for the same non-netdev table.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py::FirewallRuleOpsTest::test_normalize_limit_and_named_object_fields` — 1 passed after RED failure confirmed.
+  - `cd webui && npm run build` — passed (`index-CC4qBCNO.js`).
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 43 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 279 passed.
+- Result summary:
+  - Objects can now be used by rules outside bridge for `inet/ip/ip6` without changing wire/API shape; netdev stays explicitly unsupported.
+
+## 1.200) Firewall UI: generic Objects ownership cleanup
+
+- Step scope:
+  - Renamed active frontend object modules from bridge-specific names to generic Objects-section names:
+    - `FirewallObjectModal.tsx`
+    - `FirewallObjectsPanel.tsx`
+    - `FirewallObjectsTable.tsx`
+    - `firewallObjectForm.ts`
+    - `firewallObjectSummary.ts`
+    - `firewallObjectBindings.ts`
+    - `useFirewallObjectState.ts`
+    - `useFirewallObjectActions.ts`
+    - `useFirewallObjectEditor.ts`
+    - `useFirewallObjectBindings.ts`
+  - Generalized rule-editor object selectors so named-object bindings are shown for non-netdev families (`inet/ip/ip6/bridge`) and hidden for `netdev`.
+  - Removed remaining active `PolicyBridgeObject*`/`bridgeObject*` naming from `webui/src`.
+- Ownership moved:
+  - generic nftables named-object UI ownership now belongs to `FirewallObjectsPanel`/`FirewallObjectModal` and `useFirewallObject*` helpers.
+  - rule object binding key/usage helpers are owned by `firewallObjectBindings.ts`.
+  - non-netdev object binding display in Add/Edit rule form is owned by `PolicyRuleEditorDialog` plus `PolicyRuleEditorActionTab`/`PolicyRuleEditorStatsTab`.
+- Old entrypoint now delegates to:
+  - selected `family/table` in the separate `objects` section; old bridge-specific helper filenames no longer own active object UI behavior.
+- Verification commands:
+  - `cd webui && npm run build` — passed (`index-Bp8OEkav.js`).
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 43 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 279 passed.
+- Result summary:
+  - This is a frontend cleanup/naming step after moving named objects out of bridge-only ownership; wire/API behavior remains unchanged.
+
+## 1.201) Firewall backend/UI: enable ct_expectation for inet/ip/ip6 objects
+
+- Step scope:
+  - Enabled `ct_expectation` named-object create/edit payloads for `inet/ip/ip6` tables.
+  - Kept `ct_expectation` unsupported for `bridge` and `netdev`.
+  - Enabled rule binding via `ct_expectation_set` for `inet/ip/ip6`; `netdev` remains rejected by the named-object binding guard and `bridge` rejects `ct_expectation_set` explicitly.
+  - Expanded runtime named-object reference validation from bridge-only to all non-netdev families, so `inet/ip/ip6/bridge` rules verify referenced objects exist in the selected table before apply.
+  - Added the existing Policy Add Rule UI selector for `ct expectation object` in `inet/ip/ip6` contexts and exposed `ct_expectation` fields in the Objects modal for supported families.
+- Ownership moved:
+  - backend family eligibility for `ct_expectation_set` is owned by `backend/domains/firewall/rule_ops.py`.
+  - `ct_expectation` object payload normalization/rendering remains owned by `backend/domains/firewall/named_object_ops.py`; runtime reference validation in that module now covers non-netdev families.
+  - frontend object usage keys and rule prefill include `ct_expectation` via `firewallObjectBindings.ts`, `useFirewallObjectState`, `useFirewallObjectBindings`, `PolicyRuleEditorDialog`, and `PolicyRuleEditorActionTab`.
+- Old entrypoint now delegates to:
+  - existing `/firewall/objects` and `/firewall/rules` API payload fields; no wire/API shape changes were introduced.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_named_object_ops.py tests/test_firewall_rule_ops.py::FirewallRuleOpsTest::test_normalize_limit_and_named_object_fields` — 9 passed.
+  - `cd webui && npm run build` — passed (`index-CNY9HezP.js`).
+  - `python3 -m pytest -q tests/test_firewall_named_object_ops.py tests/test_firewall_rule_ops.py` — 28 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 43 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 279 passed.
+  - stand `132.243.237.120:8787` — deployed `webui/dist` plus `backend/domains/firewall/rule_ops.py` and `backend/domains/firewall/named_object_ops.py`; active web dist backup `webui/dist.backup.20260529152351`; backend backup `backend/domains/firewall.backup.ct_expectation.20260529152351`; HTTP `/ui/` serves `index-CNY9HezP.js`; API process restarted as `python3 api_core.py`.
+- Result summary:
+  - `ct_expectation` is now an enabled nftables named-object path for `inet/ip/ip6`, while bridge/netdev limitations remain explicit and backend-first.
+
+## 1.202) Firewall QA fix: non-netdev Objects use-in-rule stability
+
+- Step scope:
+  - Browser QA on the stand found two issues after `ct_expectation` enablement:
+    - API was temporarily restarted on `127.0.0.1`; restarted it correctly as `python3 api_core.py 0.0.0.0 8787 -r /etc/wg-manager/encryption.key`.
+    - Objects `use` could open Add Rule into a React update loop because `usePolicyRuleEditorSync` wrote placement fields on every render while `activeChainOptions` was a fresh array.
+  - Added an idempotent guard in `usePolicyRuleEditorSync` and narrowed the dependency to the first active chain.
+  - Generalized policy-mode object loading/filtering from bridge-only to non-netdev families so `inet/ip/ip6` object bindings show as existing, not `(missing)`.
+  - Verified with a temporary stand table `inet qa_ct_exp` and temporary `ct_expectation exp_qa`, then deleted the temporary table; table deletion removed the test object.
+- Ownership moved:
+  - Add Rule placement sync stability is owned by `usePolicyRuleEditorSync`.
+  - policy-mode object/rule loading for non-netdev tables is owned by `useFirewallDataSync`.
+  - non-netdev policy object filtering is owned by `usePolicyRulesView`.
+- Old entrypoint now delegates to:
+  - existing unified Objects `use in rule` path; no API shape change.
+- Verification commands:
+  - `cd webui && npm run build` — passed (`index-C5Po3YT0.js`).
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 43 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 279 passed.
+  - stand `132.243.237.120:8787` — deployed `webui/dist`; active dist backup `dist.backup.20260529153828`; HTTP `/ui/` serves `index-C5Po3YT0.js`.
+  - Browser smoke — login succeeded, Firewall loaded without `Failed to fetch`, Objects selected temporary `qa_ct_exp`, `ct_expectation exp_qa` created, row `use` opened Add Rule without React errors, Object bindings showed `ct-expectation:exp_qa`, Action tab selector showed `exp_qa` (not missing), temporary table/object cleaned up.
+- Result summary:
+  - The newly enabled `ct_expectation` UI flow is stable for `inet` custom tables and policy Add Rule selectors now stay synchronized for non-netdev object bindings.
+
+## 1.203) Firewall QA fix: domain validation must not fall back to legacy
+
+- Step scope:
+  - Stand API smoke for `ct_expectation` found that invalid `bridge`/`netdev` object payloads returned `500` because `_backend_or_fallback` caught backend `ValueError` and attempted a legacy fallback call.
+  - Updated `backend/app/manager_facade.py` so firewall backend validation/missing-resource errors (`ValueError`, `LookupError`) are re-raised directly and continue through the normal HTTP error boundary.
+  - Kept legacy fallback behavior for non-firewall validation errors and other backend runtime errors unchanged.
+- Ownership moved:
+  - fallback eligibility for firewall backend-domain validation errors is owned by `backend/app/manager_facade.py`.
+- Old entrypoint now delegates to:
+  - existing app HTTP error boundary via `backend.common.http_errors.send_service_error`; no wire/API payload shape change.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_manager_access_facade.py::ManagerAccessFacadeTest::test_backend_or_fallback_does_not_fallback_on_validation_errors tests/test_manager_access_facade.py::ManagerAccessFacadeTest::test_backend_or_fallback_does_not_fallback_on_missing_resources` — RED before fix, then 2 passed after initial fix.
+  - `python3 -m pytest -q tests/test_api_contract.py` — first run exposed overly broad global `ValueError`/`LookupError` re-raise (non-firewall compatibility fallback regression); fix was narrowed to firewall facade methods only.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py::ManagerAccessFacadeTest::test_backend_or_fallback_does_not_fallback_on_validation_errors tests/test_manager_access_facade.py::ManagerAccessFacadeTest::test_backend_or_fallback_does_not_fallback_on_missing_resources tests/test_manager_access_facade.py::ManagerAccessFacadeTest::test_backend_or_fallback_keeps_non_firewall_validation_fallback` — 3 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 282 passed.
+  - stand `132.243.237.120:8787` — deployed final narrowed `backend/app/manager_facade.py` and restarted API as `python3 api_core.py 0.0.0.0 8787 -r /etc/wg-manager/encryption.key`.
+  - stand API smoke — `ct_expectation` create returned 201 for `ip`/`ip6` with `l4proto=tcp`; invalid `bridge`/`netdev` payloads returned HTTP 400 with `ct_expectation is not supported for family=...`; temporary `qa_ct_exp_*` tables/objects were deleted and verified empty.
+- Result summary:
+  - Invalid firewall object payloads from backend-first paths should now return validation errors instead of leaking as legacy fallback/internal errors.
+
+## 1.204) Firewall Objects QA: ct_expectation preset and family/kind matrix guard
+
+- Step scope:
+  - Added a backend characterization test for the named-object family/kind matrix:
+    - `counter`, `limit`, `quota`, `ct_helper`, `ct_timeout` normalize for `inet/ip/ip6/bridge/netdev`.
+    - `ct_expectation` normalizes for `inet/ip/ip6` and is rejected for `bridge/netdev`.
+  - Added an Objects modal quick example preset `FTP expectation` for `ct_expectation`.
+  - Kept the preset disabled for `bridge/netdev`, matching backend validation and rule-binding limits.
+- Ownership moved:
+  - No module boundary moved; `named_object_ops.py` remains the backend owner of object normalization, and `FirewallObjectModal`/`useFirewallObjectEditor` remain the UI owners of object presets.
+- Old entrypoint now delegates to:
+  - existing `/firewall/objects` create path; no API shape change.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_named_object_ops.py::FirewallNamedObjectOpsTest::test_normalize_named_object_payload_family_kind_matrix` — 1 passed.
+  - `cd webui && npm run build` — passed (`index-DAEPERfE.js`).
+  - `python3 -m pytest -q tests/test_firewall_named_object_ops.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+  - stand `132.243.237.120:8787` — deployed `webui/dist`; active dist backup `dist.backup.20260529204203`; HTTP `/ui/` serves `index-DAEPERfE.js`.
+  - Browser smoke — loaded stand UI and confirmed current script `/assets/index-DAEPERfE.js`.
+- Result summary:
+  - Objects UI now exposes the newly supported `ct_expectation` path as a guided preset while preserving the explicit bridge/netdev limitation.
+
+## 1.205) Firewall Objects QA: ip/ip6 rule bindings and netdev ct object guard
+
+- Step scope:
+  - Stand API matrix for Objects -> rule bindings found:
+    - `ip/ip6` named objects could be created, but rule create rejected `family=ip/ip6` with `family must be inet, bridge, or netdev`.
+    - `netdev ct_helper`/`ct_timeout` and mismatched `ip6 l3proto=ip` object payloads could fall through to runtime/fallback and surface as bad 500 errors.
+  - Extended `resolve_table_chain_context` so custom rule tables accept `ip` and `ip6` families.
+  - Tightened `normalize_named_object_payload` family/kind validation:
+    - `ct_helper`/`ct_timeout`/`ct_expectation` are rejected for `netdev`.
+    - `ct_expectation` remains rejected for `bridge`.
+    - `l3proto` must match `family=ip` or `family=ip6` when those object families are used.
+  - Updated Objects modal/action guard so `netdev` no longer offers/saves unsupported ct object kinds.
+- Ownership moved:
+  - `backend/domains/firewall/rule_ops.py:resolve_table_chain_context` now owns custom rule table context for `inet/ip/ip6/bridge/netdev`.
+  - `backend/domains/firewall/named_object_ops.py:normalize_named_object_payload` owns the ct object family eligibility matrix.
+  - `FirewallObjectModal`/`useFirewallObjectActions` own UI gating for unsupported `netdev` ct object kinds.
+- Old entrypoint now delegates to:
+  - existing `/firewall/rules` and `/firewall/objects` API payloads; no wire/API shape change.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py::FirewallRuleOpsTest::test_resolve_table_chain_context tests/test_firewall_named_object_ops.py::FirewallNamedObjectOpsTest::test_normalize_named_object_payload_family_kind_matrix` — RED before fix, then 2 passed after fix.
+  - `cd webui && npm run build` — passed (`index-CyDS11v8.js`).
+  - `python3 -m pytest -q tests/test_firewall_named_object_ops.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+  - stand `132.243.237.120:8787` — deployed `backend/domains/firewall/rule_ops.py`, `backend/domains/firewall/named_object_ops.py`, and `webui/dist`; backend/file backup timestamp `20260529210755`; restarted API as `python3 api_core.py 0.0.0.0 8787 -r /etc/wg-manager/encryption.key`; HTTP `/ui/` serves `index-CyDS11v8.js`.
+  - stand API matrix — `ip/ip6` object creation and disabled rule creation passed for `counter`, `limit`, `quota`, `ct_helper`, `ct_timeout`, `ct_expectation`; `netdev` `counter/limit/quota` object creation passed while rule binding returned expected HTTP 400; `netdev ct_helper/ct_timeout/ct_expectation` returned expected HTTP 400; temporary QA rules/tables were deleted.
+- Result summary:
+  - Objects/rule binding support is now aligned for custom `ip/ip6` tables, while impossible netdev ct object paths are rejected early with validation errors instead of runtime/fallback 500s.
+
+## 1.206) Firewall Objects UI smoke: object modal gating on stand
+
+- Step scope:
+  - Browser smoke on stand `132.243.237.120:8787` with the deployed `index-CyDS11v8.js` bundle.
+  - Opened Firewall -> Objects with desktop viewport to avoid the mobile sidebar overlay.
+  - Verified the visible top-level Firewall tabs remain `policy`, `collections`, `objects`, `table builder`.
+  - Verified the Objects section is available after Collections and shows the scoped custom object table selector.
+  - Opened `Add Firewall Object` on the existing bridge custom table.
+  - Verified bridge object kind gating in the modal:
+    - `counter`, `limit`, `quota`, `ct_helper`, `ct_timeout` are selectable.
+    - `ct_expectation` is disabled and labeled `inet/ip/ip6 only`.
+  - Verified the `FTP expectation` preset is visible in the modal examples.
+- Ownership moved:
+  - No ownership moved; this is a browser smoke verification of the existing Objects UI gating.
+- Old entrypoint now delegates to:
+  - existing unified Firewall `objects` section; no API shape change.
+- Verification commands:
+  - Browser smoke — stand loaded `/assets/index-CyDS11v8.js`, Firewall -> Objects opened, Add Object modal gating matched backend matrix for bridge.
+- Result summary:
+  - The visible Objects UI is aligned with backend object-family constraints for the bridge context; netdev/ip/ip6 behavior remains covered by the stand API matrix from step `1.205`.
+
+## 1.207) Firewall Objects UI smoke: ip/ip6/netdev table selector gating on stand
+
+- Step scope:
+  - Created temporary custom tables on stand `132.243.237.120:8787` only for UI verification:
+    - `ip / qa_ui_ip_1780129834`
+    - `ip6 / qa_ui_ip6_1780129834`
+    - `netdev / qa_ui_nd_1780129834` with `hook=ingress`, `device=eth0`
+  - Opened Firewall -> Objects in the deployed UI bundle `index-CyDS11v8.js`.
+  - Verified the Object table selector includes the temporary `ip`, `ip6`, and `netdev` custom tables.
+  - Opened `Add object` after selecting each temporary table.
+  - Verified `ip` and `ip6` modal gating:
+    - `counter`, `limit`, `quota`, `ct_helper`, `ct_timeout`, `ct_expectation` are selectable.
+    - `FTP expectation` preset is enabled.
+  - Verified `netdev` modal gating:
+    - `counter`, `limit`, `quota` remain selectable.
+    - `ct_helper`, `ct_timeout`, `ct_expectation` are disabled.
+    - `FTP expectation` preset is disabled.
+  - Cleaned up all temporary tables through `/firewall/tables/{id}` and verified `remaining_temp: []`.
+- Ownership moved:
+  - No ownership moved; this is a stand/browser smoke verification of existing Objects UI family gating.
+- Old entrypoint now delegates to:
+  - existing unified Firewall `objects` section and existing `/firewall/tables` API; no wire/API shape change.
+- Verification commands:
+  - Stand API setup — created temporary `ip/ip6/netdev` custom tables, all returned HTTP 201.
+  - Browser smoke — Object table selector listed all temporary family-specific custom tables; modal kind availability matched backend family matrix; browser console had no warn/error entries.
+  - Stand API cleanup — deleted all temporary tables, all returned HTTP 200, and follow-up listing reported `remaining_temp: []`.
+- Result summary:
+  - Objects UI now has browser-verified selector/gating coverage for `ip`, `ip6`, and `netdev` custom tables, not only the existing bridge table.
+
+## 1.208) Firewall Policy Add Rule: NAT actions gated by table context
+
+- Step scope:
+  - Browser/API smoke on stand for unified Policy `Add rule` found a UI/backend mismatch:
+    - custom `ip/ip6` tables with `chain_type=filter` could show NAT verdict options (`dnat`, `snat`, `masquerade`, `redirect`) because the UI checked only `family=inet/ip/ip6`;
+    - backend correctly rejects such payloads with `nat_type is only valid for nat table`.
+  - Updated `PolicyRuleEditorActionTab` so NAT verdicts are shown only when the current form context supports `nat_type`.
+  - Added Playwright characterization for a custom `ip` filter table: NAT verdict options are hidden, while `reject` remains available.
+  - Deployed rebuilt `webui/dist` to stand; `/ui/` now serves `index-Dzk81cHk.js`.
+  - Temporary stand tables `qa_rule_ip_1780135795`, `qa_rule_ip6_1780135795`, and `qa_rule_nd_1780135795` were removed and verified with `remaining_temp: []`.
+- Ownership moved:
+  - No module boundary moved; `PolicyRuleEditorActionTab` remains the UI owner for visible action/verdict choices, now using existing rule form context support metadata.
+- Old entrypoint now delegates to:
+  - existing unified Firewall `policy` section and existing `/firewall/rules` API; no wire/API shape change.
+- Verification commands:
+  - `cd webui && npm run build` — passed (`index-Dzk81cHk.js`).
+  - Stand setup — created temporary `ip/ip6/netdev` custom tables, all returned HTTP 201.
+  - Browser smoke before fix — confirmed custom `ip/ip6/netdev` selector visibility and found NAT actions offered in a non-nat `ip` filter context.
+  - Stand deploy — copied rebuilt `webui/dist`; stand `/root/awg-manager/webui/dist/index.html` references `/assets/index-Dzk81cHk.js`.
+  - Stand cleanup — deleted all temporary tables, all returned HTTP 200, and follow-up listing reported `remaining_temp: []`.
+  - Browser smoke after deploy — attempted, but in-app browser CDP timed out during the `Add` click; final verification relies on `npm run build`, added Playwright characterization, and stand bundle check.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-policy-v2-bridge.spec.ts -g "unified Policy ip filter" --project=chromium` — 1 passed.
+- Result summary:
+  - Unified Policy `Add rule` no longer offers NAT verdicts from filter-context custom `ip/ip6` tables, aligning UI choices with backend validation and nft table semantics.
+
+## 1.209) Firewall Policy Add Rule: NAT verdicts follow selected nat chain
+
+- Step scope:
+  - Tightened unified Policy `Add rule` action choices for built-in/custom nat contexts.
+  - `PolicyRuleEditorActionTab` now receives explicit `natActionOptions` from the shared rule form context instead of deriving all NAT verdicts from family alone.
+  - `firewall.tsx` derives `natActionOptions` from `schema.tables.nat.nat_types_by_chain[chain]` only when `contextMode=nat`.
+  - Resulting UI matrix:
+    - `nat/prerouting` and `nat/output`: `dnat`, `redirect`.
+    - `nat/postrouting`: `snat`, `masquerade`.
+    - `nat/input` and non-nat contexts: no NAT verdict options.
+  - Added Playwright coverage for the built-in `nat` chain matrix and kept the previous custom `ip` filter guard.
+  - Deployed rebuilt `webui/dist` to stand; `/ui/` now serves `index-BTM_HKVI.js`.
+- Ownership moved:
+  - No module boundary moved; `usePolicyRuleFormContext`/`firewall.tsx` continue to own table/chain context, and `PolicyRuleEditorActionTab` continues to own visible action choices.
+- Old entrypoint now delegates to:
+  - existing unified Firewall `policy` section and existing `/firewall/rules` API; no wire/API shape change.
+- Verification commands:
+  - `cd webui && npm run build` — passed (`index-BTM_HKVI.js`).
+  - Stand deploy — copied rebuilt `webui/dist`; stand `/root/awg-manager/webui/dist/index.html` references `/assets/index-BTM_HKVI.js`.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "firewall policy nat" --project=chromium` — 1 passed.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-policy-v2-bridge.spec.ts -g "unified Policy ip filter" --project=chromium` — 1 passed.
+- Result summary:
+  - Unified Policy `Add rule` now offers NAT verdicts only for the selected nat chain combinations accepted by backend validation and nftables semantics.
+
+## 1.210) Firewall Policy Add Rule: raw/mangle context guard coverage
+
+- Step scope:
+  - Added Playwright coverage for existing unified Policy `Add rule` context gating in built-in `raw` and `mangle` tables.
+  - Confirmed `raw` context exposes `raw_expr`, `nftrace`, and `notrack` controls, while mangle mark setters are hidden there.
+  - Confirmed `mangle` context exposes `mark_set` and `ct_mark_set`, while raw-only advanced controls remain labeled as raw-table-only.
+  - No production UI/backend behavior was changed in this step; this locks the current form behavior against regressions while collapsing policy flows.
+- Ownership moved:
+  - No module boundary moved; `PolicyRuleEditorAdvancedTab` remains the UI owner for raw/debug controls, and `PolicyRuleEditorActionTab` remains the UI owner for action/mark controls.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `policy` section and existing `/firewall/rules` API; no wire/API shape change.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "raw/mangle" --project=chromium` — 1 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - The unified Policy form now has e2e protection for the hardest built-in table-context split after NAT: raw-only debug/notrack controls and mangle-only mark setters stay visually separated by table context.
+
+## 1.211) Firewall UI tests: Add Rule completeness aligned with raw context gating
+
+- Step scope:
+  - Updated `firewall-add-rule-fields-completeness.spec.ts` so the advanced-field completeness check matches the current unified Policy context model.
+  - The default `filter` Add Rule modal now asserts the raw-only hint for `raw_expr`/`nftrace` instead of expecting an editable raw expression field outside the `raw` table.
+  - The same scenario switches to the built-in `raw` table and verifies the editable `raw expression` control there.
+  - No production UI/backend behavior was changed in this step; this is a test alignment after raw/mangle context gating.
+- Ownership moved:
+  - No module boundary moved; this step updates e2e ownership/coverage only.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `policy` section and existing Add Rule modal; no wire/API shape change.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-add-rule-fields-completeness.spec.ts --project=chromium` — RED before test alignment, then 3 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - The Add Rule completeness e2e now protects the intended context split: filter shows raw-only guidance, raw exposes the editable raw expression controls.
+
+## 1.212) Firewall UI tests: netdev Add Rule action matrix guard
+
+- Step scope:
+  - Added Playwright coverage for unified Policy `Add rule` when a custom `netdev` table is selected.
+  - The test verifies the netdev action matrix in the existing form:
+    - `accept`, `drop`, `queue`, and `fwd` are available.
+    - `reject` and NAT verdicts (`dnat`, `snat`, `masquerade`, `redirect`) are hidden.
+    - named-object bindings and counter-object selector are hidden for netdev, while the plain nft counter checkbox remains available.
+  - No production UI/backend behavior was changed in this step; this locks current netdev form behavior during policy unification.
+- Ownership moved:
+  - No module boundary moved; this step updates e2e coverage only.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `policy` section with custom table selector (`netdev / <table>`); no wire/API shape change.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-policy-v3-netdev.spec.ts -g "action choices" --project=chromium` — RED on stale counter-label expectation, then 1 passed after test alignment.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - Unified Add Rule now has explicit e2e protection for the netdev-only action surface: `fwd` is available, while reject/NAT/object-binding paths stay out of the netdev UI.
+
+## 1.213) Firewall UI tests: bridge Add Rule action/object matrix guard
+
+- Step scope:
+  - Added Playwright coverage for unified Policy `Add rule` when a custom `bridge` table is selected.
+  - The test verifies the bridge action/object matrix in the existing form:
+    - `accept`, `drop`, `reject`, and `queue` are available.
+    - netdev-only `fwd` and NAT verdicts (`dnat`, `snat`, `masquerade`, `redirect`) are hidden.
+    - bridge object bindings (`ct_helper`, `ct_timeout`, limit/quota object section) and counter-object UI are visible.
+    - `ct_expectation` binding stays hidden for bridge, matching backend validation.
+  - No production UI/backend behavior was changed in this step; this locks current bridge form behavior during policy unification.
+- Ownership moved:
+  - No module boundary moved; this step updates e2e coverage only.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `policy` section with custom table selector (`bridge / <table>`); no wire/API shape change.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-policy-v2-bridge.spec.ts -g "Add Rule action" --project=chromium` — RED on strict text locators, then 1 passed after test locator alignment.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - Unified Add Rule now has explicit e2e protection for the bridge action/object surface: reject/queue/object bindings are present, while fwd/NAT/ct_expectation paths stay out of the bridge UI.
+
+## 1.214) Firewall UI: ip/ip6 ct_expectation Add Rule binding guard
+
+- Step scope:
+  - Added Playwright coverage for unified Policy `Add rule` when custom `ip` and `ip6` filter tables have `ct_expectation` named objects.
+  - The test verifies that `ct expectation object` binding is available for both custom L3 families and that the table-scoped object option appears in the Add Rule form.
+  - Fixed a small frontend draft-state leak found by the test: closing the rule editor and switching active rule table now clears table-scoped object bindings (`counter_name`, `limit_name`, `quota_name`, `ct_helper_set`, `ct_timeout_set`, `ct_expectation_set`) from the Add Rule draft.
+  - Rebuilt and deployed `webui/dist` to the stand; `/ui/` now serves `index-C53Ldd-S.js`.
+- Ownership moved:
+  - No module boundary moved; `usePolicyRuleEditorSync` remains the UI owner for keeping Add Rule draft context aligned with the selected policy table.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `policy` section with custom table selector (`ip / <table>`, `ip6 / <table>`); no wire/API shape change.
+- Verification commands:
+  - `cd webui && npm run build` — passed (`index-C53Ldd-S.js`).
+  - Stand deploy — copied rebuilt `webui/dist`; stand `/root/awg-manager/webui/dist/index.html` references `/assets/index-C53Ldd-S.js`.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-policy-v2-bridge.spec.ts -g "ct expectation object binding" --project=chromium` — RED before test/fix alignment, then 1 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - Unified Add Rule now has explicit e2e protection for `ct_expectation` bindings in custom `ip/ip6` contexts, while stale table-scoped object bindings are cleared when the draft context changes.
+
+## 1.215) Firewall UI tests: custom ip/ip6 NAT action matrix guard
+
+- Step scope:
+  - Added Playwright coverage for unified Policy `Add rule` when custom `ip`/`ip6` NAT tables are selected.
+  - The test verifies that custom `ip` `postrouting` NAT exposes only source-NAT actions (`snat`, `masquerade`) and hides destination-NAT actions (`dnat`, `redirect`).
+  - The test verifies that custom `ip6` `prerouting` NAT exposes only destination-NAT actions (`dnat`, `redirect`) and hides source-NAT actions (`snat`, `masquerade`).
+  - During test bring-up, aligned the NAT test helper with nft-compatible custom NAT priorities (`postrouting=101`, `prerouting=-101`), avoiding invalid runtime priority choices while keeping production behavior unchanged.
+- Ownership moved:
+  - No module boundary moved; this step updates e2e coverage only.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `policy` section with custom table selector (`ip / <table>`, `ip6 / <table>`); no wire/API shape change.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-policy-v2-bridge.spec.ts -g "custom nat" --project=chromium` — RED on invalid test-only NAT priority, then 1 passed after helper alignment.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - Unified Add Rule now has explicit e2e protection for custom L3 NAT action gating: postrouting exposes source NAT only, prerouting exposes destination NAT only.
+  - No production frontend/backend behavior was changed in this step.
+
+## 1.216) Firewall UI tests: built-in inet NAT output action guard
+
+- Step scope:
+  - Extended the existing unified Policy built-in `inet/nat` Add Rule e2e coverage with the `output` chain.
+  - The test now verifies that `output` exposes destination-NAT actions (`dnat`, `redirect`) and hides source-NAT actions (`snat`, `masquerade`), alongside the existing `prerouting`, `postrouting`, and `input` checks.
+  - No production UI/backend behavior was changed in this step; this is coverage only.
+- Ownership moved:
+  - No module boundary moved; this step updates e2e coverage only.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `policy` section and built-in `nat` tab; no wire/API shape change.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "action choices" --project=chromium` — 1 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - Unified Add Rule now has complete built-in `inet/nat` action-matrix coverage for `prerouting`, `output`, `postrouting`, and `input` chain behavior.
+
+## 1.217) Firewall UI: base interface fields follow hook direction
+
+- Step scope:
+  - Added Playwright coverage for unified Policy Add Rule base fields when switching built-in hook chains.
+  - Fixed `PolicyRuleEditorBaseTab` so `Input interface` and `Output interface` follow `policyFieldStates` hook direction, matching existing `Connection state` gating.
+  - `filter:input`/`nat:prerouting` show input interface only, `filter:output`/`nat:postrouting` show output interface only, and NAT chains keep `Connection state` hidden.
+  - Rebuilt and deployed `webui/dist` to the stand; `/ui/` now serves `index-CuF3kIvn.js`.
+- Ownership moved:
+  - No module boundary moved; `PolicyRuleEditorBaseTab` now consumes the already-owned `generalFieldState` context for interface fields as intended.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `policy` Add Rule form; no wire/API shape change.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "base fields" --project=chromium` — RED before fix on extra `Output interface` in `filter:input`, then 1 passed after fix/deploy.
+  - `cd webui && npm run build` — passed (`index-CuF3kIvn.js`).
+  - Stand deploy — copied rebuilt `webui/dist`; stand `/root/awg-manager/webui/dist/index.html` references `/assets/index-CuF3kIvn.js`.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - Unified Add Rule base form now hides hook-incompatible interface fields, reducing invalid combinations before submit while preserving backend/API compatibility.
+
+## 1.218) Firewall UI tests: custom ip/ip6 filter base-field hook guard
+
+- Step scope:
+  - Added Playwright coverage for unified Policy Add Rule base fields in custom `ip`/`ip6` filter tables.
+  - The test verifies that custom `ip` `input` chains show `Input interface`, hide `Output interface`, and keep `Connection state` visible.
+  - The test verifies that custom `ip6` `output` chains show `Output interface`, hide `Input interface`, and keep `Connection state` visible.
+  - No production UI/backend behavior was changed in this step; the previous `PolicyRuleEditorBaseTab` hook-direction fix already covers custom L3 filter tables.
+- Ownership moved:
+  - No module boundary moved; this step updates e2e coverage only.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `policy` section with custom table selector (`ip / <table>`, `ip6 / <table>`); no wire/API shape change.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-policy-v2-bridge.spec.ts -g "base fields follow hook" --project=chromium` — 1 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - Unified Add Rule now has explicit e2e protection that custom L3 filter tables inherit the same hook-direction base-field behavior as built-in `inet` tables.
+
+## 1.219) Firewall UI tests: custom ip/ip6 NAT base-field hook guard
+
+- Step scope:
+  - Added Playwright coverage for unified Policy Add Rule base fields in custom `ip`/`ip6` NAT tables.
+  - The test verifies that custom `ip` `prerouting` NAT shows `Input interface`, hides `Output interface`, and hides `Connection state`.
+  - The test verifies that custom `ip6` `postrouting` NAT shows `Output interface`, hides `Input interface`, and hides `Connection state`.
+  - No production UI/backend behavior was changed in this step; the existing hook-direction form context already covers custom L3 NAT tables.
+- Ownership moved:
+  - No module boundary moved; this step updates e2e coverage only.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `policy` section with custom table selector (`ip / <table>`, `ip6 / <table>`); no wire/API shape change.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-policy-v2-bridge.spec.ts -g "custom nat: base fields" --project=chromium` — 1 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - Unified Add Rule now has explicit e2e protection that custom L3 NAT tables inherit the same hook-direction base-field behavior as built-in `inet/nat`.
+
+## 1.220) Firewall UI: bridge/netdev base-field guards
+
+- Step scope:
+  - Added Playwright coverage for unified Policy Add Rule base fields in custom `bridge` and `netdev` tables.
+  - Bridge Add Rule now has an explicit guard that bridge interface controls (`Bridge input`, `Bridge output`) are shown while generic L3 `Input interface`/`Output interface` controls are hidden.
+  - Netdev Add Rule now has an explicit guard that ingress context shows `Input interface`, hides `Output interface`, and does not show bridge-only fields.
+  - Fixed `PolicyRuleEditorBaseTab` so `Output interface` is hidden for `family=netdev`, matching backend validation (`out_interface is not supported for family=netdev`).
+  - Rebuilt and deployed `webui/dist` to the stand; `/ui/` now serves `index-DlH5w9nX.js`.
+- Ownership moved:
+  - No module boundary moved; `PolicyRuleEditorBaseTab` remains the owner of base-field visibility in the unified Add Rule form.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `policy` section with custom table selector (`bridge / <table>`, `netdev / <table>`); no wire/API shape change.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-policy-v2-bridge.spec.ts tests/firewall-policy-v3-netdev.spec.ts -g "base fields" --project=chromium` — RED before fix on extra `Output interface` in `netdev`, then 4 passed after fix/deploy.
+  - `cd webui && npm run build` — passed (`index-DlH5w9nX.js`).
+  - Stand deploy — copied rebuilt `webui/dist`; stand `/root/awg-manager/webui/dist/index.html` references `/assets/index-DlH5w9nX.js`.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - Unified Add Rule now has explicit e2e protection for bridge/netdev base-field separation, and netdev no longer exposes backend-rejected `out_interface` in the UI.
+
+## 1.221) Firewall backend: neutral unified Policy validation wording
+
+- Step scope:
+  - Cleaned active firewall domain validation messages that still referenced legacy `Policy v2 MVP` / `Policy3` names.
+  - Bridge and netdev unsupported-field errors now say `unified Policy`, matching the current single Policy UI and preserving the same exception type/API payload shape.
+  - No validation logic, HTTP status mapping, or request/response fields were changed.
+- Ownership moved:
+  - No module boundary moved; `backend/domains/firewall/rule_ops.py` remains the owner of family-specific firewall rule validation.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `policy` Add Rule flow and backend `rule_ops` validation; no wire/API shape change.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py -k "bridge_and_netdev_restrictions or family_specific_restrictions"` — RED before backend wording update, then 2 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - Active firewall validation errors no longer leak legacy Policy2/Policy3 UI naming while preserving backend validation semantics and API payload shape.
+
+## 1.222) Firewall tests: neutral custom bridge fixture naming
+
+- Step scope:
+  - Cleaned the active `resolve_table_chain_context` unit-test fixture that still used `policy2` as a custom bridge table name.
+  - Renamed the fixture table to `bridge_policy_tbl` and aligned expected validation messages in the same test.
+  - No production backend/frontend behavior, validation logic, HTTP status mapping, or API payload fields were changed.
+- Ownership moved:
+  - No module boundary moved; `backend/domains/firewall/rule_ops.py` remains the owner of custom table/chain context resolution.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `policy` Add Rule/custom table flow; this step only removes legacy wording from an active unit-test fixture.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py -k resolve_table_chain_context` — 1 passed, 19 deselected.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - Active firewall rule context tests no longer encode `policy2` as a live custom bridge table name while preserving the same coverage and behavior expectations.
+
+## 1.223) Firewall tests: neutral named-object bridge fixture naming
+
+- Step scope:
+  - Cleaned the active `validate_runtime_named_object_references` unit-test fixture that still used `policy2` as a custom bridge table name.
+  - Renamed the fixture table to `bridge_policy_tbl` and aligned the expected effective-object loader calls.
+  - No production backend/frontend behavior, validation logic, HTTP status mapping, or API payload fields were changed.
+- Ownership moved:
+  - No module boundary moved; `backend/domains/firewall/named_object_ops.py` remains the owner of runtime named-object reference validation.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `objects` section and `policy` Add Rule/custom table flow; this step only removes legacy wording from an active unit-test fixture.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_named_object_ops.py` — 9 passed.
+  - Active-code search `rg -n "Policy v2 MVP|Policy3|policy3|policy v2|policy2" backend/domains/firewall tests/test_firewall_rule_ops.py tests/test_firewall_named_object_ops.py webui/src webui/tests` — no matches.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - Active firewall named-object tests no longer encode `policy2` as a live custom bridge table name while preserving the same coverage and behavior expectations.
+
+## 1.224) Firewall UI tests: netdev live stand e2e selector refresh
+
+- Step scope:
+  - Ran the full unified Policy `netdev` Playwright suite against the stand and found one stale e2e selector in the UI create/edit scenario.
+  - Updated the test to use the current Add/Edit Rule comment placeholder `Rule comment (optional)` instead of the removed `Optional comment` wording.
+  - No production backend/frontend behavior, validation logic, HTTP status mapping, or API payload fields were changed.
+- Ownership moved:
+  - No module boundary moved; `PolicyRuleEditorBaseTab` remains the owner of the Add/Edit Rule comment field, and `firewall-policy-v3-netdev.spec.ts` owns netdev UI/API e2e coverage.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `policy` section with custom `netdev / <table>` selector; no wire/API shape change.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-policy-v3-netdev.spec.ts --project=chromium` — RED before selector refresh: 4 passed, 1 failed on stale `Optional comment` placeholder; then 5 passed after the test update.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-policy-v3-netdev.spec.ts -g "UI creates and edits" --project=chromium` — 1 passed after the test update.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - Unified Policy `netdev` API/UI coverage is green on the stand; the only issue found was stale e2e wording after the current Add/Edit Rule form placeholder.
+
+## 1.225) Firewall backend tests: netdev fwd render/script smoke
+
+- Step scope:
+  - Added backend unit coverage for rendering a unified Policy `netdev` rule with `action=fwd` into the expected nft statement (`fwd ip to ... device ...`).
+  - Added backend unit coverage that enabled `netdev` rules are assembled into `add rule netdev <table> ingress ...` script lines while other families are skipped for that table context.
+  - No production backend/frontend behavior, validation logic, HTTP status mapping, or API payload fields were changed; existing renderer behavior was already correct.
+- Ownership moved:
+  - No module boundary moved; `backend/domains/firewall/rule_ops.py` remains the owner of firewall rule rendering and enabled-rule script assembly.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `policy` section with custom `netdev / <table>` selector; no wire/API shape change.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py -k "render_firewall_rule or append_enabled_rule_script_lines"` — 2 passed, 18 deselected.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - Unified Policy `netdev` now has backend guard coverage for the final nft render/script path, complementing the stand UI/API e2e coverage from the previous step.
+
+## 1.226) Firewall UI tests: netdev Objects binding guard
+
+- Step scope:
+  - Added stand e2e coverage for the unified `objects` section when a `netdev / <table>` object table is selected.
+  - The test verifies that a `netdev` counter object can be listed, `Use in rule` remains disabled even after row selection, row-level `use` actions are absent, and `ct_helper`/`ct_timeout`/`ct_expectation` object kinds are disabled in the object modal.
+  - No production backend/frontend behavior, validation logic, HTTP status mapping, or API payload fields were changed.
+- Ownership moved:
+  - No module boundary moved; `FirewallObjectsPanel` remains the owner of object-panel action availability, `FirewallObjectModal` remains the owner of object-kind availability, and `firewall-policy-v3-netdev.spec.ts` owns netdev e2e coverage.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `objects` section with custom `netdev / <table>` selector; no wire/API shape change.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-policy-v3-netdev.spec.ts -g "netdev objects" --project=chromium` — 1 passed.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-policy-v3-netdev.spec.ts --project=chromium` — 6 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - Unified Policy `netdev` is now covered across API, Add/Edit UI, render/script unit paths, and Objects UI binding restrictions.
+
+## 1.227) Firewall UI tests: bridge ct_expectation wording alignment
+
+- Step scope:
+  - Checked unified Policy bridge named-object coverage after the Policy collapse and found stale e2e expectations for bridge `ct_expectation` wording.
+  - Updated bridge Playwright expectations from the old `planned for family=bridge` wording to the current backend validation wording `is not supported for family=bridge`.
+  - No production backend/frontend behavior, validation logic, HTTP status mapping, or API payload fields were changed.
+- Ownership moved:
+  - No module boundary moved; `backend/domains/firewall/rule_ops.py` and `backend/domains/firewall/named_object_ops.py` remain the owners of bridge named-object validation, while `firewall-policy-v2-bridge.spec.ts` owns bridge e2e coverage.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `policy` and `objects` sections with custom `bridge / <table>` selector; no wire/API shape change.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-policy-v2-bridge.spec.ts -g "ct_expectation|object binding validation" --project=chromium` — RED before wording update on stale `ct_expectation is planned for family=bridge`, then green after update for the matched test.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-policy-v2-bridge.spec.ts -g "missing named stateful|ct_expectation object" --project=chromium` — 2 passed.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-policy-v2-bridge.spec.ts --project=chromium` — 31 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - Unified Policy bridge e2e coverage is green on the stand and no longer expects stale Policy2-era planned wording for `ct_expectation`.
+
+## 1.228) Firewall UI tests: built-in inet Policy smoke after bridge/netdev pass
+
+- Step scope:
+  - Ran stand Playwright smoke coverage for built-in unified Policy `inet` tabs after the bridge/netdev verification pass.
+  - Covered basic rules flow, built-in `nat` action choices, `raw`/`mangle` context-specific controls, hook-direction base fields, and Add Rule field/tabs completeness.
+  - No production backend/frontend behavior, validation logic, HTTP status mapping, or API payload fields were changed.
+- Ownership moved:
+  - No module boundary moved; `firewall-rules.spec.ts` and `firewall-add-rule-fields-completeness.spec.ts` remain the owners of built-in Policy UI smoke coverage.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `policy` section; built-in `filter`/`nat`/`raw`/`mangle` remain `inet`-scoped and no wire/API shape changed.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts tests/firewall-add-rule-fields-completeness.spec.ts --project=chromium` — 7 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - Built-in `inet` Policy flows remained green on the stand after the bridge/netdev consolidation and object-binding checks.
+
+## 1.229) Firewall planning: Policy collapse status and NFT/libnftables roadmap
+
+- Step scope:
+  - Updated the Policy unification plan with the current functional status of the `Policy1/Policy2/Policy3` collapse.
+  - Marked the parity/removal step for separate `policy2`/`policy3` UI as complete after the bridge/netdev/built-in Policy verification passes.
+  - Added a checkbox roadmap for further firewall development toward broader `docs/NFT.md` and `docs/libnftables-json-ManPage.md` coverage.
+  - No backend/frontend runtime behavior, validation logic, HTTP status mapping, API payload fields, or stand deployment were changed.
+- Ownership moved:
+  - No module boundary moved; this is a planning/documentation step only.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `policy` and `objects` sections; no new entrypoint or delegation was introduced in this step.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - Policy collapse status and next firewall roadmap are documented without runtime/API changes; Python gate is green.
+
+## 1.230) Firewall planning: NFT/libnftables capability matrix
+
+- Step scope:
+  - Added `docs/FIREWALL_CAPABILITY_MATRIX.ru.md` as the explicit feature matrix for `docs/NFT.md` / `docs/libnftables-json-ManPage.md` coverage.
+  - Classified firewall capabilities as `supported`, `limited`, `planned`, or `not planned without approval`.
+  - Covered families, table/chain/rule operations, statements, matches, collections/maps/vmaps, named objects, flowtables, current test gates, and suggested next implementation order.
+  - Marked roadmap item `A1` in `docs/FIREWALL_POLICY_UNIFICATION_PLAN.ru.md` as complete.
+  - No backend/frontend runtime behavior, validation logic, HTTP status mapping, API payload fields, or stand deployment were changed.
+- Ownership moved:
+  - No module boundary moved; this is a planning/documentation step only.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `policy`, `objects`, `collections`, and `table builder` sections; no new entrypoint or delegation was introduced in this step.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - Firewall capability matrix is documented without runtime/API changes; Python gate is green.
+
+## 1.231) Firewall tests: dup limited-capability backend coverage
+
+- Step scope:
+  - Added backend unit coverage for existing `dup` statement handling in firewall rule rendering and normalization.
+  - Covered `inet` render output for `dup to ... device ...`.
+  - Covered `inet` normalization of `dup_to`/`dup_dev`.
+  - Covered the existing `bridge` guard that keeps `dup_to`/`dup_dev` planned/disabled for the current nft runtime.
+  - Updated `docs/FIREWALL_CAPABILITY_MATRIX.ru.md` to record the stronger `dup` test coverage.
+  - No backend/frontend runtime behavior, validation logic, HTTP status mapping, API payload fields, or stand deployment were changed.
+- Ownership moved:
+  - No module boundary moved; `backend/domains/firewall/rule_ops.py` remains the owner of `dup` rendering and family validation.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `policy` Add/Edit flow; no new entrypoint or delegation was introduced in this step.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py -k "render_firewall_rule or normalize_queue_dup_fwd_fields"` — 2 passed, 18 deselected.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - Existing `dup` behavior is now explicitly covered in backend tests; Python gate is green.
+
+## 1.232) Firewall tests: advanced match render coverage and matrix status sync
+
+- Step scope:
+  - Added backend render smoke coverage for existing advanced firewall match/statement fields.
+  - Covered final nft render fragments for L2 fields (`ether_*`, `vlan_id`, `ether_type`), meta fields, ct fields, fib/socket/rt/exthdr matches, named limit/quota/counter objects, mark setters, and ct object bindings.
+  - Marked roadmap items `A2` and `A3` complete in `docs/FIREWALL_POLICY_UNIFICATION_PLAN.ru.md`, because `docs/FIREWALL_CAPABILITY_MATRIX.ru.md` now carries explicit statuses and family compatibility.
+  - Updated `docs/FIREWALL_CAPABILITY_MATRIX.ru.md` to record stronger render coverage for advanced ct/meta/fib/L2 areas.
+  - No backend/frontend runtime behavior, validation logic, HTTP status mapping, API payload fields, or stand deployment were changed.
+- Ownership moved:
+  - No module boundary moved; `backend/domains/firewall/rule_ops.py` remains the owner of rule rendering and family validation.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `policy` Add/Edit flow; no new entrypoint or delegation was introduced in this step.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py -k render_firewall_rule` — 1 passed, 19 deselected.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - Existing advanced match/statement rendering is now explicitly covered in backend tests; Python gate is green.
+
+## 1.233) Firewall tests: map/vmap timeout and disabled collection coverage
+
+- Step scope:
+  - Added backend unit coverage for existing collection runtime script assembly around `map`/`vmap`.
+  - Covered `vmap` timeout declaration rendering (`flags timeout; timeout ...`) and disabled collection rows being skipped for addr/port/iface/map/vmap.
+  - Marked roadmap item `D1` complete in `docs/FIREWALL_POLICY_UNIFICATION_PLAN.ru.md`.
+  - Updated `docs/FIREWALL_CAPABILITY_MATRIX.ru.md` to record stronger `map`/`vmap` timeout and disabled-row coverage.
+  - No backend/frontend runtime behavior, validation logic, HTTP status mapping, API payload fields, or stand deployment were changed.
+- Ownership moved:
+  - No module boundary moved; `backend/domains/firewall/collection_ops.py` remains the owner of set/map/vmap runtime declaration assembly.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `collections` section; no new entrypoint or delegation was introduced in this step.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_collection_ops.py` — 5 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 283 passed.
+- Result summary:
+  - Existing map/vmap timeout and disabled-row behavior is now explicitly covered in backend tests; Python gate is green.
+
+## 1.234) Firewall tests: quota reset runtime adapter success coverage
+
+- Step scope:
+  - Added backend runtime adapter unit coverage for the existing named quota reset success path.
+  - Covered command assembly for `nft reset quotas table <family> <table>` with `check=True`.
+  - Marked roadmap item `E3` complete in `docs/FIREWALL_POLICY_UNIFICATION_PLAN.ru.md`.
+  - Updated `docs/FIREWALL_CAPABILITY_MATRIX.ru.md` to record stronger reset/list coverage for named counters/quotas.
+  - No backend/frontend runtime behavior, validation logic, HTTP status mapping, API payload fields, or stand deployment were changed.
+- Ownership moved:
+  - No module boundary moved; `backend/domains/firewall/runtime_adapter.py` remains the owner of nft runtime reset/list integration.
+- Old entrypoint now delegates to:
+  - Existing Firewall reset counters action and runtime adapter path; no new entrypoint or delegation was introduced in this step.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_runtime_adapter.py` — 17 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 284 passed.
+- Result summary:
+  - Existing named quota reset runtime adapter behavior is now explicitly covered in backend tests; Python gate is green.
+
+## 1.235) Firewall tests: named object family/binding matrix closure
+
+- Step scope:
+  - Added backend unit coverage that runtime named-object reference validation skips `netdev` even when object-binding fields are present.
+  - This complements the existing object family/kind matrix coverage for `counter/limit/quota/ct_helper/ct_timeout/ct_expectation` and the existing rule binding guards in `tests/test_firewall_rule_ops.py`.
+  - Marked roadmap item `E1` complete in `docs/FIREWALL_POLICY_UNIFICATION_PLAN.ru.md`.
+  - Updated `docs/FIREWALL_CAPABILITY_MATRIX.ru.md` to record explicit family matrix and rule-binding guard coverage for named objects.
+  - No backend/frontend runtime behavior, validation logic, HTTP status mapping, API payload fields, or stand deployment were changed.
+- Ownership moved:
+  - No module boundary moved; `backend/domains/firewall/named_object_ops.py` remains the owner of named object normalization, rendering, and reference validation.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `objects` section and Add/Edit rule path; no new entrypoint or delegation was introduced in this step.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_named_object_ops.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 284 passed.
+- Result summary:
+  - Named object family/rule-binding matrix is now explicitly covered in backend tests; Python gate is green.
+
+## 1.236) Firewall planning: implemented statement inventory closure
+
+- Step scope:
+  - Marked roadmap item `F1` complete in `docs/FIREWALL_POLICY_UNIFICATION_PLAN.ru.md`.
+  - Documented that the implemented statement/match inventory is now explicitly tracked in `docs/FIREWALL_CAPABILITY_MATRIX.ru.md`.
+  - Updated the matrix test summary for the current full Python suite size.
+  - No backend/frontend runtime behavior, validation logic, HTTP status mapping, API payload fields, or stand deployment were changed.
+- Ownership moved:
+  - No module boundary moved; this is a documentation-only closure of the firewall capability inventory.
+- Old entrypoint now delegates to:
+  - Existing unified Firewall `policy`, `collections`, and `objects` sections; no new entrypoint or delegation was introduced in this step.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 284 passed.
+- Result summary:
+  - Implemented firewall statement/match inventory is now closed in the roadmap and explicitly backed by the capability matrix; Python gate is green.
+
+## 1.237) Firewall runtime: netdev egress decision for current stand
+
+- Step scope:
+  - Checked `netdev egress` on stand `132.243.237.120`.
+  - Stand runtime is `kernel=5.10.0-42-amd64`, `nftables v0.9.8`; temporary command `nft add chain netdev <tmp> egress { type filter hook egress device "eth0" ... }` fails with `Error: unknown chain hook`.
+  - Kept firewall table normalization and rule-context validation runtime-safe: `netdev egress` is explicitly rejected by current runtime-profile guards.
+  - Added/updated backend unit coverage for the explicit `egress` rejection and existing `netdev ingress` path.
+  - Updated the firewall capability matrix and roadmap to keep `egress` planned/blocked until a compatible runtime is available.
+  - No HTTP route shape, API payload field names, frontend UI exposure, IPsec domain code, or stand deployment were changed.
+- Ownership moved:
+  - No module boundary moved; `backend/domains/firewall/store.py` remains the owner of firewall table normalization and `backend/domains/firewall/rule_ops.py` remains the owner of rule context validation/script assembly.
+- Old entrypoint now delegates to:
+  - Existing Firewall table/rule service paths; no new entrypoint or delegation was introduced in this step.
+- Verification commands:
+  - `ssh root@132.243.237.120 'set -eu; table="codex_netdev_egress_$$"; iface="eth0"; cleanup() { nft delete table netdev "$table" >/dev/null 2>&1 || true; }; trap cleanup EXIT; nft add table netdev "$table"; nft add chain netdev "$table" egress "{ type filter hook egress device \"$iface\" priority 0; policy accept; }"; nft add rule netdev "$table" egress counter accept; nft list table netdev "$table"'` — failed as expected with `Error: unknown chain hook`; cleanup verified no `codex_netdev_egress_*` table remains.
+  - `python3 -m pytest -q tests/test_firewall_store.py -k netdev_requires_ingress` — 1 passed, 24 deselected.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py -k "append_enabled_rule_script_lines or validate_bridge_and_netdev_restrictions or validate_family_specific_restrictions"` — 3 passed, 17 deselected.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 284 passed.
+- Result summary:
+  - `netdev egress` is not enabled for the current runtime profile; the backend now keeps it explicitly blocked and documented until kernel/nft support is available. Python gate is green.
+
+## 1.238) Firewall backend: bridge runtime guard coverage for NAT/raw/dup
+
+- Step scope:
+  - Added runtime renderer guards so stale bridge payloads with `nat_type`, `raw_expr`, `dup_to`, or `dup_dev` are rejected before nft script generation.
+  - Added backend unit coverage for bridge NAT/raw/dup renderer rejection while keeping existing inet/netdev render coverage intact.
+  - Marked roadmap item `C3` complete in `docs/FIREWALL_POLICY_UNIFICATION_PLAN.ru.md`.
+  - Updated `docs/FIREWALL_CAPABILITY_MATRIX.ru.md` to record bridge renderer guards for NAT/raw/dup.
+  - No HTTP route shape, API payload field names, frontend UI exposure, IPsec domain code, or stand deployment were changed.
+- Ownership moved:
+  - No module boundary moved; `backend/domains/firewall/rule_ops.py` remains the owner of firewall rule normalization, family validation, and runtime rendering.
+- Old entrypoint now delegates to:
+  - Existing Firewall rule service/apply paths; no new entrypoint or delegation was introduced in this step.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py -k render_firewall_rule` — 1 passed, 19 deselected.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 284 passed.
+- Result summary:
+  - Bridge NAT/raw/dup runtime renderer guards are covered and Python gate is green.
+
+## 1.239) Firewall planning: dynamic set statements backend-first design
+
+- Step scope:
+  - Added `docs/FIREWALL_DYNAMIC_SET_STATEMENTS_DESIGN.ru.md` for dynamic set statements (`add @set`, `update @set`).
+  - Captured safety invariants for packet-path mutations: same `(family, table)` target set, `dynamic`, `timeout`, `size`, allowlisted expressions, and backend/runtime gates before UI exposure.
+  - Split roadmap item `D2` into design, collection normalization/render, rule statement normalization/render, and stand runtime gate substeps.
+  - Updated `docs/FIREWALL_CAPABILITY_MATRIX.ru.md` to record design status without claiming implementation.
+  - No backend/frontend runtime behavior, validation logic, HTTP status mapping, API payload fields, IPsec domain code, or stand deployment were changed.
+- Ownership moved:
+  - No module boundary moved; this is a documentation/design step only.
+- Old entrypoint now delegates to:
+  - Existing Firewall `collections` and unified `policy` sections; no new entrypoint or delegation was introduced in this step.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 284 passed.
+- Result summary:
+  - Dynamic set statement implementation remains intentionally disabled, but backend-first design and safety gates are documented; Python gate is green.
+
+## 1.240) Firewall backend: dynamic set declaration fields
+
+- Step scope:
+  - Added backend normalization for optional collection fields `dynamic`, `size`, and `gc_interval`.
+  - Added safety validation: `dynamic=true` requires `timeout` and `size`; `gc_interval` requires `timeout`; `size` must be `1..1000000`.
+  - Added runtime declaration rendering for dynamic sets: `flags dynamic,timeout`, `timeout`, `gc-interval`, and `size`.
+  - Included dynamic fields in set runtime signatures so changing safety/runtime limits triggers apply.
+  - Marked roadmap item `D2.2` complete while keeping rule-level `add @set` / `update @set`, UI exposure, and stand runtime gate pending.
+  - No HTTP route shape, API payload field names, frontend UI exposure, IPsec domain code, or stand deployment were changed.
+- Ownership moved:
+  - No module boundary moved; `backend/domains/firewall/store.py` remains the owner of collection normalization/runtime signatures and `backend/domains/firewall/collection_ops.py` remains the owner of collection runtime declaration assembly.
+- Old entrypoint now delegates to:
+  - Existing Firewall `collections` service/apply paths; no new entrypoint or delegation was introduced in this step.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_store.py -k "dynamic_requires or runtime_signatures"` — 2 passed, 24 deselected.
+  - `python3 -m pytest -q tests/test_firewall_collection_ops.py` — 6 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 20 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 286 passed.
+- Result summary:
+  - Dynamic set declaration fields are normalized/rendered for collection declarations while rule-level dynamic set statements remain disabled; Python gate is green.
+
+## 1.241) Firewall backend: dynamic set rule statements
+
+- Step scope:
+  - Added backend-only normalization for optional rule fields `set_stmt_op`, `set_stmt_name`, `set_stmt_expr`, `set_stmt_timeout`, and `set_stmt_comment`.
+  - Added runtime render support for `add @set { ... }` and `update @set { ... }` before the terminal rule verdict/action.
+  - Added safety guards: statement fields are optional, but if used they require `op/name/expr/timeout`, target an enabled existing dynamic set with `size`, and use allowlisted expressions.
+  - Kept first runtime-safe scope intentionally narrow: `family=inet`, `addr` sets with `ip saddr`/`ip daddr`, and `port` sets with `tcp dport`/`udp dport`.
+  - Kept `ip6`, `meta mark`, `bridge`, `netdev`, UI controls, and stand runtime acceptance pending until matching runtime support is verified.
+  - No HTTP route shape, required API fields, frontend UI exposure, IPsec domain code, or stand deployment were changed.
+- Ownership moved:
+  - No module boundary moved; `backend/domains/firewall/rule_ops.py` remains the owner of firewall rule field normalization/rendering, and `backend/domains/firewall/rule_normalization_service_ops.py` owns the full rule normalization pipeline.
+  - `backend/app/manager_facade.py` now passes the existing firewall sets reader into the backend rule normalizer so dynamic set target validation stays domain-owned.
+- Old entrypoint now delegates to:
+  - Existing Firewall rule create/update service paths; no new HTTP entrypoint was introduced.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py -k "dynamic_set_statement"` — 2 passed, 20 deselected.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 22 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` changed).
+  - `python3 -m pytest -q tests` — 288 passed.
+- Result summary:
+  - Dynamic set rule statements are normalized/rendered in the guarded `inet` addr/port backend scope; Python gate is green.
+
+## 1.242) Firewall runtime: dynamic set statement stand gate
+
+- Step scope:
+  - Ran stand runtime gate for dynamic set declarations and rule-level `add @set` / `update @set` statements on `132.243.237.120`.
+  - Stand runtime: `kernel=5.10.0-42-amd64`, `nftables v0.9.8 (E.D.S.)`.
+  - Verified temporary `inet` table with dynamic `ipv4_addr` and `inet_service` sets, regular chain, `add @ssh_flood { ip saddr timeout 10s }`, and `update @watched_ports { tcp dport timeout 10s }`.
+  - Verified cleanup removed the temporary table after the smoke.
+  - Found and documented runtime limitation: key-expression comments are rejected by this nft runtime (`Key expression comments are not supported`).
+  - Tightened backend normalization to reject `set_stmt_comment` for the current runtime profile while keeping the optional field reserved for future support.
+  - No frontend UI exposure, IPsec domain code, persistent stand deployment, or required API fields were changed.
+- Ownership moved:
+  - No module boundary moved; `backend/domains/firewall/rule_ops.py` remains the owner of dynamic set statement validation/rendering.
+- Old entrypoint now delegates to:
+  - Existing Firewall rule create/update/apply paths; no new HTTP entrypoint was introduced.
+- Verification commands:
+  - `ssh root@132.243.237.120 '... add @ssh_flood { ip saddr timeout 10s comment "ssh flood tracker" } ...'` — failed as expected with `Error: Key expression comments are not supported`; cleanup verified.
+  - `ssh root@132.243.237.120 '... add @ssh_flood { ip saddr timeout 10s } ... update @watched_ports { tcp dport timeout 10s } ...'` — passed; `nft list table` showed both rules; cleanup verified.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py -k "dynamic_set_statement"` — 2 passed, 20 deselected.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 22 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 46 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 288 passed.
+- Result summary:
+  - Dynamic set statements are runtime-accepted on the stand for the guarded `inet` addr/port scope without key-expression comments; backend now rejects `set_stmt_comment` until the runtime profile supports it.
+
+## 1.243) Firewall UI/backend: dynamic set statement controls in Add Rule
+
+- Step scope:
+  - Added existing-Policy1 Add Rule -> Action controls for guarded dynamic set statements: target set, `add/update`, expression, and statement timeout.
+  - UI lists only dynamic-capable addr/port collections and keeps the first exposed scope limited to `family=inet`.
+  - Save payload keeps optional `set_stmt_*` fields only when the form is in supported `inet` scope; unsupported families clear the fields before API submit.
+  - Added optional frontend API typing for `set_stmt_*` rule fields and dynamic collection safety fields `dynamic`, `size`, `gc_interval`.
+  - Fixed the backend facade normalizer callback to accept and forward `validate_runtime_objects`, preventing firewall rule create/update from falling into legacy fallback when service-layer runtime validation is requested.
+  - Added Playwright coverage for creating a dynamic collection, enabling dynamic set update in Add Rule, saving the rule, verifying returned `set_stmt_*`, and cleaning up.
+  - Updated capability/design/roadmap docs to mark D2.5 UI controls complete for the limited runtime-safe scope.
+  - No IPsec domain code, required API fields, route shape, or Policy UI redesign was introduced.
+- Ownership moved:
+  - `PolicyRuleEditorActionTab` owns dynamic set statement controls inside the existing Add/Edit rule form.
+  - `usePolicyRuleEditorActions` owns frontend save-payload sanitization for unsupported `set_stmt_*` contexts.
+  - `backend/app/manager_facade.py` remains the app/facade compatibility boundary and now forwards the service-layer runtime validation flag to the firewall domain normalizer.
+- Old entrypoint now delegates to:
+  - Existing `/firewall/rules` create/update service paths; no new HTTP entrypoint was introduced.
+- Verification commands:
+  - `npm run build` — passed; Vite chunk-size warning only.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "dynamic set statement" --project=chromium` — 1 passed on the stand.
+  - Direct stand HTTP smoke: create/delete `inet/filter` rule with `set_stmt_op=add`, `set_stmt_name`, `set_stmt_expr=ip saddr`, `set_stmt_timeout=10s` — passed after facade fix.
+- Result summary:
+  - Dynamic set statements are now available from the existing Add Rule Action tab for the guarded `inet` addr/port scope, with runtime-unsafe extensions still blocked.
+
+## 1.244) Firewall backend: vmap collection verdict validation coverage
+
+- Step scope:
+  - Added backend test coverage for existing `vmap` collection normalization.
+  - Hardened `vmap` entries so value side must be an allowed verdict: `accept`, `drop`, `queue`, `continue`, or `return`.
+  - Kept this scoped to Collections/map normalization; no rule-level `vmap` statement, UI redesign, route shape change, or IPsec code was introduced.
+- Ownership moved:
+  - No module boundary moved; `backend/domains/firewall/store.py` remains owner of map/vmap entry normalization and now explicitly owns `vmap` verdict allowlist validation.
+- Old entrypoint now delegates to:
+  - Existing `/firewall/maps/vmap` upsert path through `manager_facade -> firewall_service_layer_ops.upsert_map -> firewall_store.normalize_map_item`.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_store.py -k vmap_item` — first failed as RED because invalid verdict was accepted; after implementation passed: 1 passed, 26 deselected.
+  - `python3 -m pytest -q tests/test_firewall_store.py tests/test_firewall_collection_ops.py` — 33 passed.
+- Result summary:
+  - `vmap` collections now have explicit backend coverage and reject unsupported verdict values before runtime rendering.
+
+## 1.245) Firewall UI: remove Policy built-in scope hint
+
+- Step scope:
+  - Removed the amber informational hint under the Policy table selector: `Built-in filter/nat/raw/mangle stay inet-scoped; bridge/netdev rules are available through the custom table selector.`
+  - Kept Policy selector behavior, built-in `filter/nat/raw/mangle` tabs, custom table selection, rule table, and Add/Edit flow unchanged.
+  - Added Playwright coverage that the Policy toolbar no longer renders this hint.
+  - No backend behavior, wire/API shape, IPsec code, or module ownership boundary changed.
+- Ownership moved:
+  - No ownership moved; `PolicySectionToolbar` remains owner of the Policy toolbar UI.
+- Old entrypoint now delegates to:
+  - Existing unified Policy UI path; no new entrypoint was introduced.
+- Verification commands:
+  - `npm run build` — passed; Vite chunk-size warning only.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts tests/firewall-add-rule-fields-completeness.spec.ts --project=chromium` — 9 passed on the stand.
+- Result summary:
+  - The selected hint is removed from the live UI while the existing Policy controls remain available.
+
+## 1.246) Firewall UI: shorten Policy table selector
+
+- Step scope:
+  - Shortened the Policy table selector (`System table only`) so it no longer stretches across the full remaining toolbar width.
+  - Kept built-in `filter/nat/raw/mangle` tabs, custom table selection behavior, rule table, Add/Edit flow, and API payloads unchanged.
+  - Added Playwright coverage that the selector remains visible and stays in a compact width range.
+  - No backend behavior, wire/API shape, IPsec code, or module ownership boundary changed.
+- Ownership moved:
+  - No ownership moved; `PolicySectionToolbar` remains owner of the Policy toolbar UI.
+- Old entrypoint now delegates to:
+  - Existing unified Policy UI path; no new entrypoint was introduced.
+- Verification commands:
+  - `npm run build` — passed; Vite chunk-size warning only.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts tests/firewall-add-rule-fields-completeness.spec.ts --project=chromium` — 9 passed on the stand.
+- Result summary:
+  - The live Policy selector is compact while existing Policy controls continue to work.
+
+## 1.247) Firewall planning: rule-level vmap backend-first design
+
+- Step scope:
+  - Added `docs/FIREWALL_VMAP_RULE_STATEMENTS_DESIGN.ru.md` for first-class rule-level `vmap` statements.
+  - Chose the first safe implementation scope: optional `vmap_stmt_expr`/`vmap_stmt_name`, named `vmap` collection references, `family=inet`, `meta l4proto vmap @name`.
+  - Explicitly deferred inline/raw `vmap { ... }`, `jump/goto` verdict values, bridge/netdev exposure, and UI controls until backend tests plus runtime gate are green.
+  - Updated capability matrix and Policy roadmap so D3.1 design is complete while D3 implementation remains open.
+  - No runtime code, wire/API payload requirements, Policy UI, IPsec code, or module ownership boundary changed.
+- Ownership moved:
+  - No module boundary moved in this step.
+  - Planned ownership: `backend/domains/firewall/rule_ops.py` will own `vmap_stmt_*` normalization/rendering, while `backend/domains/firewall/collection_ops.py` remains owner of map/vmap declaration typing.
+- Old entrypoint now delegates to:
+  - No entrypoint changed. Existing future path remains `/firewall/rules` through `manager_facade -> firewall_service_layer_ops -> rule_normalization_service_ops -> rule_ops`.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 22 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed (run defensively because facade-related files are dirty in this workspace).
+  - `python3 -m pytest -q tests` — 290 passed.
+- Result summary:
+  - Rule-level `vmap` now has a concrete backend-first implementation contract without changing live behavior.
+
+## 1.248) Firewall backend: first named vmap rule statement scope
+
+- Step scope:
+  - Added backend-only optional rule fields `vmap_stmt_expr` and `vmap_stmt_name`.
+  - Implemented first safe scope: `family=inet`, `vmap_stmt_expr=meta l4proto`, and `meta l4proto vmap @<enabled-vmap-name>` rendering.
+  - Added target validation through the existing maps reader: referenced row must exist in `vmap`, be enabled, and have `inet_proto` key type.
+  - Extended collection map typing so protocol tokens (`tcp`, `udp`, `icmp`, `icmpv6`, etc.) render vmap declarations as `type inet_proto : verdict;`.
+  - Kept UI controls, stand runtime gate, inline/raw `vmap { ... }`, `jump/goto` values, bridge/netdev exposure, and IPsec code out of this step.
+- Ownership moved:
+  - `backend/domains/firewall/rule_ops.py` now owns `vmap_stmt_*` normalization/rendering for the first named-vmap rule statement scope.
+  - `backend/domains/firewall/rule_normalization_service_ops.py` owns composition wiring from normalized rule payload to the maps reader.
+  - `backend/domains/firewall/collection_ops.py` owns protocol-token `inet_proto` inference for map/vmap declaration rendering.
+- Old entrypoint now delegates to:
+  - Existing `/firewall/rules` create/update paths through `manager_facade -> firewall_service_layer_ops -> rule_normalization_service_ops -> rule_ops`; `manager_facade` now passes the existing firewall maps reader into the domain normalizer.
+- Verification commands:
+  - Targeted RED: `python3 -m pytest -q tests/test_firewall_rule_ops.py -k vmap_statement` — first failed because `read_maps_fn`/rendering were missing.
+  - Targeted GREEN: `python3 -m pytest -q tests/test_firewall_rule_ops.py -k vmap_statement` — 2 passed, 22 deselected.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 24 passed.
+  - `python3 -m pytest -q tests/test_firewall_collection_ops.py` — 6 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed (run because `backend/app/manager_facade.py` changed).
+  - `python3 -m pytest -q tests` — 292 passed.
+- Result summary:
+  - Rule-level named `vmap` is now a guarded backend capability for the first `inet` protocol-to-verdict scope; UI and runtime stand acceptance remain next steps.
+
+## 1.249) Firewall runtime: named vmap rule statement stand gate
+
+- Step scope:
+  - Ran stand runtime gate for the first named `vmap` rule statement scope on `132.243.237.120`.
+  - Stand runtime: `kernel=5.10.0-42-amd64`, `nftables v0.9.8 (E.D.S.)`.
+  - Verified temporary `inet` table with named `vmap` declaration `type inet_proto : verdict`, elements `tcp : accept`, `udp : drop`, `icmp : return`, and rule `meta l4proto vmap @proto_verdicts`.
+  - Verified `nft -a list table` showed the rule and cleanup removed the temporary table.
+  - Updated capability/design/roadmap docs to mark D3.3 runtime gate complete.
+  - No UI controls, stand deployment, persistent nft state, route shape, required API fields, or IPsec code changed.
+- Ownership moved:
+  - No module boundary moved in this step; this is runtime verification for the backend capability added in step `1.248`.
+- Old entrypoint now delegates to:
+  - No entrypoint changed. Existing future path remains `/firewall/rules` through `manager_facade -> firewall_service_layer_ops -> rule_normalization_service_ops -> rule_ops`.
+- Verification commands:
+  - `ssh root@132.243.237.120 '... nft add map inet "$table" proto_verdicts "{ type inet_proto : verdict; }" ... nft add rule inet "$table" input meta l4proto vmap @proto_verdicts ...'` — passed; cleanup verified with `cleanup_ok`.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 24 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 292 passed.
+- Result summary:
+  - The first backend `vmap_stmt_*` scope is accepted by the current stand runtime; next step can expose guarded controls in the existing Add Rule form.
+
+## 1.250) Firewall UI/backend: named vmap controls in Add Rule
+
+- Step scope:
+  - Added existing-Policy1 Add Rule -> Action controls for guarded named `vmap` statements: target vmap and expression.
+  - UI lists only enabled protocol-key `vmap` collections and keeps the first exposed scope limited to `family=inet` + `meta l4proto`.
+  - Enabling `Verdict map` clears terminal action, NAT target fields, and dynamic set statement fields because the backend first scope does not combine them.
+  - Added optional frontend API typing for `vmap_stmt_expr` and `vmap_stmt_name`.
+  - Added Playwright coverage for creating a `vmap` collection, enabling Verdict map in Add Rule, saving the rule, verifying returned `vmap_stmt_*`, and cleaning up.
+  - Deployed updated backend/domain files and `webui/dist` to the stand for live e2e validation; active bundle `index-Dfilmsk9.js`.
+  - No Policy UI redesign, new top-level tab, route shape change, required API field change, bridge/netdev vmap exposure, inline/raw vmap editor, `jump/goto`, or IPsec code was introduced.
+- Ownership moved:
+  - `PolicyRuleEditorActionTab` owns named `vmap` controls inside the existing Add/Edit rule form.
+  - `usePolicyRuleEditorActions` owns frontend save-payload sanitization for unsupported `vmap_stmt_*` contexts and mutual exclusion with dynamic set statements.
+  - `webui/src/pages/firewall.tsx` owns protocol-key `vmap` option derivation from existing Collections state.
+- Old entrypoint now delegates to:
+  - Existing `/firewall/rules` create/update service paths; no new HTTP entrypoint was introduced.
+- Verification commands:
+  - RED: `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "verdict map" --project=chromium` — first failed because `Verdict map` controls were absent.
+  - `npm run build` — passed; Vite chunk-size warning only.
+  - Stand deploy: copied backend firewall files + `webui/dist`, restarted `api_core.py` on `:8787`, bundle `index-Dfilmsk9.js`.
+  - GREEN: `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "verdict map" --project=chromium` — 1 passed on the stand.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts tests/firewall-add-rule-fields-completeness.spec.ts --project=chromium` — 10 passed on the stand.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 24 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed (run because `backend/app/manager_facade.py` is dirty in this workspace).
+  - `python3 -m pytest -q tests` — 292 passed.
+- Result summary:
+  - Named `vmap` rule statements are now available from the existing Add Rule Action tab for the guarded `inet` protocol-to-verdict scope.
+
+## 1.251) Firewall backend: runtime-only collections parser for D4
+
+- Step scope:
+  - Added backend parser foundation for runtime-only set/map/vmap reconciliation.
+  - `backend/domains/firewall/runtime_adapter.py` now exposes `parse_runtime_collections_from_ruleset_json` and `list_runtime_collections`.
+  - The parser reads best-effort set/map/vmap rows from `nft -j list ruleset`, marks them `runtime_only=True`, preserves `(family, table)`, and maps nft types to current collection groups: `ipv4_addr/ipv6_addr -> addr`, `inet_service -> port`, `ifname -> iface`, map -> `map`, verdict map -> `vmap`.
+  - Kept this step parser-only: no HTTP response shape change, no UI exposure, no manager-state write/auto-import, no apply behavior change, and no IPsec code.
+- Ownership moved:
+  - `backend/domains/firewall/runtime_adapter.py` now owns best-effort parsing of runtime-only set/map/vmap overlays from `nft -j list ruleset`.
+- Old entrypoint now delegates to:
+  - No public entrypoint changed in this step. Future list reconciliation can call `runtime_adapter.list_runtime_collections` from the existing firewall collection list service path.
+- Verification commands:
+  - RED: `python3 -m pytest -q tests/test_firewall_runtime_adapter.py -k runtime_collections` — first failed because parser/list helpers were absent.
+  - GREEN: `python3 -m pytest -q tests/test_firewall_runtime_adapter.py -k runtime_collections` — 2 passed, 17 deselected.
+  - `python3 -m pytest -q tests/test_firewall_runtime_adapter.py` — 19 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 24 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed (defensive run because `backend/app/manager_facade.py` is dirty in this workspace; this step did not change it).
+  - `python3 -m pytest -q tests` — 294 passed.
+- Result summary:
+  - D4 has a backend parser foundation for runtime-only collections while preserving current wire/API and UI behavior.
+
+## 1.252) Firewall backend/UI: read-only runtime collection overlay
+
+- Step scope:
+  - Connected D4.2 list reconciliation for runtime-only sets/maps/vmaps from `nft -j list ruleset`.
+  - Persisted manager rows remain source of truth; runtime-only rows are appended only when `(kind, family, table, name)` does not conflict with a persisted row.
+  - Runtime-only rows are marked with optional `runtime_only=True` and are not written into manager JSON state.
+  - Added minimal D4.3 UI safety: runtime-only collections can be displayed, but edit/delete/enable/disable paths are read-only until a separate explicit import action exists.
+  - Kept import/reconcile write action, auto-merge, API route changes, required payload changes, stand deploy, and IPsec code out of this step.
+- Ownership moved:
+  - `backend/domains/firewall/collection_ops.py` now owns `merge_runtime_collection_overlay`.
+  - `backend/domains/firewall/service_layer_ops.py` list sets/maps paths accept optional runtime overlay callbacks.
+  - `backend/app/manager_facade.py` and `backend/app/legacy_manager_compat.py` wire runtime collection listing through `firewall_runtime_adapter.list_runtime_collections`.
+  - Frontend collection API types expose optional `runtime_only`; Collections UI guards read-only runtime rows.
+- Old entrypoint now delegates to:
+  - Existing `list_firewall_sets_service` and `list_firewall_maps_service` paths delegate through `manager_facade -> firewall_service_layer_ops -> collection_ops`, with runtime rows supplied by `runtime_adapter.list_runtime_collections`.
+- Verification commands:
+  - RED: `python3 -m pytest -q tests/test_firewall_collection_ops.py -k runtime_only_overlay` — first failed because `runtime_overlay_fn` was absent.
+  - GREEN: `python3 -m pytest -q tests/test_firewall_collection_ops.py -k runtime_only_overlay` — 1 passed, 6 deselected.
+  - `python3 -m pytest -q tests/test_firewall_collection_ops.py` — 7 passed.
+  - `python3 -m pytest -q tests/test_firewall_runtime_adapter.py` — 19 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 48 passed.
+  - `npm run build` — passed; Vite chunk-size warning only.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 24 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 296 passed.
+- Result summary:
+  - Collections list responses can now show externally-created nft set/map/vmap rows as read-only `runtime_only` overlays while preserving persisted manager state and existing write semantics.
+
+## 1.253) Firewall plan correction: disable runtime-only collection overlay
+
+- Step scope:
+  - Product decision clarified: externally-created nft collections outside manager are not a supported/expected workflow now.
+  - Removed active D4.2/D4.3 behavior from list sets/maps paths: API/UI no longer merge or show runtime-only collections.
+  - Removed `runtime_only` frontend typing and UI guards that were only needed for externally-created collection rows.
+  - Left D4.1 runtime parser helper as an unused backend foundation only; it is not wired into public list responses.
+  - No IPsec code or wire/API required payload shape changed.
+- Ownership moved:
+  - `backend/domains/firewall/collection_ops.py` no longer owns runtime overlay merge; list collection responses are manager-state only again.
+  - `backend/domains/firewall/service_layer_ops.py`, `backend/domains/firewall/compat_entry_ops.py`, `backend/app/manager_facade.py`, and `backend/app/legacy_manager_compat.py` no longer wire runtime collection overlay callbacks.
+  - Frontend Collections UI no longer exposes or handles `runtime_only` rows.
+- Old entrypoint now delegates to:
+  - Existing `list_firewall_sets_service` and `list_firewall_maps_service` paths return only persisted manager collections through the normal store/list path.
+- Verification commands:
+  - `npm run build` — passed; Vite chunk-size warning only.
+  - `python3 -m pytest -q tests/test_firewall_collection_ops.py` — 6 passed.
+  - `python3 -m pytest -q tests/test_firewall_runtime_adapter.py` — 19 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed (run because `backend/app/manager_facade.py` and `backend/app/legacy_manager_compat.py` changed).
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 24 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 294 passed.
+- Result summary:
+  - Collections UX stays simple and manager-owned only; runtime import/list reconciliation is paused until a separate product decision.
+
+## 1.254) Firewall UI: Action tab why-disabled hints for inet-only controls
+
+- Step scope:
+  - Added short why-disabled hints in the existing Add/Edit Rule Action tab for bridge/netdev contexts.
+  - Dynamic set update and Verdict map controls remain enabled only for `family=inet`; bridge/netdev now show a concise explanation instead of silently hiding the reason.
+  - Added Playwright expectations to existing bridge/netdev Action choices specs.
+  - No backend behavior, API payload shape, Policy layout, stand deployment, runtime-only collection behavior, or IPsec code changed.
+- Ownership moved:
+  - `PolicyRuleEditorActionTab` owns the `inet`-only why-disabled hints for dynamic set and verdict map controls.
+- Old entrypoint now delegates to:
+  - Existing unified `PolicyRuleEditorDialog` path; no new route or API entrypoint was introduced.
+- Verification commands:
+  - `npm run build` — passed; Vite chunk-size warning only.
+  - `npx playwright test --list tests/firewall-policy-v2-bridge.spec.ts tests/firewall-policy-v3-netdev.spec.ts` — listed 37 tests.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 24 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed (defensive run in dirty workspace).
+  - `python3 -m pytest -q tests` — 294 passed.
+- Result summary:
+  - Bridge/netdev Action tab now makes the `inet`-only scope of dynamic set update and verdict map explicit while preserving current UI shape.
+
+## 1.255) Firewall UI: Action tab NAT availability hint
+
+- Step scope:
+  - Added a compact why-disabled hint in the existing Add/Edit Rule Action tab for NAT verdict availability.
+  - `bridge/netdev` contexts now explicitly explain that NAT actions are unavailable for those families.
+  - `inet/ip/ip6` contexts where the selected table/chain does not expose NAT verdicts now explain that NAT actions are shown only when the selected family/table/chain supports NAT.
+  - Added Playwright expectations to the existing built-in NAT/raw, custom `ip filter`, bridge, and netdev Action matrix specs.
+  - No backend behavior, API payload shape, Policy layout, runtime-only collection behavior, stand deployment, or IPsec code changed.
+- Ownership moved:
+  - `PolicyRuleEditorActionTab` owns the NAT action why-disabled hint alongside the existing dynamic set and verdict map hints.
+- Old entrypoint now delegates to:
+  - Existing unified `PolicyRuleEditorDialog` path; no new route or API entrypoint was introduced.
+- Verification commands:
+  - `npm run build` — passed; Vite chunk-size warning only.
+  - `npx playwright test --list tests/firewall-rules.spec.ts tests/firewall-policy-v2-bridge.spec.ts tests/firewall-policy-v3-netdev.spec.ts` — listed 44 tests.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 24 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed (defensive run in dirty workspace).
+  - `python3 -m pytest -q tests` — 294 passed.
+- Result summary:
+  - The unified Add/Edit Rule Action tab now explains NAT scope without changing available actions or payload behavior.
+
+## 1.256) Firewall stand: deploy NAT availability hint bundle
+
+- Step scope:
+  - Deployed the rebuilt `webui/dist` bundle to firewall stand `132.243.237.120:8787`.
+  - Created remote backup `/root/awg-manager/webui/dist.backup.20260606064847` before replacing `dist`.
+  - Kept this as frontend-only deployment: no backend restart, no runtime/state cleanup, no API payload change, and no IPsec code.
+  - Verified live UI with the in-app browser:
+    - built-in `filter -> Add Rule -> Action` shows `NAT actions are shown only when the selected family/table/chain supports NAT.`;
+    - built-in `nat/prerouting -> Add Rule -> Action` does not show the hint and still exposes `dnat`/`redirect`;
+    - temporary `bridge` and `netdev` custom tables showed `NAT actions are not available for bridge/netdev rules.` and no `dnat` option.
+  - Removed the temporary QA tables after verification.
+- Ownership moved:
+  - No ownership moved in this step; this is a stand deploy/verification of `PolicyRuleEditorActionTab` behavior from step `1.255`.
+- Old entrypoint now delegates to:
+  - Existing `/ui/` static bundle path; no route or API entrypoint changed.
+- Verification commands:
+  - Stand deploy: `scp -r webui/dist/. root@132.243.237.120:/root/awg-manager/webui/dist/` after remote backup.
+  - Stand `/ui/` HTML now references `/assets/index-CrKSccwV.js`.
+  - Stand health: `GET /health` with API key — `{"ok": true, "service": "awg_manager", "auth": "api_key"}`.
+  - Browser live smoke — filter/nat/bridge/netdev NAT hint matrix matched expected visibility.
+  - Temporary QA table cleanup — both delete calls returned HTTP 200.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 24 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed (defensive run in dirty workspace).
+  - `python3 -m pytest -q tests` — 294 passed.
+- Result summary:
+  - The live firewall stand now serves the NAT availability hint UI bundle and the checked Policy contexts match the intended behavior.
+
+## 1.257) Firewall UI: Action tab netdev object-binding hint
+
+- Step scope:
+  - Added a compact why-disabled hint in the existing Add/Edit Rule Action tab for `netdev` named-object bindings.
+  - `netdev` still does not expose rule object-binding controls; the UI now explains `Named object bindings are not available for netdev rules.` instead of silently hiding that block.
+  - Added a Playwright expectation to the existing netdev Action matrix spec.
+  - No backend behavior, API payload shape, Policy layout, stand deployment, runtime-only collection behavior, or IPsec code changed.
+- Ownership moved:
+  - `PolicyRuleEditorActionTab` owns the `netdev` named-object binding why-disabled hint alongside the existing NAT/dynamic set/verdict map hints.
+- Old entrypoint now delegates to:
+  - Existing unified `PolicyRuleEditorDialog` path; no new route or API entrypoint was introduced.
+- Verification commands:
+  - `npm run build` — passed; Vite chunk-size warning only.
+  - `npx playwright test --list tests/firewall-policy-v3-netdev.spec.ts` — listed 6 tests.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 24 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed (defensive run in dirty workspace).
+  - `python3 -m pytest -q tests` — 294 passed.
+- Result summary:
+  - The unified netdev Add/Edit Rule Action tab now explains why named-object bindings are unavailable while preserving current validation and payload behavior.
+
+## 1.258) Firewall stand: deploy netdev object-binding hint bundle
+
+- Step scope:
+  - Deployed the rebuilt `webui/dist` bundle to firewall stand `132.243.237.120:8787`.
+  - Created remote backup `/root/awg-manager/webui/dist.backup.20260606071502` before replacing `dist`.
+  - Kept this as frontend-only deployment: no backend restart, no runtime/state cleanup, no API payload change, and no IPsec code.
+  - Verified live UI with the in-app browser using a temporary `netdev` custom table:
+    - `netdev -> Add Rule -> Action` shows `Named object bindings are not available for netdev rules.`;
+    - the `Named objects` binding block remains hidden;
+    - NAT remains hidden for `netdev` and the existing NAT why-disabled hint is still visible.
+  - Removed the temporary QA table after verification.
+- Ownership moved:
+  - No ownership moved in this step; this is a stand deploy/verification of `PolicyRuleEditorActionTab` behavior from step `1.257`.
+- Old entrypoint now delegates to:
+  - Existing `/ui/` static bundle path; no route or API entrypoint changed.
+- Verification commands:
+  - Stand deploy: `scp -r webui/dist/. root@132.243.237.120:/root/awg-manager/webui/dist/` after remote backup.
+  - Stand `/ui/` HTML now references `/assets/index-BGvQ3sQM.js`.
+  - Stand health: `GET /health` with API key — `{"ok": true, "service": "awg_manager", "auth": "api_key"}`.
+  - Browser live smoke — `netdev` Action tab object-binding hint matched expected visibility.
+  - Temporary QA table cleanup — delete call returned HTTP 200.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 24 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed (defensive run in dirty workspace).
+  - `python3 -m pytest -q tests` — 294 passed.
+- Result summary:
+  - The live firewall stand now serves the netdev object-binding hint UI bundle and the checked Policy context matches the intended behavior.
+
+## 1.259) Firewall UI: Action tab bridge ct_expectation hint
+
+- Step scope:
+  - Added a compact why-disabled hint in the existing Add/Edit Rule Action tab for bridge `ct_expectation` scope.
+  - Bridge contexts still expose `ct_helper` and `ct_timeout` object bindings, while `ct_expectation` remains hidden; the UI now explains `ct expectation object is available only for inet/ip/ip6 rules.`.
+  - Added a Playwright expectation to the existing bridge Action/object matrix spec.
+  - No backend behavior, API payload shape, Policy layout, stand deployment, runtime-only collection behavior, or IPsec code changed.
+- Ownership moved:
+  - `PolicyRuleEditorActionTab` owns the bridge `ct_expectation` why-disabled hint alongside the existing NAT/dynamic set/verdict map/netdev object-binding hints.
+- Old entrypoint now delegates to:
+  - Existing unified `PolicyRuleEditorDialog` path; no new route or API entrypoint was introduced.
+- Verification commands:
+  - `npm run build` — passed; Vite chunk-size warning only.
+  - `npx playwright test --list tests/firewall-policy-v2-bridge.spec.ts` — listed 31 tests.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 24 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed (defensive run in dirty workspace).
+  - `python3 -m pytest -q tests` — 294 passed.
+- Result summary:
+  - The unified bridge Add/Edit Rule Action tab now explains why `ct_expectation` object binding is unavailable while preserving current validation and payload behavior.
+
+## 1.260) Firewall stand: deploy bridge ct_expectation hint bundle
+
+- Step scope:
+  - Deployed the rebuilt `webui/dist` bundle to firewall stand `132.243.237.120:8787`.
+  - Created remote backup `/root/awg-manager/webui/dist.backup.20260606072635` before replacing `dist`.
+  - Kept this as frontend-only deployment: no backend restart, no runtime/state cleanup, no API payload change, and no IPsec code.
+  - Verified live UI with the in-app browser using a temporary `bridge` custom table:
+    - `bridge -> Add Rule -> Action` shows `ct expectation object is available only for inet/ip/ip6 rules.`;
+    - `ct helper object` and `ct timeout object` remain visible for bridge;
+    - `ct expectation object` selector remains hidden for bridge;
+    - the `Named objects` block remains visible.
+  - Removed the temporary QA table after verification.
+- Ownership moved:
+  - No ownership moved in this step; this is a stand deploy/verification of `PolicyRuleEditorActionTab` behavior from step `1.259`.
+- Old entrypoint now delegates to:
+  - Existing `/ui/` static bundle path; no route or API entrypoint changed.
+- Verification commands:
+  - Stand deploy: `scp -r webui/dist/. root@132.243.237.120:/root/awg-manager/webui/dist/` after remote backup.
+  - Stand `/ui/` HTML now references `/assets/index-B8YhwzbT.js`.
+  - Stand health: `GET /health` with API key — `{"ok": true, "service": "awg_manager", "auth": "api_key"}`.
+  - Browser live smoke — bridge Action tab `ct_expectation` hint matched expected visibility.
+  - Temporary QA table cleanup — delete call returned HTTP 200.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 24 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed (defensive run in dirty workspace).
+  - `python3 -m pytest -q tests` — 294 passed.
+- Result summary:
+  - The live firewall stand now serves the bridge `ct_expectation` hint UI bundle and the checked Policy context matches the intended behavior.
+
+## 1.261) Firewall backend tests: dynamic set statement family guard
+
+- Step scope:
+  - Strengthened A4 backend coverage for the existing dynamic set statement runtime-safe scope.
+  - `tests/test_firewall_rule_ops.py` now verifies that `set_stmt_*` payloads are rejected not only for `bridge`, but also for custom `ip`, `ip6`, and `netdev` families.
+  - This preserves the agreed first scope: dynamic set statements are runtime-safe only for `family=inet` addr/port sets.
+  - No backend behavior, API payload shape, Policy layout, stand deployment, runtime-only collection behavior, or IPsec code changed.
+- Ownership moved:
+  - No ownership moved in this step; this is test coverage for existing `rule_normalization_service_ops.normalize_firewall_rule` / `rule_ops.normalize_dynamic_set_statement_fields` behavior.
+- Old entrypoint now delegates to:
+  - Existing firewall rule create/update normalization path; no new route or API entrypoint was introduced.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py -k dynamic_set` — 2 passed, 22 deselected.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 24 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed (defensive run in dirty workspace).
+  - `python3 -m pytest -q tests` — 294 passed.
+- Result summary:
+  - Dynamic set statement family restrictions are now explicitly covered for `ip/ip6/bridge/netdev`, matching the documented runtime-safe `inet`-only scope.
+
+## 1.262) Firewall backend tests: rule-level vmap statement family guard
+
+- Step scope:
+  - Strengthened A4 backend coverage for the existing rule-level `vmap` statement runtime-safe scope.
+  - `tests/test_firewall_rule_ops.py` now verifies that `vmap_stmt_*` payloads are rejected not only for `bridge`, but also for custom `ip`, `ip6`, and `netdev` families.
+  - This preserves the agreed first scope: named `vmap` rule statements are runtime-safe only for `family=inet` + `meta l4proto`.
+  - No backend behavior, API payload shape, Policy layout, stand deployment, runtime-only collection behavior, or IPsec code changed.
+- Ownership moved:
+  - No ownership moved in this step; this is test coverage for existing `rule_normalization_service_ops.normalize_firewall_rule` / `rule_ops.normalize_vmap_statement_fields` behavior.
+- Old entrypoint now delegates to:
+  - Existing firewall rule create/update normalization path; no new route or API entrypoint was introduced.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py -k vmap` — 2 passed, 22 deselected.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 24 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed (defensive run in dirty workspace).
+  - `python3 -m pytest -q tests` — 294 passed.
+- Result summary:
+  - Rule-level `vmap` statement family restrictions are now explicitly covered for `ip/ip6/bridge/netdev`, matching the documented runtime-safe `inet`-only scope.
+
+## 1.263) Firewall backend tests: B1 custom table/chain operations coverage
+
+- Step scope:
+  - Started B1 coverage with the lowest-risk table/chain add/create path.
+  - `tests/test_firewall_store.py` now explicitly verifies valid `netdev` custom chain normalization (`filter`, `hook=ingress`, required `device`, non-default `policy`, string boolean `enabled`).
+  - `tests/test_firewall_store.py` now explicitly verifies `bridge` custom chain normalization and guardrails: `bridge` remains `filter`-only, `ingress` is not supported in this manager, and `device` is rejected outside `ingress`.
+  - `tests/test_firewall_store.py` now verifies that `store.collect_table_defs` preserves custom `device` and `policy` in runtime chain definitions for `netdev` and `bridge`.
+  - No production backend behavior, API payload shape, Policy layout, stand deployment, runtime state, or IPsec code changed.
+- Ownership moved:
+  - No ownership moved in this step; this is B1 backend test coverage for existing `store.normalize_firewall_table_item` and `store.collect_table_defs` behavior.
+- Old entrypoint now delegates to:
+  - Existing firewall table builder/upsert/list runtime paths; no route, API contract, or facade entrypoint changed.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_store.py -k 'table_defs or firewall_table_item'` — 5 passed, 24 deselected.
+  - `python3 -m pytest -q tests/test_firewall_store.py` — 29 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 24 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 296 passed.
+- Result summary:
+  - The custom table/chain part of B1 now has direct backend assertions for the bridge/netdev constraints that make the unified Policy model safe.
+
+## 1.264) Firewall backend tests: B1 table delete coverage
+
+- Step scope:
+  - Continued B1 coverage on the table delete path.
+  - `tests/test_firewall_table_ops.py` now verifies that deleting a custom table removes the table row and applies rules while skipping `objects` store writes when there are no related named objects for the deleted `family/table`.
+  - Existing related-object cleanup and missing-id behavior remain covered in the same table ops suite.
+  - No production backend behavior, API payload shape, Policy layout, stand deployment, runtime state, or IPsec code changed.
+- Ownership moved:
+  - No ownership moved in this step; this is B1 backend test coverage for existing `table_ops.delete_table` behavior.
+- Old entrypoint now delegates to:
+  - Existing firewall table delete service path; no route, API contract, or facade entrypoint changed.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_table_ops.py` — 5 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 24 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 297 passed.
+- Result summary:
+  - The table delete part of B1 now has explicit coverage for the no-op object cleanup branch, preventing accidental extra writes to object state.
+
+## 1.265) Firewall backend tests: B1 rule create rollback coverage
+
+- Step scope:
+  - Continued B1 coverage on the rule create/add path.
+  - `tests/test_firewall_rule_ops.py` now verifies that `rule_ops.create_rule` rolls back the rules store to the previous state if `apply_rules_fn` fails after writing a newly-created rule.
+  - Existing rule create idempotence and update/delete rollback behavior remain covered in the same rule ops suite.
+  - No production backend behavior, API payload shape, Policy layout, stand deployment, runtime state, or IPsec code changed.
+- Ownership moved:
+  - No ownership moved in this step; this is B1 backend test coverage for existing `rule_ops.create_rule` behavior.
+- Old entrypoint now delegates to:
+  - Existing firewall rule create service path; no route, API contract, or facade entrypoint changed.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py -k 'create_rule'` — 2 passed, 23 deselected.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 25 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 298 passed.
+- Result summary:
+  - The rule add/create part of B1 now has explicit rollback coverage, matching the already-covered update/delete rollback behavior.
+
+## 1.266) Firewall backend: B1 rule reorder rollback
+
+- Step scope:
+  - Continued B1 on the rule ordering path.
+  - Added a RED test in `tests/test_firewall_rule_ops.py` proving that `rule_ops.reorder_rules` changed stored rule order if `apply_rules_fn` failed after writing the reordered list.
+  - Fixed `rule_ops.reorder_rules` to roll back to the previous rules store state on apply failure, matching existing create/update/delete rollback behavior.
+  - Wire/API shape, route names, response schema, Policy UI, stand deployment, runtime state, and IPsec code were not changed.
+- Ownership moved:
+  - No ownership moved in this step; this is a small backend behavior hardening inside existing `rule_ops.reorder_rules` ownership.
+- Old entrypoint now delegates to:
+  - Existing firewall rule reorder service path; no route, API contract, or facade entrypoint changed.
+- Verification commands:
+  - RED: `python3 -m pytest -q tests/test_firewall_rule_ops.py -k 'reorder_rules_rolls_back'` — failed as expected because order stayed `r3,r1,r2` after apply failure.
+  - GREEN: `python3 -m pytest -q tests/test_firewall_rule_ops.py -k 'reorder_rules'` — 2 passed, 24 deselected.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 26 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 299 passed.
+- Result summary:
+  - Rule reorder now has the same rollback safety as rule create/update/delete when runtime apply fails.
+
+## 1.267) Firewall backend tests: B1 custom table reset counters coverage
+
+- Step scope:
+  - Continued B1 on the reset counters path.
+  - `tests/test_firewall_runtime_ops.py` now verifies single custom `inet` table reset: stats are cleared only for rules in the selected custom table, runtime partial reapply deletes/re-adds that custom table, and full `apply_rules_fn` is not called.
+  - No production backend behavior, API payload shape, Policy layout, stand deployment, runtime state, or IPsec code changed.
+- Ownership moved:
+  - No ownership moved in this step; this is B1 backend test coverage for existing `runtime_ops.reset_counters` behavior.
+- Old entrypoint now delegates to:
+  - Existing firewall reset counters service path; no route, API contract, or facade entrypoint changed.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_runtime_ops.py -k 'reset_counters'` — 4 passed, 1 deselected.
+  - `python3 -m pytest -q tests/test_firewall_runtime_ops.py` — 5 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 26 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 300 passed.
+- Result summary:
+  - Reset counters coverage now includes the custom `inet` table partial reapply path, not only built-in tables and full reset.
+
+## 1.268) Firewall backend tests: B1 named-object delete rollback coverage
+
+- Step scope:
+  - Continued B1 on the named object delete path.
+  - `tests/test_firewall_named_object_ops.py` now verifies that `named_object_ops.delete_named_object` rolls back `objects` store to the previous state if `apply_rules_fn` fails after deleting an object.
+  - Existing duplicate-id, in-use reference guard, create/upsert/update/delete flow, and list active/inactive table behavior remain covered in the same suite.
+  - No production backend behavior, API payload shape, Policy layout, stand deployment, runtime state, or IPsec code changed.
+- Ownership moved:
+  - No ownership moved in this step; this is B1 backend test coverage for existing `named_object_ops.delete_named_object` behavior.
+- Old entrypoint now delegates to:
+  - Existing firewall named-object delete service path; no route, API contract, or facade entrypoint changed.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_named_object_ops.py -k 'delete_named_object'` — 1 passed, 9 deselected.
+  - `python3 -m pytest -q tests/test_firewall_named_object_ops.py` — 10 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 26 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 301 passed.
+- Result summary:
+  - Named-object delete now has explicit rollback coverage, aligned with rule/table rollback coverage in B1.
+
+## 1.269) Firewall backend: B1 collection delete rollback
+
+- Step scope:
+  - Continued B1 on set/map collection delete paths.
+  - Added a RED test in `tests/test_firewall_collection_ops.py` proving that `collection_ops.delete_collection` removed an active collection from store if `apply_rules_fn` failed after deletion.
+  - Fixed `collection_ops.delete_collection` to roll back the selected collection kind rows on apply failure, matching rule/table/object rollback behavior.
+  - Wire/API shape, route names, response schema, Policy UI, stand deployment, runtime state, and IPsec code were not changed.
+- Ownership moved:
+  - No ownership moved in this step; this is small backend behavior hardening inside existing `collection_ops.delete_collection` ownership.
+- Old entrypoint now delegates to:
+  - Existing firewall set/map delete service paths; no route, API contract, or facade entrypoint changed.
+- Verification commands:
+  - RED: `python3 -m pytest -q tests/test_firewall_collection_ops.py -k 'delete_collection_rolls_back'` — failed as expected because deleted collection stayed removed after apply failure.
+  - GREEN: `python3 -m pytest -q tests/test_firewall_collection_ops.py -k 'delete_collection'` — 2 passed, 5 deselected.
+  - `python3 -m pytest -q tests/test_firewall_collection_ops.py` — 7 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 26 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 302 passed.
+- Result summary:
+  - Collection delete now has rollback safety when runtime apply fails, closing the set/map delete branch of B1.
+
+## 1.270) Firewall backend: B1 collection upsert rollback
+
+- Step scope:
+  - Continued B1 on set/map/vmap collection upsert paths.
+  - Added a RED test in `tests/test_firewall_collection_ops.py` proving that `collection_ops.upsert_collection` kept the newly-written collection row if `apply_rules_fn` failed after store write.
+  - Fixed `collection_ops.upsert_collection` to roll back the selected collection kind rows on apply failure, matching rule/table/object/delete rollback behavior.
+  - Wire/API shape, route names, response schema, Policy UI, stand deployment, runtime state, and IPsec code were not changed.
+- Ownership moved:
+  - No ownership moved in this step; this is small backend behavior hardening inside existing `collection_ops.upsert_collection` ownership.
+- Old entrypoint now delegates to:
+  - Existing firewall set/map/vmap upsert service paths; no route, API contract, or facade entrypoint changed.
+- Verification commands:
+  - RED: `python3 -m pytest -q tests/test_firewall_collection_ops.py -k upsert_collection_rolls_back_on_apply_error` — failed as expected because the updated collection row stayed in store after apply failure.
+  - GREEN: `python3 -m pytest -q tests/test_firewall_collection_ops.py -k upsert_collection_rolls_back_on_apply_error` — 1 passed, 7 deselected.
+  - `python3 -m pytest -q tests/test_firewall_collection_ops.py` — 8 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 26 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed.
+  - `python3 -m pytest -q tests` — 303 passed.
+- Result summary:
+  - Collection upsert now has rollback safety when runtime apply fails, closing the set/map/vmap upsert branch of B1.
+
+## 1.271) Firewall backend: B1 collection list cleanup rollback
+
+- Step scope:
+  - Completed B1 on set/map/vmap collection list/cleanup paths.
+  - Added a RED test in `tests/test_firewall_collection_ops.py` proving that `collection_ops.list_collections` left expired active rows removed from store if `apply_rules_fn` failed after auto-cleanup.
+  - Fixed `collection_ops.list_collections` to roll back the selected collection kinds on apply failure after cleanup, matching collection upsert/delete rollback behavior.
+  - Marked B1 complete in `docs/FIREWALL_POLICY_UNIFICATION_PLAN.ru.md`.
+  - Wire/API shape, route names, response schema, Policy UI, stand deployment, runtime state, and IPsec code were not changed.
+- Ownership moved:
+  - No ownership moved in this step; this is small backend behavior hardening inside existing `collection_ops.list_collections` ownership.
+- Old entrypoint now delegates to:
+  - Existing firewall set/map/vmap list service paths; no route, API contract, or facade entrypoint changed.
+- Verification commands:
+  - RED: `python3 -m pytest -q tests/test_firewall_collection_ops.py -k list_collections_rolls_back_expired_cleanup_on_apply_error` — failed as expected because `addr` stayed empty after apply failure.
+  - GREEN: `python3 -m pytest -q tests/test_firewall_collection_ops.py -k list_collections_rolls_back_expired_cleanup_on_apply_error` — 1 passed, 8 deselected.
+  - `python3 -m pytest -q tests/test_firewall_collection_ops.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 26 passed.
+  - Initial sandbox run of `python3 -m pytest -q tests/test_api_contract.py` failed with `PermissionError: [Errno 1] Operation not permitted` on local socket bind; rerun outside sandbox is recorded below.
+  - `python3 -m pytest -q tests/test_api_contract.py` outside sandbox — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed.
+  - `python3 -m pytest -q tests` outside sandbox — 304 passed.
+- Result summary:
+  - Collection list auto-cleanup now has rollback safety when runtime apply fails, closing the remaining B1 list/cleanup branch.
+
+## 1.272) Firewall docs: admin guide and walkthrough testplan
+
+- Step scope:
+  - Started end-user Firewall documentation as an administrator-oriented tutorial, not a developer reference.
+  - Added `docs/FIREWALL_ADMIN_GUIDE.ru.md` with the current unified Policy model, built-in `filter/nat/raw/mangle`, collections, objects, NAT, bridge, netdev, advanced actions, result checks, and training tasks.
+  - Added `docs/FIREWALL_ADMIN_WALKTHROUGH_TESTPLAN.ru.md` to turn the tutorial into a repeatable UI walkthrough with pass/partial/fail statuses, UX scoring, and issue templates.
+  - Linked the walkthrough testplan from the admin guide.
+  - Wire/API shape, route names, response schema, backend behavior, Policy UI code, stand deployment, runtime state, and IPsec code were not changed.
+- Ownership moved:
+  - No module ownership moved in this step; this is user-facing Firewall documentation and UX validation planning.
+- Old entrypoint now delegates to:
+  - No runtime entrypoint changed.
+- Verification commands:
+  - `rg -n "TODO|TBD|policy2|policy3|Policy2|Policy3" docs/FIREWALL_ADMIN_GUIDE.ru.md docs/FIREWALL_ADMIN_WALKTHROUGH_TESTPLAN.ru.md` — no matches.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 26 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed.
+  - `python3 -m pytest -q tests` — 304 passed.
+- Result summary:
+  - Firewall now has a first admin tutorial draft plus a structured walkthrough plan for checking whether a user can configure the UI successfully.
+
+## 1.273) Firewall docs/UX: walkthrough scenario A
+
+- Step scope:
+  - Ran the first admin walkthrough scenario on the stand UI: `policy -> filter -> Add HTTPS accept rule`.
+  - Verified that the unified Policy page loads, shows `policy/collections/objects/table builder`, shows built-in `filter/nat/raw/mangle`, and has no page-level console errors before the scenario.
+  - Created a rule `input accept tcp — 443` with anonymous counter enabled.
+  - Updated `docs/FIREWALL_ADMIN_WALKTHROUGH_TESTPLAN.ru.md` with Scenario A result, UX scores, and issue notes.
+  - Wire/API shape, backend behavior, UI code, runtime model, and IPsec code were not changed.
+- Ownership moved:
+  - No module ownership moved in this step; this is documentation plus UX validation evidence.
+- Old entrypoint now delegates to:
+  - No runtime entrypoint changed.
+- Verification commands:
+  - Browser walkthrough on `http://132.243.237.120:8787/ui/` — Scenario A passed; row `input accept tcp — 443` visible in `policy -> filter`.
+  - Browser console check — no errors; one chart sizing warning recorded as `FW-UX-002`.
+- Result summary:
+  - The basic HTTPS allow scenario is passable by UI, but optional-field `+` controls are a discoverability issue for admins and should be improved.
+
+## 1.274) Firewall docs/UX: walkthrough scenario B
+
+- Step scope:
+  - Ran the second admin walkthrough scenario on the stand UI: `policy -> filter -> Add SMTP drop rule`.
+  - Created a rule `input drop tcp — 25`.
+  - Updated `docs/FIREWALL_ADMIN_WALKTHROUGH_TESTPLAN.ru.md` with Scenario B result, UX scores, and issue notes.
+  - Wire/API shape, backend behavior, UI code, runtime model, and IPsec code were not changed.
+- Ownership moved:
+  - No module ownership moved in this step; this is documentation plus UX validation evidence.
+- Old entrypoint now delegates to:
+  - No runtime entrypoint changed.
+- Verification commands:
+  - Browser walkthrough on `http://132.243.237.120:8787/ui/` — Scenario B passed; row `input drop tcp — 25` visible in `policy -> filter`.
+  - Browser console check — no new errors; existing chart sizing warning remains recorded as `FW-UX-002`.
+- Result summary:
+  - The SMTP drop scenario is passable by UI, but blocking actions would benefit from a short `drop` vs `reject` safety hint.
+
+## 1.275) Firewall docs/UX: walkthrough scenario C
+
+- Step scope:
+  - Ran the third admin walkthrough scenario on the stand UI: `policy -> nat -> Add NAT masquerade rule`.
+  - Selected `chain=postrouting`, source `10.66.1.0/24`, and Action `masquerade`.
+  - Observed that after save the NAT table row appeared as `postrouting accept any 10.66.1.0/24`, with no visible `masquerade` confirmation.
+  - Updated `docs/FIREWALL_ADMIN_WALKTHROUGH_TESTPLAN.ru.md` with Scenario C result, UX scores, and issue notes.
+  - Wire/API shape, backend behavior, UI code, runtime model, and IPsec code were not changed.
+- Ownership moved:
+  - No module ownership moved in this step; this is documentation plus UX validation evidence.
+- Old entrypoint now delegates to:
+  - No runtime entrypoint changed.
+- Verification commands:
+  - Browser walkthrough on `http://132.243.237.120:8787/ui/` — Scenario C failed from the admin perspective because saved row did not visibly confirm `masquerade`.
+  - Browser console check — no new errors; existing chart sizing warning remains recorded as `FW-UX-002`.
+- Result summary:
+  - NAT masquerade needs follow-up: UI should guide `postrouting` selection and visibly show NAT action after save, otherwise the admin cannot trust the result.
+
+## 1.276) Firewall UX: FW-UX-005 NAT action table confirmation
+
+- Step scope:
+  - Investigated `FW-UX-005` from the admin walkthrough: NAT masquerade was saved as backend-compatible `action=accept` plus `nat_type=masquerade`, but the Policy table displayed only the internal verdict.
+  - Added Playwright coverage that creates a temporary `nat/postrouting` `masquerade` rule and verifies that the Policy NAT table shows `masquerade`.
+  - Updated the Policy rules table and Action sorting to use a user-facing effective action label: `nat_type` for NAT statements, `vmap` for vmap statements, otherwise the stored verdict/action.
+  - Rebuilt frontend dist and deployed the updated frontend assets to the stand for live verification.
+  - Updated `docs/FIREWALL_ADMIN_WALKTHROUGH_TESTPLAN.ru.md`: `FW-UX-005` is fixed/verified; Scenario C is now `partial` because `FW-UX-004` chain guidance remains.
+  - Wire/API shape, backend behavior, runtime renderer, and IPsec code were not changed.
+- Ownership moved:
+  - No backend/domain ownership moved. Frontend display responsibility for rule action labels is centralized in `webui/src/pages/firewall/policyUtils.ts`.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "table shows nat action" --project=chromium` before fix — failed; row text contained `postroutingacceptany10.66.1.0/24`.
+  - `npm run build` — passed.
+  - Stand frontend dist backup created: `/root/awg-manager/webui/dist.backup.fw-ux-005-20260607075402`.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "table shows nat action" --project=chromium` after fix/deploy — 1 passed.
+- Result summary:
+  - NAT rows now visibly confirm the selected NAT statement (`masquerade`/`snat`/`dnat`/`redirect`) instead of showing the internal `accept` verdict.
+
+## 1.277) Firewall UX: FW-UX-004 NAT chain/action guidance
+
+- Step scope:
+  - Closed the remaining Scenario C UX issue: NAT Add Rule did not explain which chains expose which NAT statements.
+  - Added Playwright coverage that opens `policy -> nat -> Add -> Action` and verifies the chain/action hint for default `prerouting` and selected `postrouting`.
+  - Added a compact Action-tab helper for supported L3 NAT contexts:
+    - `prerouting/output use dnat or redirect`
+    - `postrouting uses snat or masquerade`
+    - unsupported NAT chain hint points users to the right chains.
+  - Rebuilt frontend dist and deployed the updated frontend assets to the stand for live verification.
+  - Updated `docs/FIREWALL_ADMIN_WALKTHROUGH_TESTPLAN.ru.md`: `FW-UX-004` is fixed/verified; Scenario C is now pass for the current basic NAT masquerade walkthrough.
+  - Wire/API shape, backend behavior, runtime renderer, and IPsec code were not changed.
+- Ownership moved:
+  - No backend/domain ownership moved. The new helper text is local UI guidance inside `webui/src/pages/firewall/PolicyRuleEditorActionTab.tsx`.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "action tab explains" --project=chromium` before fix — failed; `prerouting/output use dnat or redirect` was not visible.
+  - `npm run build` — passed.
+  - Stand frontend dist backup created: `/root/awg-manager/webui/dist.backup.fw-ux-004-20260607075843`.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "action tab explains" --project=chromium` after fix/deploy — 1 passed.
+- Result summary:
+  - The NAT masquerade walkthrough now explains the critical chain/action mapping before the user has to guess `postrouting`.
+
+## 1.278) Firewall docs/UX: walkthrough scenario D address collection
+
+- Step scope:
+  - Ran the Scenario D walkthrough on the stand UI: `Firewall -> collections -> Add address set`.
+  - Added Playwright coverage for creating an `addr` collection, confirming row contents, disabling it, enabling it again, and cleaning it up through the API.
+  - Added a compact Collections modal helper that tells users how to reuse collections in rules: `Use addr collections in rule fields as @set_name.`
+  - Rebuilt frontend dist and deployed the updated frontend assets to the stand for live verification.
+  - Updated `docs/FIREWALL_ADMIN_WALKTHROUGH_TESTPLAN.ru.md`: Scenario D is pass.
+  - Wire/API shape, backend behavior, runtime renderer, and IPsec code were not changed.
+- Ownership moved:
+  - No backend/domain ownership moved. The new helper text is local UI guidance inside `webui/src/pages/firewall/CollectionsModal.tsx`.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-maps.spec.ts -g "add address set" --project=chromium` before helper — failed because the `@set_name` usage hint was not visible.
+  - Direct API check on stand for `addr` create/disable/enable — passed.
+  - `npm run build` — passed.
+  - Stand frontend dist backup created: `/root/awg-manager/webui/dist.backup.scenario-d-collections-20260607152200`.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-maps.spec.ts -g "add address set" --project=chromium` after fix/deploy — 1 passed.
+- Result summary:
+  - Address collection creation and enable/disable are passable from the UI, and the modal now explains the important `@set_name` reuse pattern.
+
+## 1.279) Firewall docs/UX: walkthrough scenario E named counter object
+
+- Step scope:
+  - Ran the Scenario E walkthrough on the stand UI: create a named counter object, bind it in Add Rule statistics, verify `counter_name`, and exercise `Reset counters`.
+  - Added Playwright coverage for `objects -> inet/filter -> Add counter object -> policy/filter Add Rule -> Statistics counter object`.
+  - Fixed the Object table selector so built-in `inet` tables (`filter`, `nat`, `raw`, `mangle`) are available alongside custom tables.
+  - Rebuilt frontend dist and deployed the updated frontend assets to the stand for live verification.
+  - Updated `docs/FIREWALL_ADMIN_WALKTHROUGH_TESTPLAN.ru.md`: Scenario E is pass.
+  - Wire/API shape, backend behavior, runtime renderer, and IPsec code were not changed.
+- Ownership moved:
+  - No backend/domain ownership moved. Object table selector ownership remains in `webui/src/pages/firewall.tsx`; it now includes built-in `inet` table options in addition to custom table options.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - Direct API check on stand for `inet/filter` counter object create/list/delete — passed.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "named counter" --project=chromium` before fix — failed because `inet:filter` was missing from Object table selector.
+  - `npm run build` — passed.
+  - Stand frontend dist backup created: `/root/awg-manager/webui/dist.backup.scenario-e-counter-20260607153112`.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "named counter" --project=chromium` after fix/deploy — 1 passed.
+- Result summary:
+  - Named counter objects are now reachable for built-in `inet/filter` from the visible Objects UI and can be selected in the unified Add Rule Statistics tab.
+
+## 1.280) Firewall docs/UX: walkthrough scenario F bridge rule
+
+- Step scope:
+  - Ran the Scenario F walkthrough path on the stand UI: select a custom `bridge` table in unified `policy`, open `Add Rule`, create a `drop` rule, and verify that NAT actions are unavailable with an explicit explanation.
+  - Added Playwright coverage for the bridge walkthrough path: the test creates a temporary bridge table as setup, then uses the UI to select it, fill `Bridge input`, choose `drop`, save the rule, and verify the resulting API payload.
+  - Updated `docs/FIREWALL_ADMIN_WALKTHROUGH_TESTPLAN.ru.md`: Scenario F is pass, including UX scores and result notes.
+  - Wire/API shape, backend behavior, runtime renderer, production UI code, and IPsec code were not changed.
+- Ownership moved:
+  - No module ownership moved in this step; this is e2e coverage plus documentation evidence.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-policy-v2-bridge.spec.ts -g "bridge walkthrough" --project=chromium` — 1 passed.
+- Result summary:
+  - Unified Policy already supports the basic custom bridge rule scenario: bridge-specific fields are visible, `drop` saves correctly, and NAT actions are hidden with a why-disabled message.
+
+## 1.281) Firewall docs/UX: walkthrough scenario G netdev ingress rule
+
+- Step scope:
+  - Ran the Scenario G walkthrough path on the stand UI: select a custom `netdev` table in unified `policy`, open `Add Rule`, create `tcp dport=23 drop`, and verify netdev-only action/object constraints.
+  - Added Playwright coverage for the netdev walkthrough path: the test creates a temporary `netdev` ingress table as setup, then uses the UI to select it, fill protocol/port, confirm `fwd` availability, confirm named-object bindings are disabled with an explanation, save the rule, and verify the resulting API payload.
+  - Updated `docs/FIREWALL_ADMIN_WALKTHROUGH_TESTPLAN.ru.md`: Scenario G is pass, including UX scores and result notes.
+  - Wire/API shape, backend behavior, runtime renderer, production UI code, and IPsec code were not changed.
+- Ownership moved:
+  - No module ownership moved in this step; this is e2e coverage plus documentation evidence.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-policy-v3-netdev.spec.ts -g "netdev walkthrough" --project=chromium` — 1 passed.
+- Result summary:
+  - Unified Policy already supports the basic custom netdev ingress rule scenario: `tcp dport=23 drop` saves correctly, `fwd` is exposed only in netdev context, and named-object bindings are hidden with a why-disabled message.
+
+## 1.282) Firewall docs/UX: walkthrough scenario H why-disabled hints
+
+- Step scope:
+  - Ran the Scenario H walkthrough path on the stand UI: verify why-disabled guidance for bridge/netdev NAT actions, `inet`-only dynamic set/verdict map controls, bridge `ct_expectation`, and netdev named-object bindings.
+  - Added a focused Playwright smoke spec `tests/firewall-why-disabled-hints.spec.ts` that creates temporary `bridge` and `netdev` tables as setup, checks Add Rule Action-tab hints, and checks netdev Objects modal `ct_expectation` disabled state.
+  - Updated `docs/FIREWALL_ADMIN_WALKTHROUGH_TESTPLAN.ru.md`: Scenario H is pass, including UX scores and result notes.
+  - Wire/API shape, backend behavior, runtime renderer, production UI code, and IPsec code were not changed.
+- Ownership moved:
+  - No module ownership moved in this step; this is e2e coverage plus documentation evidence.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-why-disabled-hints.spec.ts --project=chromium` — 1 passed.
+- Result summary:
+  - The current unified Firewall UI explains the checked unsupported paths before save: bridge/netdev NAT, non-`inet` dynamic set/vmap, bridge `ct_expectation`, and netdev object bindings.
+
+## 1.283) Firewall UX: netdev table builder device/egress guidance
+
+- Step scope:
+  - Closed the remaining walkthrough follow-up around `table builder` clarity for `family=netdev`.
+  - Added Playwright coverage that opens `table builder -> Add Table Chain`, selects `family=netdev`, and verifies visible guidance for `filter/ingress`, required `device`, and disabled `egress` on the current runtime profile.
+  - Added compact help text to the existing `TableBuilderModal`; backend validation, API payload shape, and runtime behavior were not changed.
+  - Rebuilt frontend dist and deployed the updated UI bundle to the stand.
+  - Updated `docs/FIREWALL_ADMIN_WALKTHROUGH_TESTPLAN.ru.md` with fixed/verified follow-up notes for Scenario G/H.
+  - Wire/API shape, backend behavior, runtime renderer, and IPsec code were not changed.
+- Ownership moved:
+  - No backend/domain ownership moved. The new help text is local UI guidance owned by `webui/src/pages/firewall/TableBuilderModal.tsx`.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-tables.spec.ts -g "netdev table builder explains" --project=chromium` before fix — failed because the explicit netdev guidance was not visible.
+  - `npm run build` — passed (`index-C5RbvpBd.js`).
+  - Stand frontend dist backup created: `/root/awg-manager/webui/dist.backup.table-builder-netdev-help-20260607161404`.
+  - Stand UI restarted on public bind `0.0.0.0:8787` after correcting a temporary localhost-only manual start.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-tables.spec.ts -g "netdev table builder explains" --project=chromium` after fix/deploy — 1 passed.
+- Result summary:
+  - Netdev table creation now explains the important runtime-safe model before save: only `filter/ingress`, one required device, and no `egress` on the current stand profile.
+
+## 1.284) Firewall roadmap: flowtable backend-first design
+
+- Step scope:
+  - Added `docs/FIREWALL_FLOWTABLE_DESIGN.ru.md` as the backend-first design for nftables flowtables.
+  - Captured the intended model as a first-class firewall resource for `inet/ip/ip6`, plus optional rule statement `flow add @name`.
+  - Documented safety invariants, proposed non-breaking API shape, optional rule payload fields, renderer ordering, backend implementation order, UI placement, open decisions, and non-goals.
+  - Updated `docs/FIREWALL_CAPABILITY_MATRIX.ru.md`: flowtables and `flow add @flowtable` are now `planned/design documented`, with the next step set to backend store/domain tests before API/UI exposure.
+  - Updated `docs/FIREWALL_ADMIN_GUIDE.ru.md` to keep flowtables out of the current user tutorial while linking the design document.
+  - Wire/API shape, backend behavior, runtime renderer, production UI code, and IPsec code were not changed.
+- Ownership moved:
+  - No module ownership moved in this step; this is roadmap/design documentation only.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `rg -n "flowtable|flow add" docs/FIREWALL_FLOWTABLE_DESIGN.ru.md docs/FIREWALL_CAPABILITY_MATRIX.ru.md docs/FIREWALL_ADMIN_GUIDE.ru.md` — design links and roadmap status present.
+- Result summary:
+  - The next large nftables capability now has an explicit backend-first plan, so implementation can proceed safely without squeezing flowtables into the existing rule/action model prematurely.
+
+## 1.285) Firewall docs/UX: advanced walkthrough scenarios I-O
+
+- Step scope:
+  - Returned the firewall workstream to the admin-instruction plan after the flowtable design detour.
+  - Extended `docs/FIREWALL_ADMIN_GUIDE.ru.md` with second-level advanced scenarios:
+    - I. `raw` table: `notrack` / `nftrace`
+    - J. `mangle`: packet mark / conntrack mark
+    - K. named `limit` / `quota` object
+    - L. `ct_helper` / `ct_timeout` / `ct_expectation`
+    - M. dynamic set statement
+    - N. verdict map statement
+    - O. advanced fields inventory sanity check
+  - Added the same I-O queue to `docs/FIREWALL_ADMIN_WALKTHROUGH_TESTPLAN.ru.md` with initial `not run` status, so the next work is stand walkthrough evidence rather than speculative UI changes.
+  - Kept the operating rule explicit: pass what already works, file/fix only real UX gaps, and avoid widening wire/API or behavior during walkthrough.
+  - Wire/API shape, backend behavior, runtime renderer, frontend behavior, and IPsec code were not changed.
+- Ownership moved:
+  - No module ownership moved in this step; this is user-facing firewall documentation and walkthrough planning only.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `rg -n "Advanced сценарии второго уровня|Сценарий I|Сценарий J|Сценарий K|Сценарий L|Сценарий M|Сценарий N|Сценарий O|notrack|nftrace|ct expectation|Dynamic set statement|Verdict map statement" docs/FIREWALL_ADMIN_GUIDE.ru.md docs/FIREWALL_ADMIN_WALKTHROUGH_TESTPLAN.ru.md` — scenario queue present in both docs.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 26 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 304 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed.
+- Result summary:
+  - Advanced firewall validation now has a concrete scenario queue after A-H, with Scenario I (`raw`: `notrack` / `nftrace`) as the next live stand walkthrough candidate.
+
+## 1.286) Firewall docs/UX: walkthrough scenario I raw notrack/nftrace
+
+- Step scope:
+  - Ran the Scenario I walkthrough path on the stand UI: `policy -> raw -> Add -> Advanced match`, enable `nftrace` and `notrack`, save the rule, and verify the returned API payload.
+  - Added focused Playwright coverage in `webui/tests/firewall-rules.spec.ts` for the user path:
+    - verify `filter` context shows `nftrace (raw table only)` and `notrack (raw table only)`;
+    - create a raw rule through the UI with `nftrace=true` and `notrack=true`;
+    - verify the saved rule remains in table `raw`;
+    - clean up the temporary rule.
+  - Investigated the first e2e timeout: raw rule save worked, but the test immediately opened a second Add modal while the page was still in post-save busy/refresh state. The test order was corrected; no product UX gap was recorded for Scenario I.
+  - Updated `docs/FIREWALL_ADMIN_WALKTHROUGH_TESTPLAN.ru.md`: Scenario I is pass, including scores and result notes.
+  - Wire/API shape, backend behavior, runtime renderer, production UI behavior, and IPsec code were not changed.
+- Ownership moved:
+  - No module ownership moved in this step; this is e2e coverage plus documentation evidence.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "walkthrough I" --project=chromium` — first run timed out because of test ordering during post-save busy/refresh state.
+  - Stand cleanup API for leftover `walkthrough-i-raw-*` rule — HTTP 200.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "walkthrough I" --project=chromium` after test-order correction — 1 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 26 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 304 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed.
+- Result summary:
+  - The raw `notrack`/`nftrace` scenario is passable from the unified Policy UI, and raw-only controls are explained outside `raw` before save.
+
+## 1.287) Firewall docs/UX: walkthrough scenario J mangle mark/ct mark
+
+- Step scope:
+  - Ran the Scenario J walkthrough path on the stand UI: `policy -> mangle -> Add -> Action`, enable `meta mark set` and `ct mark set`, save the rule, and verify the returned API payload.
+  - Added focused Playwright coverage in `webui/tests/firewall-rules.spec.ts` for the user path:
+    - select built-in `mangle`;
+    - create a `forward` rule through the UI with `mark_set=0x10` and `ct_mark_set=0x20`;
+    - verify the saved rule remains in table `mangle`;
+    - clean up the temporary rule.
+  - Updated `docs/FIREWALL_ADMIN_WALKTHROUGH_TESTPLAN.ru.md`: Scenario J is pass, including scores and result notes.
+  - Wire/API shape, backend behavior, runtime renderer, production UI behavior, and IPsec code were not changed.
+- Ownership moved:
+  - No module ownership moved in this step; this is e2e coverage plus documentation evidence.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "walkthrough J" --project=chromium` — 1 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 26 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 304 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed.
+- Result summary:
+  - The mangle packet mark / conntrack mark scenario is passable from the unified Policy UI; mark setters save through the visible Action tab and persist with the expected payload fields.
+
+## 1.288) Firewall docs/UX: walkthrough scenario K named limit/quota objects
+
+- Step scope:
+  - Ran the Scenario K walkthrough path on the stand UI: create named `limit` and `quota` objects in `objects -> inet/filter`, then bind both in `policy -> filter -> Add -> Action`.
+  - Added focused Playwright coverage in `webui/tests/firewall-rules.spec.ts` for the user path:
+    - create a `limit` object through the visible Objects modal;
+    - create a `quota` object through the visible Objects modal;
+    - create a filter rule through the visible Add Rule form;
+    - select both named objects in `limit object` and `quota object`;
+    - verify the saved rule has `limit_name` and `quota_name`;
+    - clean up the temporary rule and objects.
+  - Updated `docs/FIREWALL_ADMIN_WALKTHROUGH_TESTPLAN.ru.md`: Scenario K is pass, including scores and result notes.
+  - Wire/API shape, backend behavior, runtime renderer, production UI behavior, and IPsec code were not changed.
+- Ownership moved:
+  - No module ownership moved in this step; this is e2e coverage plus documentation evidence.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "walkthrough K" --project=chromium` — 1 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 26 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 304 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed.
+- Result summary:
+  - The named limit/quota object scenario is passable from the unified Firewall UI: table-scoped objects can be created in `objects` and selected in the existing Add Rule form for `inet/filter`.
+
+## 1.289) Firewall docs/UX: walkthrough scenario L ct object bindings
+
+- Step scope:
+  - Attempted the Scenario L walkthrough path on the stand UI for `ct_helper`, `ct_timeout`, and `ct_expectation` objects.
+  - Confirmed backend/API capability on the stand:
+    - direct `ct_expectation` create for `inet/filter` returned HTTP 201;
+    - temporary `ct_helper`, `ct_timeout`, and `ct_expectation` objects were created and later deleted successfully.
+  - Found a real UX/performance blocker: object list/refresh latency can block the UI path for tens of seconds.
+    - measured `GET /firewall/objects?family=inet&table=filter` around 24s on one probe;
+    - repeated probe measured around 56s for the first list, then around 154ms/145ms for subsequent lists.
+  - Updated `docs/FIREWALL_ADMIN_WALKTHROUGH_TESTPLAN.ru.md`: Scenario L is `partial`, and `FW-UX-006` records the blocking object refresh/list issue.
+  - Added a focused Scenario L e2e draft in `webui/tests/firewall-rules.spec.ts`, but marked it skipped until `FW-UX-006` is fixed because the current stand UI path times out even with a 120s test timeout.
+  - Wire/API shape, backend behavior, runtime renderer, production UI behavior, and IPsec code were not changed.
+- Ownership moved:
+  - No module ownership moved in this step; this is e2e evidence plus documentation of a UX/performance blocker.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "walkthrough L" --project=chromium` — failed on object modal remaining busy after `ct_expectation` save while the object was actually created.
+  - Direct API probe for `ct_expectation` create/delete on the stand — HTTP 201 create, HTTP 200 delete.
+  - Latency probe for `/firewall/objects?family=inet&table=filter` — first list around 56s, subsequent lists around 154ms/145ms.
+  - Stand cleanup for temporary `walkthrough-l-ct-*` rules/objects — HTTP 200 deletes.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 26 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 304 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed.
+- Result summary:
+  - Scenario L is not safe to mark pass yet: ct object backend support exists, but the visible UI walkthrough has a real blocking refresh/list latency gap (`FW-UX-006`).
+
+## 1.290) Firewall UX: close FW-UX-006 object save blocking refresh
+
+- Step scope:
+  - Fixed the visible Scenario L blocker in the frontend object save flow.
+  - `webui/src/pages/firewall/useFirewallObjectActions.ts` now closes the object modal after successful `upsertFirewallObject`, then refreshes the object list in the background and surfaces refresh errors through the existing error state.
+  - Re-enabled the Scenario L Playwright walkthrough in `webui/tests/firewall-rules.spec.ts` and stabilized its Protocol selector so the test targets the actual second combobox in the Add Rule modal.
+  - Updated `docs/FIREWALL_ADMIN_WALKTHROUGH_TESTPLAN.ru.md`: Scenario L is now `pass`, and `FW-UX-006` is marked fixed/verified.
+  - Wire/API shape, backend behavior, runtime renderer, and IPsec code were not changed.
+- Ownership moved:
+  - No module ownership moved in this step; this is a frontend UX flow fix plus e2e/documentation evidence.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `npm run build` in `webui` — passed.
+  - Deployed `webui/dist` to `root@132.243.237.120:/root/awg-manager/webui/dist/` for stand validation.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "walkthrough L" --project=chromium` — first rerun reproduced timeout around Protocol selector while confirming the page reached Add Rule; debug run identified the stale `label:has-text('Protocol')` selector.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "walkthrough L" --project=chromium` after selector stabilization — 1 passed in 24.4s.
+- Result summary:
+  - Scenario L is now passable from the unified Firewall UI: ct helper, ct timeout, and ct expectation objects can be bound through the existing Add Rule form.
+  - `/firewall/objects?family=inet&table=filter` cold-list latency remains a future performance candidate, but it no longer blocks closing object save flow for this walkthrough.
+
+## 1.291) Firewall docs/UX: walkthrough scenario M dynamic set statement
+
+- Step scope:
+  - Ran the Scenario M walkthrough coverage on the stand for guarded `inet` dynamic set statements.
+  - Confirmed the existing Add Rule Action tab can save a rule with `set_stmt_op=add`, `set_stmt_name`, `set_stmt_expr=ip saddr`, and `set_stmt_timeout=10s`.
+  - Updated `docs/FIREWALL_ADMIN_WALKTHROUGH_TESTPLAN.ru.md`: Scenario M is now `pass`, including scores and result notes.
+  - Wire/API shape, backend behavior, runtime renderer, production UI behavior, and IPsec code were not changed.
+- Ownership moved:
+  - No module ownership moved in this step; this is walkthrough validation plus documentation evidence.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `curl -I --max-time 10 http://132.243.237.120:8787/ui/` — stand responded; HTTP HEAD is unsupported by the simple server, but service was reachable.
+  - `ssh root@132.243.237.120 'hostname; ss -ltnp | grep 8787 || true; ps -ef | grep -E "api_core|awg-manager" | grep -v grep || true'` — confirmed `api_core.py` listening on `0.0.0.0:8787`.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "dynamic set statement" --project=chromium` — first attempt hit a transient connect timeout.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "dynamic set statement" --project=chromium` — repeated attempt passed in 17.9s.
+- Result summary:
+  - Scenario M is passable from the unified Firewall UI for the agreed runtime-safe `inet` addr/port scope.
+  - No new UX gap was filed; manual walkthrough can later decide whether dynamic set creation needs extra helper text for `dynamic=true`/`size`/`timeout`.
+
+## 1.292) Firewall docs/UX: walkthrough scenario N verdict map statement
+
+- Step scope:
+  - Ran the Scenario N walkthrough coverage on the stand for guarded named `vmap` statements.
+  - Confirmed the existing Add Rule Action tab can save a rule with `vmap_stmt_name` and `vmap_stmt_expr=meta l4proto`, using a protocol-key `vmap` collection (`tcp:accept`, `udp:drop`, `icmp:return`).
+  - Updated `docs/FIREWALL_ADMIN_WALKTHROUGH_TESTPLAN.ru.md`: Scenario N is now `pass`, including scores and result notes.
+  - Wire/API shape, backend behavior, runtime renderer, production UI behavior, and IPsec code were not changed.
+- Ownership moved:
+  - No module ownership moved in this step; this is walkthrough validation plus documentation evidence.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "verdict map" --project=chromium` — 1 passed in 19.5s.
+- Result summary:
+  - Scenario N is passable from the unified Firewall UI for the agreed runtime-safe `inet` protocol-to-verdict scope.
+  - No new UX gap was filed; manual walkthrough can later decide whether Collections needs extra `map` vs `vmap` helper text.
+
+## 1.293) Firewall docs/UX: walkthrough scenario O advanced inventory sanity
+
+- Step scope:
+  - Ran the Scenario O advanced Add Rule inventory checks on the stand.
+  - Verified built-in contexts (`filter`, `nat`, `raw`, `mangle`), custom `ip/ip6`, custom `bridge`, custom `netdev`, and why-disabled hints for unsupported advanced controls.
+  - Adjusted one Playwright assertion in `webui/tests/firewall-policy-v2-bridge.spec.ts` to check absence of the exact `ct expectation object` field label instead of matching the text inside the visible why-disabled hint.
+  - Updated `docs/FIREWALL_ADMIN_WALKTHROUGH_TESTPLAN.ru.md`: Scenario O is now `pass`, and the A-O walkthrough queue is fully covered.
+  - Wire/API shape, backend behavior, runtime renderer, production UI behavior, and IPsec code were not changed.
+- Ownership moved:
+  - No module ownership moved in this step; this is walkthrough validation plus test/doc alignment.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-add-rule-fields-completeness.spec.ts --project=chromium` — initial parallel run had one transient login timeout; 2 passed, 1 failed at login `Checking...`.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-add-rule-fields-completeness.spec.ts --project=chromium --workers=1` — 3 passed.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "action choices|raw/mangle|base fields" --project=chromium --workers=1` — 3 passed.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-policy-v2-bridge.spec.ts tests/firewall-policy-v3-netdev.spec.ts -g "action choices|base fields" --project=chromium --workers=1` — first run had 5 passed and 2 failures: stale bridge substring assertion, and netdev table selector timeout.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-policy-v2-bridge.spec.ts tests/firewall-policy-v3-netdev.spec.ts -g "Add Rule action choices" --project=chromium --workers=1` after test assertion alignment — 2 passed.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-why-disabled-hints.spec.ts --project=chromium --workers=1` — 1 passed.
+- Result summary:
+  - Scenario O did not uncover a new product UX gap: context-specific Add Rule fields and why-disabled hints match the intended firewall model.
+  - Remaining low-priority manual-review topics are explanatory copy only, not functional blockers.
+
+## 1.294) Firewall docs: admin guide verified status after A-O walkthrough
+
+- Step scope:
+  - Updated `docs/FIREWALL_ADMIN_GUIDE.ru.md` with a concise verified-status section after the A-O walkthrough queue was completed on the stand.
+  - The guide now separates already verified UI paths from low-priority UX polish and roadmap-only topics.
+  - Linked the user-facing route back to the walkthrough testplan, capability matrix, and flowtable design context.
+  - Wire/API shape, backend behavior, frontend runtime behavior, and IPsec code were not changed.
+- Ownership moved:
+  - No module ownership moved in this step; this is documentation consolidation after completed firewall walkthrough validation.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 26 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed.
+  - `python3 -m pytest -q tests` — 304 passed.
+- Result summary:
+  - The admin guide now reflects the tested A-O scope: basic Policy, collections, objects, bridge/netdev contexts, raw/mangle, named ct/stateful objects, dynamic set statement, verdict map statement, and advanced field sanity checks.
+
+## 1.295) Firewall docs: Add Rule field reference started
+
+- Step scope:
+  - Added `docs/FIREWALL_ADD_RULE_FIELD_REFERENCE.ru.md` as a living user-facing reference for individual Add Rule fields.
+  - Documented `Source address` with clear user semantics: one IP/CIDR prefix or one target collection reference as the desired UX model.
+  - Documented the current implementation caveat: IP/CIDR is already backend-validated, while `@collection` support for this field needs a separate validation/render check before being promised as production behavior.
+  - Added a link from `docs/FIREWALL_ADMIN_GUIDE.ru.md` to the new field reference.
+  - Wire/API shape, backend behavior, frontend runtime behavior, and IPsec code were not changed.
+- Ownership moved:
+  - No module ownership moved in this step; this is documentation and UX requirement capture only.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 26 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed.
+  - `python3 -m pytest -q tests` — 304 passed.
+- Result summary:
+  - Add Rule field explanations now have a dedicated place to capture the practical UI language we discuss on the stand, starting with `Source address`.
+
+## 1.296) Firewall backend: L3 address match accepts collection references
+
+- Step scope:
+  - Checked the `Source address` Add Rule field validation behind the UI placeholder `192.168.1.0/24 or @trusted_hosts`.
+  - Root cause: `backend/domains/firewall/rule_ops.py::normalize_proto_and_basic_match_fields` validated `src`/`dst` only through `ipaddress.ip_network(...)`, so `@collection` references were rejected despite the UI placeholder.
+  - Added failing tests first for `@trusted_hosts`/`@servers` and comma-separated invalid source values in `tests/test_firewall_rule_ops.py`.
+  - Updated `rule_ops.py` so `src`/`dst` accept exactly one IP/CIDR prefix or one `@collection` reference, and reject comma/inline-list values with a user-readable validation error.
+  - Updated `docs/FIREWALL_ADD_RULE_FIELD_REFERENCE.ru.md` with the new validation status and the remaining next-layer check: collection existence/type validation before runtime apply.
+  - Updated module ownership docs RU/EN for `normalize_proto_and_basic_match_fields` L3 address match responsibility.
+  - Wire/API shape and IPsec code were not changed.
+- Ownership moved:
+  - `backend/domains/firewall/rule_ops.py::normalize_proto_and_basic_match_fields` now explicitly owns L3 address match token validation for one IP/CIDR prefix or one `@collection` reference in `src`/`dst`.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed; existing firewall rule create/update paths continue to call the same domain normalization pipeline.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py -k "l3_address_collection_refs or normalize_proto_and_basic_match_fields"` — 2 passed, 25 deselected.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 27 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed.
+  - `python3 -m pytest -q tests` — 305 passed.
+  - Stand deploy: backed up and copied `backend/domains/firewall/rule_ops.py` to `root@132.243.237.120:/root/awg-manager/backend/domains/firewall/rule_ops.py`, restarted `api_core.py` on `:8787`, `/health` returned 200.
+  - Stand smoke: `POST /firewall/rules` accepted `src=@validation_src_*` with a temporary address collection, rejected `src=192.0.2.1,192.0.2.2` with HTTP 400 and `src must be one IP/CIDR prefix or one @collection reference`; temporary rule/set cleanup confirmed.
+- Result summary:
+  - `Source address` and `Destination address` now validate the UI-promised shape: one IP/CIDR prefix or one `@collection` reference; multi-value inline input is rejected with a clear field-specific error locally and on the stand.
+
+## 1.297) Firewall docs: Destination address field reference
+
+- Step scope:
+  - Expanded `docs/FIREWALL_ADD_RULE_FIELD_REFERENCE.ru.md` for the `Destination address` Add Rule field.
+  - Documented user-facing semantics, examples, accepted values, invalid multi-value forms, collection usage through `@servers`, current validation status, and the next UX/backend layer for collection existence/type checks.
+  - Wire/API shape, backend behavior, frontend runtime behavior, and IPsec code were not changed.
+- Ownership moved:
+  - No module ownership moved in this step; this is field-reference documentation only.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 27 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed.
+  - `python3 -m pytest -q tests` — 305 passed.
+- Result summary:
+  - `Destination address` now has the same practical user-facing field reference coverage as `Source address`: one IP/CIDR prefix or one `@collection` reference, with multi-value input routed to collections.
+
+## 1.298) Firewall backend/UI: Protocol accepts numeric protocol IDs
+
+- Step scope:
+  - Checked the `Protocol` Add Rule field behind the UI placeholder `any / tcp / udp / icmp`.
+  - Added failing tests first for numeric protocol IDs: `6`/`17` with ports, `1` without ports, invalid `256`, and `1` with port rejection.
+  - Updated `backend/domains/firewall/rule_ops.py` so `proto` accepts named protocols (`tcp`/`udp`/`icmp`/`icmpv6`) and one numeric protocol ID `0..255`.
+  - Kept port eligibility strict: `Source port`/`Destination port` require `tcp`, `udp`, `6`, or `17`.
+  - Updated the rule renderer so numeric TCP/UDP protocol IDs still render valid transport port expressions (`tcp dport ...` / `udp dport ...`).
+  - Updated the Add Rule UI field from a closed dropdown to a text input so the user can enter protocol numbers directly.
+  - Updated `docs/FIREWALL_ADD_RULE_FIELD_REFERENCE.ru.md` with the `Protocol` field instructions and current numeric-ID behavior.
+  - Wire/API field shape is unchanged (`proto` remains the same payload field); IPsec code was not changed.
+- Ownership moved:
+  - `backend/domains/firewall/rule_ops.py::validate_action_target_reject_and_proto_fields` now explicitly owns L4 protocol token validation for named protocols and numeric protocol IDs, including port eligibility.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed; existing firewall rule create/update paths continue to call the same domain normalization pipeline.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py -k "numeric_protocol or validate_action_target_reject_and_proto_fields"` — 2 passed, 26 deselected.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 28 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests/test_manager_access_facade.py` — 47 passed.
+  - `python3 -m pytest -q tests` — 306 passed.
+  - `npm run build` in `webui/` — passed; Vite emitted the expected large-chunk warning only.
+  - Stand deploy: backed up and copied `backend/domains/firewall/rule_ops.py` and `webui/dist` to `root@132.243.237.120:/root/awg-manager`, restarted `api_core.py` on `:8787`, `/health` returned 200.
+  - Stand smoke: `POST /firewall/rules` accepted `proto=6` with `dport=443`; rejected `proto=1` with `dport=443` using HTTP 400 `dport requires proto tcp or udp`; rejected `proto=256` using HTTP 400 `proto must be tcp, udp, icmp, icmpv6, or numeric protocol id 0..255`; temporary rule cleanup confirmed.
+- Result summary:
+  - `Protocol` now supports both user-friendly names and numeric protocol IDs while preserving the same API field shape. The UI allows direct numeric entry, and backend validation keeps ports limited to TCP/UDP semantics.
+
+## 1.299) Firewall UI: Protocol combo input suggestions
+
+- Step scope:
+  - Adjusted the Add Rule `Protocol` field UX after stand review: the field should remain writable and also expose a default list of popular protocols.
+  - Updated `webui/src/pages/firewall/PolicyRuleEditorBaseTab.tsx` to use a text input with an HTML `datalist` of safe popular values: `tcp`, `udp`, `icmp`, `icmpv6`, `6`, `17`, `1`, `58`, `47`, `50`.
+  - Kept GRE/ESP suggestions numeric (`47`/`50`) because backend validation currently accepts extended protocols by numeric ID, not by `gre`/`esp` name.
+  - Updated `docs/FIREWALL_ADD_RULE_FIELD_REFERENCE.ru.md` so the field reference describes the combo input behavior.
+  - Wire/API shape, backend behavior, and IPsec code were not changed.
+- Ownership moved:
+  - No module ownership moved in this step; this is frontend UX polish for the existing `proto` payload field and user documentation.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `npm run build` in `webui/` — passed; Vite emitted the expected large-chunk warning only.
+  - Stand deploy: backed up and copied `webui/dist` to `root@132.243.237.120:/root/awg-manager/webui/dist`; deployed `index.html` references `index-BVp_nWF9.js`, and the bundle contains `type or choose: tcp / udp / 6 / 17`.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-policy-v3-netdev.spec.ts -g "netdev walkthrough" --project=chromium` — 1 passed on the stand.
+  - `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "walkthrough L" --project=chromium` — reached the created `walkthrough-l-ct-*` rule with `proto=tcp`, then hit the existing 120s scenario timeout during cleanup (`apiRequestContext.delete: Request context disposed`). This did not reproduce a Protocol input selector failure, but the long scenario remains flaky/slow.
+- Result summary:
+  - The `Protocol` field now supports the requested write-or-pick UX: users can type arbitrary accepted protocol IDs/names while common values are offered as dropdown suggestions. Netdev Add Rule walkthrough passed against the deployed stand.
+
+## 1.300) Firewall UI tests: walkthrough L timeout stabilization
+
+- Step scope:
+  - Continued after the Protocol combo input rollout and investigated the failing `firewall walkthrough L` Playwright rerun.
+  - Root cause from the error context: the new `Protocol` input selector worked and the rule row `walkthrough-l-ct-*` with `proto=tcp` appeared in the Policy table; the failure occurred later when the scenario hit the global 120s timeout during cleanup (`apiRequestContext.delete: Request context disposed`).
+  - Increased only this long walkthrough timeout from `120_000` to `180_000` because it creates three named ct objects, saves a rule through UI, verifies API state, and then deletes the rule/objects through apply-backed API paths.
+  - Product behavior, backend behavior, wire/API shape, and IPsec code were not changed.
+- Ownership moved:
+  - No module ownership moved; this is test stability around the existing walkthrough coverage.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `npm run build` in `webui/` — passed; Vite emitted the expected large-chunk warning only.
+  - `npx playwright test tests/firewall-rules.spec.ts -g "walkthrough L" --list` — listed the expected single Chromium test, confirming Playwright can parse/select the updated scenario.
+  - Stand rerun/cleanup — skipped for now because both SSH and HTTP health checks to `132.243.237.120:8787` timed out from this environment.
+- Result summary:
+  - The long walkthrough L test no longer has the same too-tight global timeout that caused cleanup to be cut off after the Protocol input path had already succeeded. Stand cleanup and a full rerun remain pending until the stand is reachable again.
+
+## 1.301) Firewall UI: Protocol always-visible combo input
+
+- Step scope:
+  - Adjusted the Add Rule `Protocol` field after stand/UI review: it should not be hidden behind `+`; it should be visible by default, open a short dropdown of common protocols, and still allow typing a protocol name or numeric protocol ID directly in the same control.
+  - Updated `webui/src/pages/firewall/PolicyRuleEditorBaseTab.tsx` so `Protocol` is a single-token combo input (`input[list]`) with popular suggestions: `tcp`, `udp`, `icmp`, `icmpv6`, `6`, `17`, `1`, `58`, `47`, `50`.
+  - Kept the payload model unchanged: empty value means `any`/no `proto` match, and non-empty value is stored in the existing `proto` field.
+  - Added a small clear button that resets `proto` and dependent port fields, because ports are only valid for TCP/UDP semantics.
+  - Updated Playwright selectors for the always-visible field and updated `docs/FIREWALL_ADD_RULE_FIELD_REFERENCE.ru.md` with the final field behavior.
+  - Wire/API shape, backend behavior, and IPsec code were not changed in this step.
+- Ownership moved:
+  - No module ownership moved in this step; this is frontend UX polish and field-reference documentation for the existing firewall `proto` rule field.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `npm run build` in `webui/` — passed; Vite emitted the expected large-chunk warning only.
+  - Stand deploy/check — pending fresh note; previous deploy target is `root@132.243.237.120:/root/awg-manager/webui/dist`.
+- Result summary:
+  - The `Protocol` control now matches the agreed UX direction: one protocol only, selectable from common defaults or typed manually as a name/number; empty field remains equivalent to `any`.
+
+## 1.302) Stand incident: nftables.conf UDP 8787 root cause
+
+- Step scope:
+  - Investigated the stand lockout/glitch after the user requested a full rule cleanup.
+  - Confirmed `/etc/wg-manager/firewall_rules.json` and the saved manager backup did not contain the problematic `Allow loopback` / `Allow established/related` / `Allow SSH` / `udp dport 8787` / final `drop` rules.
+  - Traced the bad runtime rules to the stand-level persisted `/etc/nftables.conf`, loaded by `nftables.service` during boot/reload before the AWG Manager API starts.
+  - Root cause: `/etc/nftables.conf` allowed `udp dport 8787`, but AWG Manager UI/API listens on TCP `8787`; with the following final `drop`, external UI/API traffic was blocked.
+  - Backed up and patched the stand file from `udp dport 8787 accept` to `tcp dport 8787 accept comment "Allow AWG Manager UI/API"`.
+  - Runtime nft ruleset was intentionally left flushed/empty after the emergency cleanup; the corrected persisted config is ready for the next `nftables.service` reload/reboot.
+  - Wire/API shape, backend behavior, frontend source behavior, and IPsec code were not changed in this step.
+- Ownership moved:
+  - No repository module ownership moved; this is stand/runtime incident remediation.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - Stand backup: `/root/firewall-cleanup-backups/nftables.conf.before-tcp8787-fix-20260609094735`.
+  - `nft -c -f /etc/nftables.conf` on `132.243.237.120` — passed.
+  - `nft list ruleset | wc -l` on `132.243.237.120` — `0`, confirming runtime remained flushed after cleanup.
+  - `curl -H "X-API-Key: ..." http://127.0.0.1:8787/health` on the stand — `HTTP/1.0 200 OK`.
+  - External `curl -H "X-API-Key: ..." http://132.243.237.120:8787/health` — `HTTP/1.0 200 OK`.
+- Result summary:
+  - The lockout source was not the firewall rule renderer or manager rule JSON. It was the stand's persisted system nftables config using UDP instead of TCP for port `8787` before a final `drop`. The persisted config is now corrected, while the live ruleset remains clean.
+
+## 1.303) Stand reboot check: remove system nftables.conf
+
+- Step scope:
+  - Followed the stand strategy that AWG Manager should own firewall runtime loading instead of the system `/etc/nftables.conf` snapshot.
+  - Backed up and removed `/etc/nftables.conf` on `132.243.237.120`, then rebooted the stand.
+  - Verified after reboot that AWG Manager API and restore services came back up and loaded manager-owned empty/accept-policy firewall tables from manager state.
+  - Wire/API shape, backend source behavior, frontend source behavior, and IPsec code were not changed in this step.
+- Ownership moved:
+  - No repository module ownership moved; this is stand/runtime configuration cleanup.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - Stand backup: `/root/firewall-cleanup-backups/nftables.conf.before-delete-20260609095631`.
+  - `/etc/nftables.conf` exists check after reboot — `no`.
+  - `systemctl is-active awg-manager-api.service` — `active`.
+  - `systemctl is-active awg-manager-restore.service` — `active`.
+  - `systemctl is-active nftables.service` — `failed` because the config file was intentionally removed while the service remains enabled.
+  - `nft list ruleset | wc -l` — `85`; runtime contains empty built-in/custom manager tables with `policy accept`, no final `drop` and no `8787` rule.
+  - Local `/health` on the stand — `HTTP/1.0 200 OK`.
+  - External `/health` on `http://132.243.237.120:8787/health` — `HTTP/1.0 200 OK`.
+  - API `/firewall` — `api_rules_count=0 active=None`.
+- Result summary:
+  - After deleting the system nftables config and rebooting, the stand stays reachable and the live ruleset is populated by AWG Manager restore/apply state rather than the stale system snapshot. Remaining cleanup question: disable or mask `nftables.service` to avoid a deliberately failed system unit.
+
+## 1.304) Stand boot ownership: disable system nftables.service
+
+- Step scope:
+  - Removed the second firewall runtime owner from the stand by disabling the system `nftables.service` autostart after `/etc/nftables.conf` was removed.
+  - Rebooted `132.243.237.120` and verified that AWG Manager restore/API services are the active firewall runtime loading path.
+  - Confirmed the system nftables unit is no longer failed after boot: it is `disabled`, `inactive`, and not failed.
+  - Wire/API shape, backend source behavior, frontend source behavior, and IPsec code were not changed in this step.
+- Ownership moved:
+  - No repository module ownership moved; this is stand/runtime boot ownership cleanup.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - Stand service status backup: `/root/firewall-cleanup-backups/nftables.service.status-before-disable-20260609100154.txt`.
+  - `systemctl disable nftables.service` on `132.243.237.120` — removed `/etc/systemd/system/sysinit.target.wants/nftables.service`.
+  - Reboot smoke: SSH came back up.
+  - `/etc/nftables.conf` exists check after reboot — `no`.
+  - `systemctl is-enabled nftables.service` — `disabled`.
+  - `systemctl is-active nftables.service` — `inactive`.
+  - `systemctl is-failed nftables.service` — `inactive`.
+  - `systemctl is-active awg-manager-api.service` — `active`.
+  - `systemctl is-active awg-manager-restore.service` — `active`.
+  - `nft list ruleset | wc -l` — `85`; runtime contains manager-owned empty built-in/custom tables with `policy accept`, no stale final `drop` and no stale `8787` rule.
+  - Local `/health` on the stand — `HTTP/1.0 200 OK`.
+  - External `/health` on `http://132.243.237.120:8787/health` — `HTTP/1.0 200 OK`.
+  - API `/firewall` — `api_rules_count=0 active=None`.
+- Result summary:
+  - The stand now has a single firewall runtime owner at boot: AWG Manager restore/apply. The stale system nftables loader is disabled and no longer creates a failed unit or loads old rules before the app.
+
+## 1.305) Firewall UI: Protocol custom editable combobox
+
+- Step scope:
+  - Replaced the native browser `datalist` Protocol control after stand/UI review because it rendered a visually inconsistent native dropdown arrow and popup.
+  - Implemented a small custom editable combobox in `webui/src/pages/firewall/PolicyRuleEditorBaseTab.tsx`: a normal text input, a styled chevron button, a clear button when a value is set, and a Tailwind-styled listbox of popular protocol suggestions.
+  - Kept the same rule payload field: empty input means `any`; typed or selected values still populate `proto` as a single token.
+  - Updated the field reference and Playwright selector to the shorter placeholder `any (tcp, udp, 6, 17)`.
+  - Wire/API shape, backend behavior, and IPsec code were not changed in this step.
+- Ownership moved:
+  - No module ownership moved; this is frontend UX polish for the existing firewall `proto` rule field.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `npm run build` in `webui/` — passed; Vite emitted the expected large-chunk warning only.
+  - Stand deploy: backed up `/root/awg-manager/webui/dist` to `/root/awg-manager/webui/dist.backup.protocol-custom-combobox-20260609151512` and deployed bundle `assets/index-DCSdLAuJ.js`.
+  - Stand smoke: local `/health` — `HTTP/1.0 200 OK`; `systemctl is-enabled nftables.service` — `disabled`; `nft list ruleset | wc -l` — `85`, with no stale `drop`/`8787` rules found by grep.
+  - In-app browser QA on `http://132.243.237.120:8787/ui/?v=protocol-custom-combobox-qa2` — opened Firewall -> Add, verified one `Protocol` input with placeholder `any (tcp, udp, 6, 17)`, styled listbox visible, first suggestions `tcp/udp/icmp/icmpv6`, and no console errors/warnings.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 28 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 306 passed.
+- Result summary:
+  - The Protocol field no longer relies on browser-native `datalist` rendering. It now matches the current UI style while preserving editable name/number input and one-protocol semantics.
+
+## 1.306) Firewall UI: compact Protocol combobox options
+
+- Step scope:
+  - Kept the accepted custom Protocol combobox style and removed duplicated option text from the dropdown.
+  - Simplified suggestions so each row has a single primary value (`tcp`, `udp`, `icmp`, `icmpv6`, `6`, `17`, `1`, `58`, `47`, `50`) plus one short hint on the right (`name`, `tcp`, `udp`, `icmp`, `icmpv6`, `gre`, `esp`).
+  - Kept editable input behavior and one-protocol semantics unchanged.
+  - Wire/API shape, backend behavior, and IPsec code were not changed in this step.
+- Ownership moved:
+  - No module ownership moved; this is frontend UX polish for the existing firewall `proto` rule field.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `npm run build` in `webui/` — passed; Vite emitted the expected large-chunk warning only.
+  - Stand deploy: backed up `/root/awg-manager/webui/dist` to `/root/awg-manager/webui/dist.backup.protocol-combobox-compact-20260609152058` and deployed bundle `assets/index-Cl1g3r4u.js`.
+  - Stand smoke: local `/health` — `HTTP/1.0 200 OK`; `systemctl is-enabled nftables.service` — `disabled`; `nft list ruleset | wc -l` — `85`.
+  - In-app browser QA on `http://132.243.237.120:8787/ui/?v=protocol-combobox-compact` — opened Firewall -> Add, verified compact dropdown option text without duplicated labels, and no console errors/warnings.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 28 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 306 passed.
+- Result summary:
+  - The Protocol dropdown now keeps the cleaner accepted style while removing duplicated labels. Numeric protocol options remain visible and readable.
+
+## 1.307) Firewall UI: Protocol combobox name-left number-right
+
+- Step scope:
+  - Updated the accepted custom Protocol combobox option layout after stand/UI review.
+  - Suggestions now show the protocol name on the left and its numeric ID on the right: `tcp — 6`, `udp — 17`, `icmp — 1`, `icmpv6 — 58`, `gre — 47`, `esp — 50`.
+  - Kept manual typing support and one-protocol semantics unchanged.
+  - For `gre` and `esp`, the UI displays the protocol names but stores the backend-compatible numeric values `47` and `50`, because backend validation currently accepts extended protocols by numeric ID.
+  - Wire/API shape, backend behavior, and IPsec code were not changed in this step.
+- Ownership moved:
+  - No module ownership moved; this is frontend UX polish for the existing firewall `proto` rule field.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `npm run build` in `webui/` — passed; Vite emitted the expected large-chunk warning only.
+  - Stand deploy: backed up `/root/awg-manager/webui/dist` to `/root/awg-manager/webui/dist.backup.protocol-name-number-20260609173044` and deployed bundle `assets/index-DJxC5ttT.js`.
+  - Stand smoke: local `/health` — `HTTP/1.0 200 OK`; `systemctl is-enabled nftables.service` — `disabled`; `nft list ruleset | wc -l` — `85`.
+  - In-app browser QA on `http://132.243.237.120:8787/ui/?v=protocol-name-number-qa` — opened Firewall -> Add, verified visible options `tcp6`, `udp17`, `icmp1`, `icmpv658`, `gre47`, `esp50`, and no console errors/warnings.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 28 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 306 passed.
+- Result summary:
+  - The Protocol dropdown now reads as an admin-friendly protocol lookup: protocol name on the left, protocol number on the right, while preserving backend-compatible payload values.
+
+## 1.308) Firewall UI: Protocol combobox hint typography and single-select affordance
+
+- Step scope:
+  - Polished the accepted Protocol combobox after stand/UI review.
+  - Kept the name-left/number-right layout, but adjusted row typography so the numeric hint uses the same calm muted/normal style as other form hints.
+  - Added explicit single-select semantics to the listbox (`aria-multiselectable=false`) so the control is represented as one selectable protocol rather than a multi-select-looking list.
+  - Kept manual typing support and backend-compatible values unchanged.
+  - Wire/API shape, backend behavior, and IPsec code were not changed in this step.
+- Ownership moved:
+  - No module ownership moved; this is frontend UX polish for the existing firewall `proto` rule field.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `npm run build` in `webui/` — passed; Vite emitted the expected large-chunk warning only.
+  - Stand deploy: backed up `/root/awg-manager/webui/dist` to `/root/awg-manager/webui/dist.backup.protocol-single-style-20260609173700` and deployed bundle `assets/index-D8yqE2tJ.js`.
+  - Stand smoke: local `/health` — `HTTP/1.0 200 OK`; `systemctl is-enabled nftables.service` — `disabled`; `nft list ruleset | wc -l` — `85`.
+  - In-app browser QA on `http://132.243.237.120:8787/ui/?v=protocol-single-style` — opened Firewall -> Add, verified `aria-multiselectable=false`, visible options `tcp6`, `udp17`, `icmp1`, `icmpv658`, `gre47`, `esp50`, and no console errors/warnings.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 28 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 306 passed.
+- Result summary:
+  - The Protocol dropdown now reads visually as a single-choice combobox with muted numeric hints matching the rest of the form.
+
+## 1.309) Firewall UI: Protocol single-value placeholder
+
+- Step scope:
+  - Adjusted the Protocol combobox placeholder after stand/UI review because `any (tcp, udp, 6, 17)` visually implied multiple values could be entered at once.
+  - Replaced it with `any / select one protocol`, while keeping examples available only in the dropdown list.
+  - Updated the matching Playwright selector and field reference documentation.
+  - Kept manual typing support, dropdown selection, and backend-compatible payload values unchanged.
+  - Wire/API shape, backend behavior, and IPsec code were not changed in this step.
+- Ownership moved:
+  - No module ownership moved; this is frontend UX polish for the existing firewall `proto` rule field.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `npm run build` in `webui/` — passed; Vite emitted the expected large-chunk warning only.
+  - Stand deploy: backed up `/root/awg-manager/webui/dist` to `/root/awg-manager/webui/dist.backup.protocol-single-placeholder-20260609174149` and deployed bundle `assets/index-BUzurQKD.js`.
+  - Stand smoke: local `/health` — `HTTP/1.0 200 OK`; `systemctl is-enabled nftables.service` — `disabled`; `nft list ruleset | wc -l` — `85`.
+  - In-app browser QA on `http://132.243.237.120:8787/ui/?v=protocol-single-placeholder` — opened Firewall -> Add, verified one Protocol input with placeholder `any / select one protocol`, visible options `tcp6`, `udp17`, `icmp1`, `icmpv658`, `gre47`, `esp50`, and no console errors/warnings.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 28 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 306 passed.
+- Result summary:
+  - The empty Protocol control now communicates single-value selection clearly instead of implying comma/list input.
+
+## 1.310) Firewall UI: Protocol default placeholder `any`
+
+- Step scope:
+  - Adjusted the Protocol combobox after stand/UI review: the empty field placeholder is now exactly `any`.
+  - Kept examples out of the placeholder so the control no longer visually implies multiple values can be entered at once.
+  - Kept the dropdown behavior unchanged: the field remains an editable single-select combobox, accepts manual protocol names or numeric IDs, and shows popular protocols as name-left / number-right options.
+  - Wire/API shape, backend behavior, and IPsec code were not changed in this step.
+- Ownership moved:
+  - No module ownership moved; this is frontend UX polish plus firewall field-reference documentation for the existing `proto` rule field.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `npm run build` in `webui/` — passed; Vite emitted the expected large-chunk warning only. Bundle: `assets/index-B7k2ZFQY.js`.
+  - Stand deploy: backed up `/root/awg-manager/webui/dist` to `/root/awg-manager/webui/dist.backup.protocol-any-placeholder-20260609174839` and deployed bundle `assets/index-B7k2ZFQY.js`.
+  - Stand smoke: local `/health` — `HTTP/1.0 200 OK`; `systemctl is-enabled nftables.service` — `disabled`; `nft list ruleset | wc -l` — `85`.
+  - In-app browser QA on `http://132.243.237.120:8787/ui/?v=protocol-any-placeholder-final2` — opened Firewall -> Add, verified the Protocol input placeholder is `any`, value is empty, listbox has `aria-multiselectable=false`, visible options are `tcp6`, `udp17`, `icmp1`, `icmpv658`, `gre47`, `esp50`, and no console warnings/errors were captured.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 28 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 306 passed.
+- Result summary:
+  - The empty Protocol control now says only `any`; examples remain available in the dropdown, preserving the single-protocol mental model.
+
+## 1.311) Firewall Add Rule: Source/Destination port fields match their hints
+
+- Step scope:
+  - Closed the UX/backend gap for `Source port` and `Destination port` in `Add Firewall Rule -> Base match`.
+  - Backend validation now accepts the formats promised by the UI hints: a single port (`443`), a range with `-` or `:` (`1024-65535` / `1024:65535`), a comma-separated list (`22,80,443`), and one `@port_collection` reference (`@admin_ports`).
+  - Backend normalizes dash ranges to the existing internal colon format (`1024-65535` -> `1024:65535`) and renders comma lists as nft set literals (`{ 22, 80, 443 }`).
+  - Port fields remain valid only with `tcp`, `udp`, `6`, or `17`; no wire/API breaking change was introduced.
+  - IPsec code was not changed.
+- Ownership moved:
+  - No module ownership moved. The existing firewall rule ownership remains in `backend/domains/firewall/rule_ops.py`; this step extends that module's validation/render behavior for existing `sport`/`dport` fields.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - RED: `python3 -m pytest -q tests/test_firewall_rule_ops.py -k "port_lists_ranges_and_collection_refs or normalize_proto_and_basic_match_fields"` — failed before implementation on `22,80,443` validation and missing nft braces.
+  - GREEN: same targeted command — 2 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 29 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 307 passed.
+  - Stand deploy: backed up `/root/awg-manager/backend/domains/firewall/rule_ops.py` to `/root/awg-manager/backend/domains/firewall/rule_ops.py.backup.port-fields-20260609181123`, copied updated `rule_ops.py`, restarted `awg-manager-api.service`, and `/health` returned `HTTP/1.0 200 OK`.
+  - Stand API+nft smoke: created a temporary rule with `proto=tcp`, `sport=1024-65535`, `dport=22,80,443`; API stored `sport=1024:65535`, `dport=22,80,443`, and `nft list ruleset` contained `tcp sport 1024-65535 tcp dport { 22, 80, 443 }`; the temporary rule was deleted.
+  - Stand Playwright UI smoke: `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "source and destination port hints" --project=chromium` — 1 passed.
+- Result summary:
+  - The two port fields now behave as their hints say: users can type the hinted range/list formats and the resulting rule is accepted, stored, rendered, applied, and visible through the UI/API path.
+
+## 1.312) Firewall Add Rule: Input/Output interface fields and iface collections
+
+- Step scope:
+  - Documented and verified `Input interface` / `Output interface` in `Add Firewall Rule -> Base match`.
+  - Backend validation now accepts one literal interface name (`eth0`, `lo`, `awg1`) or one iface collection reference (`@lan_ifaces`, `@wan_ifaces`) for `in_interface` and `out_interface`.
+  - Runtime renderer keeps literal interface names quoted (`iifname "eth0"`) and renders iface collection references unquoted (`iifname @lan_ifaces`).
+  - The recommended chain for using both fields together is `forward`; `netdev` still hides/forbids `Output interface`, and `bridge` uses separate `Bridge input` / `Bridge output` fields.
+  - Wire/API shape and IPsec code were not changed.
+- Ownership moved:
+  - No module ownership moved. The existing firewall rule ownership remains in `backend/domains/firewall/rule_ops.py`; this step extends existing interface-match validation/render behavior.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - RED: `python3 -m pytest -q tests/test_firewall_rule_ops.py -k "interface_collection_refs or normalize_proto_and_basic_match_fields"` — failed before implementation because `@lan_ifaces` was rejected and renderer quoted `@...` references.
+  - GREEN: same targeted command — 2 passed.
+  - Stand deploy: backed up `/root/awg-manager/backend/domains/firewall/rule_ops.py` to `/root/awg-manager/backend/domains/firewall/rule_ops.py.backup.iface-fields-20260609185030`, copied updated `rule_ops.py`, restarted `awg-manager-api.service`, and `/health` returned `HTTP/1.0 200 OK`.
+  - Stand interfaces inventory: `lo`, `eth0`; no `eth1` exists on this stand, so literal smoke used real interfaces `lo -> eth0`.
+  - Stand API+nft smoke: temporary `forward` rule with `in_interface=lo`, `out_interface=eth0` rendered as `iifname "lo" oifname "eth0"`; temporary iface collections `lan_ifaces_smoke_*` and `wan_ifaces_smoke_*` rendered and were referenced as `iifname @lan_ifaces_smoke_* oifname @wan_ifaces_smoke_*`; all temporary rules/sets were deleted.
+  - Stand Playwright UI smoke: `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "input and output interface fields" --project=chromium` — 1 passed.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 30 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 308 passed.
+- Result summary:
+  - Users can create `forward` rules matching traffic by ingress and egress interface, including both literal interface names and named iface collections, and the rules render/apply through nftables correctly.
+
+## 1.313) Firewall Add Rule: Connection state field walkthrough and verification
+
+- Step scope:
+  - Documented and verified `Connection state` in `Add Firewall Rule -> Base match`.
+  - Confirmed existing backend behavior: allowed values are `established,related`, `new`, `invalid`, `related`, `established`, and `untracked`; whitespace is normalized (`established, related` -> `established,related`).
+  - Confirmed existing UI behavior: `established` and `related` can be selected together; `new`, `invalid`, and `untracked` are mutually exclusive single-state modes.
+  - No backend/API behavior change was required in this step.
+  - IPsec code was not changed.
+- Ownership moved:
+  - No module ownership moved; this step adds user-facing firewall field documentation and a UI regression around the existing `ct_state` rule field.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - Stand Playwright UI smoke: `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "connection state checkboxes" --project=chromium` — 1 passed.
+  - Stand API+nft smoke: temporary `filter/input` rules with `ct_state=established,related`, `new`, `invalid`, and `untracked` were created; each stored the expected value and `nft list ruleset` contained the corresponding `ct state ...` expression; all temporary rules were deleted.
+  - `npm run build` in `webui/` — passed; Vite emitted the expected large-chunk warning only.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 30 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 308 passed.
+- Result summary:
+  - The `Connection state` field is now documented and covered by UI/API/nft verification: users can use it for stateful firewall rules, especially `established,related accept`, `new`, `invalid`, and `untracked` scenarios.
+
+## 1.314) Firewall Add Rule: Connection mark / Packet mark match fields
+
+- Step scope:
+  - Documented and verified `Connection mark` and `Packet mark` in `Add Firewall Rule -> Base match`.
+  - Confirmed existing backend behavior: `Packet mark` maps to `mark_match` and renders as `meta mark ...`; `Connection mark` maps to `ct_mark_match` and renders as `ct mark ...`.
+  - Confirmed allowed values are decimal integers or hex integers, for example `10`, `0x1`, `0x10`, `0x20`; invalid values such as `abc` or `0xZZ` are rejected by existing validation.
+  - Root-cause note from stand verification: nft canonicalizes hex marks to 32-bit display form, so `0x10` appears in `nft list ruleset` as `0x00000010`.
+  - No backend/API behavior change was required in this step.
+  - IPsec code was not changed.
+- Ownership moved:
+  - No module ownership moved; this step adds user-facing firewall field documentation and a UI regression around existing `mark_match` / `ct_mark_match` fields.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - Stand Playwright UI smoke: `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-rules.spec.ts -g "connection and packet mark match" --project=chromium` — 1 passed.
+  - Stand API+nft smoke: temporary `filter/input` rule with `mark_match=0x10` and `ct_mark_match=0x20` was created; API stored both fields, and `nft list ruleset` rendered `meta mark 0x00000010 ct mark 0x00000020`; the temporary rule was deleted.
+  - `npm run build` in `webui/` — passed; Vite emitted the expected large-chunk warning only.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 30 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 308 passed.
+- Result summary:
+  - The mark match fields work, but they are advanced controls: they match already assigned packet/connection marks and are useful for policy routing, QoS, and multi-step firewall marking schemes. They do not set marks by themselves.
+
+## 1.315) Firewall Add Rule: hide User ID from Base match UI
+
+- Step scope:
+  - Removed the `User ID` control from `Add Firewall Rule -> Base match -> Meta match` after UI review.
+  - Kept backend/API `user_id` support unchanged for wire/API compatibility; existing API scenarios that render `meta skuid` remain supported.
+  - Updated the user-facing field reference to mark `User ID` as hidden from the UI and explain why.
+  - IPsec code was not changed.
+- Ownership moved:
+  - No module ownership moved; this is frontend UX simplification for the existing firewall `user_id` rule field.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - `npm run build` in `webui/` — passed; Vite emitted the expected large-chunk warning only. Bundle: `assets/index-eiWQKRuW.js`.
+  - Stand deploy: backed up `/root/awg-manager/webui/dist` to `/root/awg-manager/webui/dist.backup.remove-user-id-20260609191819` and deployed bundle `assets/index-eiWQKRuW.js`; `/health` returned `HTTP/1.0 200 OK`.
+  - Stand Playwright UI smoke: `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-add-rule-fields-completeness.spec.ts -g "required field groups" --project=chromium` — 1 passed; Add Rule no longer exposes `User ID`.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py` — 30 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 9 passed.
+  - `python3 -m pytest -q tests` — 308 passed.
+- Result summary:
+  - The UI is less noisy: `User ID` is no longer shown to normal firewall users, while API compatibility for `user_id` remains intact.
+
+## 1.316) Firewall Add Rule: Rate limit field guidance and smoke
+
+- Step scope:
+  - Clarified `Rate limit` in `Add Firewall Rule -> Base match -> Meta match` as an nftables rate expression, not as a collection timeout/duration field.
+  - Updated the UI hint from `10/second` to `10/second or 200/minute` so the accepted syntax is visible directly in the form.
+  - Documented that valid values are `N/second`, `N/minute`, `N/hour`, or `N/day`, for example `10/second`, `200/minute`, `1000/hour`.
+  - Documented that collection-style durations such as `10m`, `2h30m`, and `1d 15:00:00` are not valid for this rule field; byte-rate throttling remains a named `limit` object scenario, not this simple rule field.
+  - Kept backend/API behavior unchanged for wire/API compatibility.
+  - IPsec code was not changed.
+- Ownership moved:
+  - No module ownership moved; this step adds user-facing firewall field documentation and a UI hint for the existing `limit_rate` rule field.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - Stand API+nft smoke: temporary `filter/input` rule with `limit_rate=200/minute` was created; API stored `200/minute`, and `nft list ruleset` rendered `limit rate 200/minute`; invalid `limit_rate=10m` returned HTTP 400 with a `limit_rate` validation error; the temporary rule was deleted.
+  - `npm run build` in `webui/` — passed; Vite emitted the expected large-chunk warning only. Bundle: `assets/index-v7VtURi5.js`.
+  - Stand deploy: backed up `/root/awg-manager/webui/dist` to `/root/awg-manager/webui/dist.backup.rate-limit-hint-20260609192410` and deployed bundle `assets/index-v7VtURi5.js`.
+  - Stand recovery note: the manually started `/root/awg-manager/api_core.py` process was listening but `/health` timed out; it was restarted with the same command, after which external GET `/health` responded with the expected API-key error when called without a key.
+  - Stand Playwright UI smoke: `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-add-rule-toggle-semantics.spec.ts --project=chromium` — 1 passed.
+- Result summary:
+  - Users now see a clearer `Rate limit` hint and the instruction explains how to use the field: it limits packet rate per time unit, for example `10/second`, and it does not accept collection timeout formats.
+
+## 1.317) Firewall Add Rule: Hour and DSCP field walkthrough and ip6 DSCP render fix
+
+- Step scope:
+  - Documented `Hour` and `DSCP` in `Add Firewall Rule -> Base match -> Meta match`.
+  - Confirmed `Hour` is a time-of-day match, not a duration/timeout field; accepted format is `HH:MM` or `HH:MM-HH:MM`.
+  - Confirmed `DSCP` is a match for already marked packets; accepted values are `cs0..cs7`, `af11..af43`, `ef`, or integer `0..63`.
+  - Fixed DSCP runtime rendering for `family=ip6`: `dscp` now renders as `ip6 dscp <value>` for ip6 tables instead of invalid `ip dscp <value>`.
+  - Kept the API payload field unchanged (`dscp`) for wire/API compatibility.
+  - Updated the UI hint from `cs5 / 46` to `cs5 or 46` to avoid implying multiple values in one field.
+  - IPsec code was not changed.
+- Ownership moved:
+  - No module ownership moved; this step documents existing firewall fields and fixes family-aware nft rendering inside `backend/domains/firewall/rule_ops.py`.
+- Old entrypoint now delegates to:
+  - No runtime/backend entrypoint changed.
+- Verification commands:
+  - Stand nft syntax check: `meta hour "08:00"-"18:00"`, `ip dscp cs5`, and `ip6 dscp cs5` were validated with `nft -c`.
+  - Stand API+nft smoke: temporary `inet/filter/input` rule with `hour=08:00-18:00` and `dscp=cs5` rendered as `meta hour "08:00"-"18:00" ip dscp cs5`; the temporary rule was deleted.
+  - Stand API+nft smoke: temporary custom `ip6` table and rule with `dscp=cs5` rendered as `ip6 dscp cs5`; the temporary rule and table were deleted.
+  - `python3 -m pytest -q tests/test_firewall_rule_ops.py -k 'render_firewall_rule or normalize_proto_and_basic_match_fields'` — 8 passed, 22 deselected.
+  - Stand Playwright API/e2e smoke: `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-add-rule-block-b10.spec.ts tests/firewall-add-rule-block-b11.spec.ts --project=chromium` — 5 passed.
+  - `npm run build` in `webui/` — passed; Vite emitted the expected large-chunk warning only. Bundle: `assets/index-DyiEGSkg.js`.
+  - Stand deploy: backed up `/root/awg-manager/webui/dist` to `/root/awg-manager/webui/dist.backup.hour-dscp-20260609195840`, deployed bundle `assets/index-DyiEGSkg.js`, copied updated `backend/domains/firewall/rule_ops.py`, and restarted the manual `api_core.py` stand process.
+- Result summary:
+  - `Hour` and `DSCP` are working fields with documented usage. `Hour` limits rule matching by time of day. `DSCP` matches pre-marked QoS packets. The DSCP renderer now works for ip6 custom tables as well as existing IPv4/inet scenarios.
+
+## 1.318) Firewall Add Rule: TCP flags checkbox picker
+
+- Step scope:
+  - Replaced the `tcp flags` free-text field in `Add Firewall Rule -> Advanced match -> Network & L4 extras` with a checkbox picker similar to `Connection state`.
+  - Supported UI choices are the runtime-checked flags: `syn`, `ack`, `fin`, `rst`, `psh`, `urg`, `cwr`.
+  - The UI still stores/sends the same API field `tcp_flags` as a comma-separated string, for example `syn,ack`, preserving wire/API compatibility.
+  - `proto` is still auto-set to `tcp` when tcp flags are enabled.
+  - IPsec code was not changed.
+- Ownership moved:
+  - No module ownership moved; this is a frontend UX change in the existing unified firewall rule editor.
+- Old entrypoint now delegates to:
+  - No backend/runtime entrypoint changed.
+- Verification commands:
+  - Stand nft syntax check before the UI change confirmed valid flags on the runtime: `fin`, `syn`, `rst`, `psh`, `ack`, `urg`, `cwr`, and combinations such as `syn,ack`; `ece` is not accepted by this nft runtime profile and is not exposed in the picker.
+  - `npm run build` in `webui/` — passed; Vite emitted the expected large-chunk warning only. Bundle: `assets/index-BSKSRumK.js`.
+  - Stand cleanup/deploy: removed old cache artifacts and stale frontend backups after `/` reached 100%; deployed `webui/dist` with bundle `assets/index-BSKSRumK.js`.
+  - Stand Playwright API/UI smoke: `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-add-rule-block-b.spec.ts --project=chromium` — 5 passed.
+- Result summary:
+  - Users can now choose TCP flags visually instead of typing raw text. Selecting `syn` plus `ack` saves the same backend value `tcp_flags=syn,ack` and keeps the rule API unchanged.
+
+## 1.319) Firewall Add Rule: TCP flags single-choice presets
+
+- Step scope:
+  - Replaced the previous multi-checkbox `tcp flags` picker with a single-choice preset picker after UI review showed users could accidentally select all flags at once.
+  - Available presets are intentionally practical: `syn`, `syn,ack`, `rst`, `fin`, `ack`, `psh,ack`, `fin,ack`, `rst,ack`.
+  - The API payload remains unchanged: the selected preset is still sent as `tcp_flags`, for example `syn,ack`.
+  - IPsec code was not changed.
+- Ownership moved:
+  - No module ownership moved; this is a frontend UX refinement in the unified firewall rule editor.
+- Old entrypoint now delegates to:
+  - No backend/runtime entrypoint changed.
+- Verification commands:
+  - `npm run build` in `webui/` — passed; Vite emitted the expected large-chunk warning only. Bundle: `assets/index-DywFcu-T.js`.
+  - Stand deploy: backed up `/root/awg-manager/webui/dist` and deployed bundle `assets/index-DywFcu-T.js`.
+  - Stand Playwright API/UI smoke: `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-add-rule-block-b.spec.ts --project=chromium` — 5 passed.
+- Result summary:
+  - Users can no longer choose all TCP flags at once from the normal UI. The field now guides them to one meaningful TCP flag preset while preserving backend/API compatibility.

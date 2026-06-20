@@ -1,23 +1,24 @@
 import * as React from 'react'
 import type { AuthState, FirewallMapsState, FirewallNamedObjects, FirewallRule, FirewallSchema, FirewallSetsState, FirewallState, FirewallTablesState } from '../api'
 import { getFirewallMaps, getFirewallObjects, getFirewallRules, getFirewallSchema, getFirewallSets, getFirewallState, getFirewallTables } from '../api'
-import { isPolicyAdvancedSection } from './sections'
 
-type PolicyV2Family = 'bridge' | 'netdev'
-type FirewallSectionTab = 'policy' | 'policy_v2' | 'policy_v3' | 'collections' | 'table_builder'
+type FirewallSectionTab = 'policy' | 'collections' | 'objects' | 'table_builder'
+type TableFamily = 'inet' | 'ip' | 'ip6' | 'bridge' | 'netdev'
 
 type Params = {
   auth: AuthState
   refreshNonce: number
   activeSection: FirewallSectionTab
-  activePolicyV2Family: PolicyV2Family
-  activePolicyV2TableName: string
+  activeRuleTableFamily: TableFamily
+  activeRuleTableName: string
+  activeObjectTableFamily: TableFamily
+  activeObjectTableName: string
   setState: React.Dispatch<React.SetStateAction<FirewallState | null>>
   setSetsState: React.Dispatch<React.SetStateAction<FirewallSetsState>>
   setMapsState: React.Dispatch<React.SetStateAction<FirewallMapsState>>
   setTablesState: React.Dispatch<React.SetStateAction<FirewallTablesState>>
-  setPolicyV2Rules: React.Dispatch<React.SetStateAction<FirewallRule[]>>
-  setPolicyV2Objects: React.Dispatch<React.SetStateAction<FirewallNamedObjects | null>>
+  setObjectRules: React.Dispatch<React.SetStateAction<FirewallRule[]>>
+  setFirewallObjects: React.Dispatch<React.SetStateAction<FirewallNamedObjects | null>>
   setSchema: React.Dispatch<React.SetStateAction<FirewallSchema | null>>
   setError: React.Dispatch<React.SetStateAction<string | null>>
   setCollectionsNowSec: React.Dispatch<React.SetStateAction<number>>
@@ -28,14 +29,16 @@ export function useFirewallDataSync(params: Params) {
     auth,
     refreshNonce,
     activeSection,
-    activePolicyV2Family,
-    activePolicyV2TableName,
+    activeRuleTableFamily,
+    activeRuleTableName,
+    activeObjectTableFamily,
+    activeObjectTableName,
     setState,
     setSetsState,
     setMapsState,
     setTablesState,
-    setPolicyV2Rules,
-    setPolicyV2Objects,
+    setObjectRules,
+    setFirewallObjects,
     setSchema,
     setError,
     setCollectionsNowSec,
@@ -55,15 +58,23 @@ export function useFirewallDataSync(params: Params) {
       setMapsState(fwMaps)
       setTablesState(fwTables)
 
-      if (isPolicyAdvancedSection(activeSection) && activePolicyV2TableName) {
+      if (activeSection === 'objects' && activeObjectTableName) {
         const [items, objects] = await Promise.all([
-          getFirewallRules(auth, { family: activePolicyV2Family, table: activePolicyV2TableName }),
-          activePolicyV2Family === 'bridge'
-            ? getFirewallObjects(auth, { family: activePolicyV2Family, table: activePolicyV2TableName })
-            : Promise.resolve(null),
+          activeObjectTableFamily !== 'netdev' ? getFirewallRules(auth, { family: activeObjectTableFamily, table: activeObjectTableName }) : Promise.resolve([]),
+          getFirewallObjects(auth, { family: activeObjectTableFamily, table: activeObjectTableName }),
         ])
-        setPolicyV2Rules(items)
-        setPolicyV2Objects(objects)
+        setObjectRules(items)
+        setFirewallObjects(objects)
+      } else if (activeSection === 'policy' && activeRuleTableFamily !== 'netdev' && activeRuleTableName) {
+        const [items, objects] = await Promise.all([
+          getFirewallRules(auth, { family: activeRuleTableFamily, table: activeRuleTableName }),
+          getFirewallObjects(auth, { family: activeRuleTableFamily, table: activeRuleTableName }),
+        ])
+        setObjectRules(items)
+        setFirewallObjects(objects)
+      } else if (activeSection === 'policy' && activeRuleTableFamily === 'netdev') {
+        setObjectRules([])
+        setFirewallObjects(null)
       }
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
@@ -71,12 +82,14 @@ export function useFirewallDataSync(params: Params) {
   }, [
     auth,
     activeSection,
-    activePolicyV2Family,
-    activePolicyV2TableName,
+    activeObjectTableFamily,
+    activeObjectTableName,
+    activeRuleTableFamily,
+    activeRuleTableName,
     setError,
     setMapsState,
-    setPolicyV2Objects,
-    setPolicyV2Rules,
+    setFirewallObjects,
+    setObjectRules,
     setSetsState,
     setState,
     setTablesState,

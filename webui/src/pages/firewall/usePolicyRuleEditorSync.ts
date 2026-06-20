@@ -1,10 +1,13 @@
 import * as React from 'react'
 import type { FirewallRule, FirewallSchema, FirewallState } from '../api'
 
+type TableFamily = 'inet' | 'ip' | 'ip6' | 'bridge' | 'netdev'
+
 type Params = {
   addOpen: boolean
   editingRuleId: string | null
   activeRuleTableName: string
+  activeRuleTableFamily: TableFamily
   activeChainOptions: string[]
   form: Partial<FirewallRule>
   contextMode: 'filter' | 'nat' | 'raw' | 'mangle'
@@ -14,12 +17,60 @@ type Params = {
 }
 
 export function usePolicyRuleEditorSync(params: Params) {
+  const firstActiveChain = params.activeChainOptions[0] || 'input'
+
+  React.useEffect(() => {
+    if (params.addOpen || params.editingRuleId) return
+    params.setForm((p) => {
+      if (!p.counter_name && !p.limit_name && !p.quota_name && !p.ct_helper_set && !p.ct_timeout_set && !p.ct_expectation_set) return p
+      return {
+        ...p,
+        counter_name: null,
+        limit_name: null,
+        quota_name: null,
+        ct_helper_set: null,
+        ct_timeout_set: null,
+        ct_expectation_set: null,
+      }
+    })
+  }, [
+    params.addOpen,
+    params.editingRuleId,
+    params.activeRuleTableFamily,
+    params.activeRuleTableName,
+    params.setForm,
+  ])
+
   React.useEffect(() => {
     if (params.addOpen && !params.editingRuleId) {
       const ruleTable = params.activeRuleTableName
-      params.setForm((p) => ({ ...p, table: ruleTable, chain: params.activeChainOptions[0] || 'input' }))
+      params.setForm((p) => {
+        if (p.family === params.activeRuleTableFamily && p.table === ruleTable && p.chain === firstActiveChain) return p
+        const tableScopeChanged = p.family !== params.activeRuleTableFamily || p.table !== ruleTable
+        return {
+          ...p,
+          family: params.activeRuleTableFamily,
+          table: ruleTable,
+          chain: firstActiveChain,
+          ...(tableScopeChanged ? {
+            counter_name: null,
+            limit_name: null,
+            quota_name: null,
+            ct_helper_set: null,
+            ct_timeout_set: null,
+            ct_expectation_set: null,
+          } : {}),
+        }
+      })
     }
-  }, [params.addOpen, params.editingRuleId, params.activeRuleTableName, params.activeChainOptions, params.setForm])
+  }, [
+    params.addOpen,
+    params.editingRuleId,
+    params.activeRuleTableFamily,
+    params.activeRuleTableName,
+    firstActiveChain,
+    params.setForm,
+  ])
 
   React.useEffect(() => {
     if (!params.editingRuleId) return

@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import type { FirewallRule } from '../api'
+import { formatFirewallRuleAction } from './policyUtils'
 
 type SortDirection = 'asc' | 'desc'
 type PolicySortKey = 'chain' | 'action' | 'proto' | 'src' | 'dst' | 'sport' | 'dport' | 'in_interface' | 'out_interface' | 'ct_state' | 'packets' | 'bytes'
@@ -140,7 +141,7 @@ export function PolicyRulesTable(props: Props) {
                 onDoubleClick={() => props.openEditWindow(r)}
               >
                 {renderPolicyCell('chain', r.chain)}
-                {renderPolicyCell('action', r.action)}
+                {renderPolicyCell('action', formatFirewallRuleAction(r))}
                 {renderPolicyCell('proto', r.proto || 'any')}
                 {renderPolicyCell('src', r.src || '—')}
                 {renderPolicyCell('dst', r.dst || '—')}

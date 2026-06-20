@@ -38,6 +38,59 @@ class FirewallCollectionOpsTest(unittest.TestCase):
         self.assertIn('add map inet filter vm1 { type ifname : verdict; }', script_lines)
         self.assertIn('add element inet filter vm1 { "eth0" : accept }', script_lines)
 
+        disabled_lines = []
+        collection_ops.append_runtime_collection_script_lines(
+            script_lines=disabled_lines,
+            table_family="inet",
+            table_name="filter",
+            sets_data={
+                "addr": [{"name": "disabled_addr", "enabled": False, "elements": ["10.0.0.1"], "timeout": None}],
+                "port": [{"name": "disabled_port", "enabled": False, "elements": ["443"], "timeout": None}],
+                "iface": [{"name": "disabled_iface", "enabled": False, "elements": ["eth0"], "timeout": None}],
+            },
+            maps_data={
+                "map": [{"name": "disabled_map", "enabled": False, "entries": ["10.0.0.1:192.0.2.1"], "kind": "map"}],
+                "vmap": [{"name": "disabled_vmap", "enabled": False, "entries": ["eth0:drop"], "kind": "vmap"}],
+            },
+            normalize_value_fn=_norm,
+        )
+        self.assertEqual(disabled_lines, [])
+
+    def test_append_runtime_collection_script_lines_dynamic_set_declaration(self):
+        def _norm(v):
+            if v is None:
+                return None
+            t = str(v).strip()
+            return t or None
+
+        script_lines = []
+        collection_ops.append_runtime_collection_script_lines(
+            script_lines=script_lines,
+            table_family="inet",
+            table_name="filter",
+            sets_data={
+                "addr": [
+                    {
+                        "name": "ssh_flood",
+                        "enabled": True,
+                        "elements": [],
+                        "timeout": "10s",
+                        "dynamic": True,
+                        "size": 65536,
+                        "gc_interval": "30s",
+                    }
+                ],
+                "port": [],
+                "iface": [],
+            },
+            maps_data={"map": [], "vmap": []},
+            normalize_value_fn=_norm,
+        )
+        self.assertIn(
+            "add set inet filter ssh_flood { type ipv4_addr; flags dynamic,timeout; timeout 10s; gc-interval 30s; size 65536; }",
+            script_lines,
+        )
+
     def test_build_map_declaration_and_elements(self):
         def _norm(v):
             if v is None:
@@ -61,14 +114,27 @@ class FirewallCollectionOpsTest(unittest.TestCase):
         built_vmap = collection_ops.build_map_declaration_and_elements(
             {
                 "kind": "vmap",
+                "timeout": " 10s ",
                 "entries": ["eth0:accept", "eth1:drop"],
             },
             _norm,
         )
         self.assertIsNotNone(built_vmap)
         decl_vmap, elems_vmap = built_vmap
-        self.assertEqual(decl_vmap, "type ifname : verdict;")
+        self.assertEqual(decl_vmap, "type ifname : verdict; flags timeout; timeout 10s;")
         self.assertEqual(elems_vmap, ['"eth0" : accept', '"eth1" : drop'])
+
+        built_proto_vmap = collection_ops.build_map_declaration_and_elements(
+            {
+                "kind": "vmap",
+                "entries": ["tcp:accept", "udp:drop"],
+            },
+            _norm,
+        )
+        self.assertIsNotNone(built_proto_vmap)
+        decl_proto_vmap, elems_proto_vmap = built_proto_vmap
+        self.assertEqual(decl_proto_vmap, "type inet_proto : verdict;")
+        self.assertEqual(elems_proto_vmap, ["tcp : accept", "udp : drop"])
 
         self.assertIsNone(
             collection_ops.build_map_declaration_and_elements(
@@ -115,6 +181,46 @@ class FirewallCollectionOpsTest(unittest.TestCase):
         self.assertEqual(result["addr"], [])
         self.assertEqual(writes["count"], 1)
         self.assertEqual(applied["count"], 1)
+
+    def test_list_collections_rolls_back_expired_cleanup_on_apply_error(self):
+        state = {
+            "addr": [{"id": "a1", "enabled": True}],
+            "port": [{"id": "p1", "enabled": False}],
+        }
+        writes = {"count": 0}
+
+        def _read():
+            return {"addr": [dict(x) for x in state["addr"]], "port": [dict(x) for x in state["port"]]}
+
+        def _write(data):
+            writes["count"] += 1
+            state["addr"] = [dict(x) for x in data.get("addr", [])]
+            state["port"] = [dict(x) for x in data.get("port", [])]
+
+        def _cleanup(rows, _now_ts):
+            if rows and rows[0].get("id") == "a1":
+                return [], True, 1
+            return rows, False, 0
+
+        def _enrich(item, _now_ts):
+            return dict(item)
+
+        def _apply_fail():
+            raise RuntimeError("apply failed")
+
+        with self.assertRaisesRegex(RuntimeError, "apply failed"):
+            collection_ops.list_collections(
+                kinds=("addr", "port"),
+                read_fn=_read,
+                write_fn=_write,
+                cleanup_expired_fn=_cleanup,
+                enrich_item_fn=_enrich,
+                apply_rules_fn=_apply_fail,
+            )
+
+        self.assertEqual(state["addr"], [{"id": "a1", "enabled": True}])
+        self.assertEqual(state["port"], [{"id": "p1", "enabled": False}])
+        self.assertEqual(writes["count"], 2)
 
     def test_upsert_collection_validates_kind_and_uniqueness(self):
         state = {"map": [], "vmap": [{"name": "shared"}]}
@@ -175,6 +281,52 @@ class FirewallCollectionOpsTest(unittest.TestCase):
                 apply_rules_fn=lambda: None,
             )
 
+    def test_upsert_collection_rolls_back_on_apply_error(self):
+        state = {"set": [{"id": "s1", "name": "trusted", "enabled": True, "timeout": None, "elements": ["10.0.0.1"]}]}
+        writes = {"count": 0}
+
+        def _read():
+            return {"set": [dict(x) for x in state["set"]]}
+
+        def _write(data):
+            writes["count"] += 1
+            state["set"] = [dict(x) for x in data.get("set", [])]
+
+        def _normalize_item(payload, kind):
+            row = dict(payload or {})
+            row.setdefault("kind", kind)
+            row.setdefault("enabled", True)
+            row.setdefault("timeout", None)
+            row.setdefault("elements", [])
+            return row
+
+        def _sig(row):
+            return (row.get("name"), tuple(row.get("elements", [])), bool(row.get("enabled", True)))
+
+        def _apply_fail():
+            raise RuntimeError("apply failed")
+
+        with self.assertRaisesRegex(RuntimeError, "apply failed"):
+            collection_ops.upsert_collection(
+                kind="set",
+                payload={"id": "s1", "name": "trusted", "enabled": True, "elements": ["10.0.0.2"]},
+                allowed_kinds=("set",),
+                invalid_kind_error="bad kind",
+                read_fn=_read,
+                write_fn=_write,
+                normalize_item_fn=_normalize_item,
+                runtime_signature_fn=_sig,
+                normalize_value_fn=lambda v: v,
+                other_names=lambda data: [],
+                duplicate_error="dup",
+                global_error="glob",
+                enrich_item_fn=lambda item: item,
+                apply_rules_fn=_apply_fail,
+            )
+
+        self.assertEqual(state["set"], [{"id": "s1", "name": "trusted", "enabled": True, "timeout": None, "elements": ["10.0.0.1"]}])
+        self.assertEqual(writes["count"], 2)
+
     def test_delete_collection_respects_runtime_changed(self):
         state = {"set": [{"id": "s1", "enabled": False}]}
         applied = {"count": 0}
@@ -200,6 +352,35 @@ class FirewallCollectionOpsTest(unittest.TestCase):
         )
         self.assertEqual(item["id"], "s1")
         self.assertEqual(applied["count"], 0)
+
+    def test_delete_collection_rolls_back_on_apply_error(self):
+        state = {"set": [{"id": "s1", "enabled": True}, {"id": "s2", "enabled": True}]}
+        writes = {"count": 0}
+
+        def _read():
+            return {"set": [dict(x) for x in state["set"]]}
+
+        def _write(data):
+            writes["count"] += 1
+            state["set"] = [dict(x) for x in data.get("set", [])]
+
+        def _apply_fail():
+            raise RuntimeError("apply failed")
+
+        with self.assertRaisesRegex(RuntimeError, "apply failed"):
+            collection_ops.delete_collection(
+                kind="set",
+                item_id="s1",
+                allowed_kinds=("set",),
+                invalid_kind_error="bad kind",
+                read_fn=_read,
+                write_fn=_write,
+                not_found_error="missing",
+                apply_rules_fn=_apply_fail,
+            )
+
+        self.assertEqual([x["id"] for x in state["set"]], ["s1", "s2"])
+        self.assertEqual(writes["count"], 2)
 
 
 if __name__ == "__main__":

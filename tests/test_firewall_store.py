@@ -116,6 +116,55 @@ class FirewallStoreTest(unittest.TestCase):
         self.assertIn(("ip6", "custom"), table_defs)
         self.assertNotIn(("inet", "disabled"), table_defs)
 
+    def test_collect_table_defs_preserves_custom_chain_device_and_policy(self):
+        default_defs = {}
+        custom_rows = [
+            {
+                "family": "netdev",
+                "table_name": "edge_ingress",
+                "chain_name": "ingress_lan",
+                "chain_type": "filter",
+                "hook": "ingress",
+                "priority": -500,
+                "device": "eth0",
+                "policy": "drop",
+                "enabled": True,
+            },
+            {
+                "family": "bridge",
+                "table_name": "br_filter",
+                "chain_name": "br_forward",
+                "chain_type": "filter",
+                "hook": "forward",
+                "priority": -200,
+                "policy": "accept",
+                "enabled": True,
+            },
+        ]
+
+        def _normalize(v):
+            if v is None:
+                return None
+            t = str(v).strip()
+            return t or None
+
+        table_defs = store.collect_table_defs(
+            default_defs,
+            custom_rows,
+            _normalize,
+            ("inet", "ip", "ip6", "bridge", "netdev"),
+            "inet",
+        )
+
+        self.assertEqual(
+            table_defs[("netdev", "edge_ingress")],
+            [("ingress_lan", "filter", "ingress", -500, "eth0", "drop")],
+        )
+        self.assertEqual(
+            table_defs[("bridge", "br_filter")],
+            [("br_forward", "filter", "forward", -200, None, "accept")],
+        )
+
     def test_enrich_collection_item_runtime_computes_remaining_timeout(self):
         def _timeout_to_seconds(value):
             return 30 if str(value) == "30s" else None
@@ -162,7 +211,7 @@ class FirewallStoreTest(unittest.TestCase):
             {"name": "m1", "enabled": True, "timeout": "5s", "kind": "map", "entries": [" a:b ", "a:b", " "]},
             _normalize,
         )
-        self.assertEqual(set_sig, ("s1", True, "10s", ("1.1.1.1",)))
+        self.assertEqual(set_sig, ("s1", True, "10s", False, None, None, ("1.1.1.1",)))
         self.assertEqual(map_sig, ("m1", True, "5s", "map", ("a:b",)))
 
     def test_normalize_set_item_validates_and_normalizes_addr_set(self):
@@ -201,6 +250,43 @@ class FirewallStoreTest(unittest.TestCase):
                 lambda v: None,
             )
 
+    def test_normalize_set_item_dynamic_requires_timeout_and_size(self):
+        def _normalize(v):
+            if v is None:
+                return None
+            t = str(v).strip()
+            return t or None
+
+        def _timeout(v):
+            return str(v).strip() if v else None
+
+        row = store.normalize_set_item(
+            {
+                "name": "ssh_flood",
+                "elements": [],
+                "enabled": True,
+                "timeout": "10s",
+                "dynamic": "yes",
+                "size": "65536",
+                "gc_interval": "30s",
+            },
+            "addr",
+            _normalize,
+            _timeout,
+        )
+        self.assertTrue(row["dynamic"])
+        self.assertEqual(row["size"], 65536)
+        self.assertEqual(row["gc_interval"], "30s")
+
+        for payload, message in (
+            ({"name": "no_timeout", "dynamic": True, "size": "10"}, "dynamic sets require timeout"),
+            ({"name": "no_size", "dynamic": True, "timeout": "10s"}, "dynamic sets require size"),
+            ({"name": "bad_size", "dynamic": True, "timeout": "10s", "size": "0"}, "size must be 1..1000000"),
+            ({"name": "gc_without_timeout", "gc_interval": "10s"}, "gc_interval requires timeout"),
+        ):
+            with self.assertRaisesRegex(ValueError, message):
+                store.normalize_set_item(payload, "addr", _normalize, _timeout)
+
     def test_normalize_map_item_validates_key_value_entries(self):
         def _normalize(v):
             if v is None:
@@ -219,6 +305,29 @@ class FirewallStoreTest(unittest.TestCase):
             store.normalize_map_item(
                 {"name": "bad", "entries": ["no-separator"]},
                 "map",
+                _normalize,
+                lambda v: None,
+            )
+
+    def test_normalize_vmap_item_validates_verdict_values(self):
+        def _normalize(v):
+            if v is None:
+                return None
+            t = str(v).strip()
+            return t or None
+
+        row = store.normalize_map_item(
+            {"name": "iface_verdicts", "entries": ["eth0:accept", "eth1:drop", "eth0:accept"]},
+            "vmap",
+            _normalize,
+            lambda v: None,
+        )
+        self.assertEqual(row["entries"], ["eth0:accept", "eth1:drop"])
+
+        with self.assertRaisesRegex(ValueError, "vmap verdict must be one of"):
+            store.normalize_map_item(
+                {"name": "bad_vmap", "entries": ["eth0:not_a_verdict"]},
+                "vmap",
                 _normalize,
                 lambda v: None,
             )
@@ -432,6 +541,32 @@ class FirewallStoreTest(unittest.TestCase):
             t = str(v).strip()
             return t or None
 
+        item = store.normalize_firewall_table_item(
+            {
+                "family": "netdev",
+                "table_name": "Edge_Ingress",
+                "chain_name": "ingress_lan",
+                "chain_type": "filter",
+                "hook": "ingress",
+                "device": "eth0",
+                "priority": -500,
+                "policy": "drop",
+                "enabled": "yes",
+            },
+            _normalize,
+            default_family="inet",
+            supported_families=("inet", "ip", "ip6", "bridge", "netdev"),
+            reserved_priorities={0},
+        )
+        self.assertEqual(item["family"], "netdev")
+        self.assertEqual(item["table_name"], "edge_ingress")
+        self.assertEqual(item["chain_name"], "ingress_lan")
+        self.assertEqual(item["hook"], "ingress")
+        self.assertEqual(item["device"], "eth0")
+        self.assertEqual(item["priority"], -500)
+        self.assertEqual(item["policy"], "drop")
+        self.assertTrue(item["enabled"])
+
         with self.assertRaisesRegex(ValueError, "device is required for ingress hook"):
             store.normalize_firewall_table_item(
                 {
@@ -447,7 +582,23 @@ class FirewallStoreTest(unittest.TestCase):
                 supported_families=("inet", "ip", "ip6", "bridge", "netdev"),
                 reserved_priorities={0},
             )
-        with self.assertRaisesRegex(ValueError, "netdev family supports only chain_type=filter with hook=ingress"):
+        with self.assertRaisesRegex(ValueError, "netdev egress hook is not supported by current nft runtime profile"):
+            store.normalize_firewall_table_item(
+                {
+                    "family": "netdev",
+                    "table_name": "x",
+                    "chain_name": "egress_c",
+                    "chain_type": "filter",
+                    "hook": "egress",
+                    "device": "eth0",
+                    "priority": 10,
+                },
+                _normalize,
+                default_family="inet",
+                supported_families=("inet", "ip", "ip6", "bridge", "netdev"),
+                reserved_priorities={0},
+            )
+        with self.assertRaisesRegex(ValueError, "netdev family supports only chain_type=filter with hook=ingress on current nft runtime profile"):
             store.normalize_firewall_table_item(
                 {
                     "family": "netdev",
@@ -462,6 +613,80 @@ class FirewallStoreTest(unittest.TestCase):
                 supported_families=("inet", "ip", "ip6", "bridge", "netdev"),
                 reserved_priorities={0},
             )
+
+    def test_normalize_firewall_table_item_bridge_stays_filter_only_without_ingress(self):
+        def _normalize(v):
+            if v is None:
+                return None
+            t = str(v).strip()
+            return t or None
+
+        item = store.normalize_firewall_table_item(
+            {
+                "family": "bridge",
+                "table_name": "Bridge_Filter",
+                "chain_name": "br_forward",
+                "chain_type": "filter",
+                "hook": "forward",
+                "priority": -200,
+                "policy": "accept",
+            },
+            _normalize,
+            default_family="inet",
+            supported_families=("inet", "ip", "ip6", "bridge", "netdev"),
+            reserved_priorities={0},
+        )
+        self.assertEqual(item["family"], "bridge")
+        self.assertEqual(item["table_name"], "bridge_filter")
+        self.assertEqual(item["chain_type"], "filter")
+        self.assertEqual(item["hook"], "forward")
+        self.assertIsNone(item["device"])
+
+        for payload, message in (
+            (
+                {
+                    "family": "bridge",
+                    "table_name": "x",
+                    "chain_name": "c",
+                    "chain_type": "nat",
+                    "hook": "prerouting",
+                    "priority": -200,
+                },
+                "bridge family supports only chain_type=filter",
+            ),
+            (
+                {
+                    "family": "bridge",
+                    "table_name": "x",
+                    "chain_name": "c",
+                    "chain_type": "filter",
+                    "hook": "ingress",
+                    "device": "br0",
+                    "priority": -200,
+                },
+                "bridge family does not support ingress hook in this manager",
+            ),
+            (
+                {
+                    "family": "bridge",
+                    "table_name": "x",
+                    "chain_name": "c",
+                    "chain_type": "filter",
+                    "hook": "forward",
+                    "device": "br0",
+                    "priority": -200,
+                },
+                "device can be set only for ingress hook",
+            ),
+        ):
+            with self.assertRaisesRegex(ValueError, message):
+                store.normalize_firewall_table_item(
+                    payload,
+                    _normalize,
+                    default_family="inet",
+                    supported_families=("inet", "ip", "ip6", "bridge", "netdev"),
+                    reserved_priorities={0},
+                )
 
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 import unittest
 
+from backend.domains.firewall import rule_normalization_service_ops
 from backend.domains.firewall import rule_ops
+from backend.domains.firewall import schema as firewall_schema
 
 
 class FirewallRuleOpsTest(unittest.TestCase):
@@ -32,6 +34,21 @@ class FirewallRuleOpsTest(unittest.TestCase):
                 "add rule inet awg_filter forward inet:r5",
             ],
         )
+
+        netdev_lines = []
+        rule_ops.append_enabled_rule_script_lines(
+            script_lines=netdev_lines,
+            table_family="netdev",
+            nft_table="edge_ingress",
+            table_name="edge_ingress",
+            rules=[
+                {"id": "nd1", "enabled": True, "table": "edge_ingress", "family": "netdev", "chain": "ingress"},
+                {"id": "nd2", "enabled": True, "table": "edge_ingress", "family": "bridge", "chain": "ingress"},
+            ],
+            default_family="inet",
+            render_rule_fn=_render,
+        )
+        self.assertEqual(netdev_lines, ["add rule netdev edge_ingress ingress netdev:nd1"])
 
     def test_render_firewall_rule(self):
         rule_queue = {
@@ -128,6 +145,11 @@ class FirewallRuleOpsTest(unittest.TestCase):
         self.assertIn("queue num 0-3 fanout,bypass", rendered_queue)
         self.assertTrue(rendered_queue.endswith('comment "ok"'))
 
+        rule_dscp = dict(rule_queue)
+        rule_dscp.update({"action": "accept", "queue_num": None, "queue_flags": None, "dscp": "cs5"})
+        self.assertIn("ip dscp cs5", rule_ops.render_firewall_rule(rule_dscp, table_family="inet"))
+        self.assertIn("ip6 dscp cs5", rule_ops.render_firewall_rule(rule_dscp, table_family="ip6"))
+
         rule_nat = dict(rule_queue)
         rule_nat.update(
             {
@@ -142,8 +164,286 @@ class FirewallRuleOpsTest(unittest.TestCase):
                 "comment": None,
             }
         )
-        rendered_nat = rule_ops.render_firewall_rule(rule_nat, table_family="bridge")
-        self.assertIn("snat ip6 to 2001:db8::1:5000 random,persistent", rendered_nat)
+        with self.assertRaisesRegex(ValueError, "nat_type is not supported for family=bridge in runtime renderer"):
+            rule_ops.render_firewall_rule(rule_nat, table_family="bridge")
+
+        rule_raw_bridge = dict(rule_queue)
+        rule_raw_bridge.update(
+            {
+                "in_interface": None,
+                "src": None,
+                "proto": None,
+                "sport": None,
+                "dport": None,
+                "action": "accept",
+                "queue_num": None,
+                "queue_flags": None,
+                "raw_expr": "meta mark set 1",
+                "comment": None,
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "raw_expr is not supported for family=bridge in runtime renderer"):
+            rule_ops.render_firewall_rule(rule_raw_bridge, table_family="bridge")
+
+        rule_fwd = dict(rule_queue)
+        rule_fwd.update(
+            {
+                "in_interface": None,
+                "src": None,
+                "proto": None,
+                "sport": None,
+                "dport": None,
+                "action": "fwd",
+                "queue_num": None,
+                "queue_flags": None,
+                "fwd_family": "ip",
+                "fwd_to": "127.0.0.1",
+                "fwd_dev": "eth0",
+                "comment": "netdev fwd",
+            }
+        )
+        rendered_fwd = rule_ops.render_firewall_rule(rule_fwd, table_family="netdev")
+        self.assertIn('fwd ip to 127.0.0.1 device "eth0"', rendered_fwd)
+        self.assertTrue(rendered_fwd.endswith('comment "netdev fwd"'))
+
+        rule_dup = dict(rule_queue)
+        rule_dup.update(
+            {
+                "in_interface": None,
+                "src": None,
+                "proto": None,
+                "sport": None,
+                "dport": None,
+                "action": "accept",
+                "queue_num": None,
+                "queue_flags": None,
+                "dup_to": "192.0.2.10",
+                "dup_dev": "eth1",
+                "comment": "dup copy",
+            }
+        )
+        rendered_dup = rule_ops.render_firewall_rule(rule_dup, table_family="inet")
+        self.assertIn('dup to 192.0.2.10 device "eth1"', rendered_dup)
+        self.assertTrue(rendered_dup.endswith('accept comment "dup copy"'))
+        with self.assertRaisesRegex(ValueError, "dup_to/dup_dev are not supported for family=bridge in runtime renderer"):
+            rule_ops.render_firewall_rule(rule_dup, table_family="bridge")
+
+        rule_advanced = dict(rule_queue)
+        rule_advanced.update(
+            {
+                "in_interface": None,
+                "src": None,
+                "dst": None,
+                "proto": "tcp",
+                "sport": None,
+                "dport": None,
+                "action": "accept",
+                "queue_num": None,
+                "queue_flags": None,
+                "ether_src": "aa:bb:cc:dd:ee:ff",
+                "ether_dst": "11:22:33:44:55:66",
+                "vlan_id": "100",
+                "ether_type": "0x0800",
+                "tcp_flags": "syn",
+                "meta_length": "64-1500",
+                "meta_priority": "0x10",
+                "meta_cpu": "1",
+                "meta_pkttype": "host",
+                "meta_iiftype": "1",
+                "meta_oiftype": "2",
+                "meta_iifgroup": "3",
+                "meta_oifgroup": "4",
+                "mark_match": "0x1",
+                "ct_mark_match": "0x2",
+                "ct_status": "assured,snat",
+                "ct_direction": "reply",
+                "ct_expiration": "30s",
+                "ct_helper_match": "ftp",
+                "ct_label": "0x1",
+                "ct_event": "new,destroy",
+                "ct_original_saddr": "192.0.2.10",
+                "ct_original_daddr": "2001:db8::10",
+                "ct_reply_saddr": "192.0.2.20",
+                "ct_reply_daddr": "2001:db8::20",
+                "fib_check": "saddr . iif oif exists",
+                "socket_match": "transparent 1",
+                "rt_nexthop": "2001:db8::1",
+                "ipv6_exthdrs": "rt",
+                "limit_name": "lim1",
+                "quota_name": "quota1",
+                "counter_name": "cnt1",
+                "mark_set": "0x10",
+                "ct_mark_set": "0x20",
+                "ct_helper_set": "helper1",
+                "ct_timeout_set": "timeout1",
+                "ct_expectation_set": "expect1",
+                "comment": None,
+            }
+        )
+        rendered_advanced = rule_ops.render_firewall_rule(rule_advanced, table_family="inet")
+        for expected in (
+            "ether saddr aa:bb:cc:dd:ee:ff",
+            "ether daddr 11:22:33:44:55:66",
+            "vlan id 100",
+            "vlan type ip",
+            "tcp flags syn",
+            "meta length 64-1500",
+            "meta priority set 0x10",
+            "meta cpu 1",
+            "meta pkttype host",
+            "meta iiftype 1",
+            "meta oiftype 2",
+            "meta iifgroup 3",
+            "meta oifgroup 4",
+            "meta mark 0x1",
+            "ct mark 0x2",
+            "ct status assured,snat",
+            "ct direction reply",
+            "ct expiration 30s",
+            'ct helper "ftp"',
+            "ct label 0x1",
+            "ct event set new,destroy",
+            "ct original ip saddr 192.0.2.10",
+            "ct original ip6 daddr 2001:db8::10",
+            "ct reply ip saddr 192.0.2.20",
+            "ct reply ip6 daddr 2001:db8::20",
+            "fib saddr . iif oif exists",
+            "socket transparent 1",
+            "rt ip6 nexthop 2001:db8::1",
+            "exthdr rt",
+            'limit name "lim1"',
+            'quota name "quota1"',
+            'counter name "cnt1"',
+            "meta mark set 0x10",
+            "ct mark set 0x20",
+            'ct helper set "helper1"',
+            'ct timeout set "timeout1"',
+            'ct expectation set "expect1"',
+        ):
+            self.assertIn(expected, rendered_advanced)
+
+    def test_render_firewall_rule_dynamic_set_statement(self):
+        rule = {
+            "in_interface": "eth0",
+            "out_interface": None,
+            "src": None,
+            "dst": None,
+            "proto": "tcp",
+            "sport": None,
+            "dport": "22",
+            "set_stmt_op": "add",
+            "set_stmt_name": "ssh_flood",
+            "set_stmt_expr": "ip saddr",
+            "set_stmt_timeout": "10s",
+            "set_stmt_comment": None,
+            "action": "accept",
+            "comment": "tracked",
+        }
+
+        rendered = rule_ops.render_firewall_rule(rule, table_family="inet")
+
+        self.assertEqual(
+            rendered,
+            'iifname "eth0" meta l4proto tcp tcp dport 22 add @ssh_flood { ip saddr timeout 10s } accept comment "tracked"',
+        )
+
+        rule_update = dict(rule, set_stmt_op="update", set_stmt_comment=None, action="drop", comment=None)
+        self.assertIn(
+            "update @ssh_flood { ip saddr timeout 10s } drop",
+            rule_ops.render_firewall_rule(rule_update, table_family="inet"),
+        )
+
+    def test_render_firewall_rule_vmap_statement(self):
+        rule = {
+            "in_interface": None,
+            "out_interface": None,
+            "src": None,
+            "dst": None,
+            "proto": None,
+            "sport": None,
+            "dport": None,
+            "vmap_stmt_expr": "meta l4proto",
+            "vmap_stmt_name": "proto_verdicts",
+            "action": "",
+            "comment": None,
+        }
+
+        rendered = rule_ops.render_firewall_rule(rule, table_family="inet")
+
+        self.assertEqual(rendered, "meta l4proto vmap @proto_verdicts")
+
+    def test_render_firewall_rule_l3_address_collection_refs(self):
+        rule = {
+            "in_interface": None,
+            "out_interface": None,
+            "src": "@trusted_hosts",
+            "dst": "@servers",
+            "proto": "tcp",
+            "sport": None,
+            "dport": "443",
+            "action": "accept",
+            "comment": None,
+        }
+
+        rendered = rule_ops.render_firewall_rule(rule, table_family="inet")
+
+        self.assertEqual(rendered, "ip saddr @trusted_hosts ip daddr @servers meta l4proto tcp tcp dport 443 accept")
+
+    def test_render_firewall_rule_interface_collection_refs(self):
+        rule = {
+            "in_interface": "@lan_ifaces",
+            "out_interface": "@wan_ifaces",
+            "src": None,
+            "dst": None,
+            "proto": None,
+            "sport": None,
+            "dport": None,
+            "action": "accept",
+            "comment": None,
+        }
+
+        rendered = rule_ops.render_firewall_rule(rule, table_family="inet")
+
+        self.assertEqual(rendered, "iifname @lan_ifaces oifname @wan_ifaces accept")
+
+    def test_render_firewall_rule_numeric_protocol_with_ports(self):
+        rule = {
+            "in_interface": None,
+            "out_interface": None,
+            "src": None,
+            "dst": None,
+            "proto": "6",
+            "sport": None,
+            "dport": "443",
+            "action": "accept",
+            "comment": None,
+        }
+
+        rendered = rule_ops.render_firewall_rule(rule, table_family="inet")
+
+        self.assertEqual(rendered, "meta l4proto 6 tcp dport 443 accept")
+
+    def test_render_firewall_rule_port_lists_ranges_and_collection_refs(self):
+        rule = {
+            "in_interface": None,
+            "out_interface": None,
+            "src": None,
+            "dst": None,
+            "proto": "tcp",
+            "sport": "1024:65535",
+            "dport": "22,80,443",
+            "action": "accept",
+            "comment": None,
+        }
+
+        rendered = rule_ops.render_firewall_rule(rule, table_family="inet")
+
+        self.assertEqual(rendered, "meta l4proto tcp tcp sport 1024-65535 tcp dport { 22, 80, 443 } accept")
+
+        collection_rule = dict(rule, sport="@client_ports", dport="@admin_ports")
+        rendered_collection = rule_ops.render_firewall_rule(collection_rule, table_family="inet")
+
+        self.assertEqual(rendered_collection, "meta l4proto tcp tcp sport @client_ports tcp dport @admin_ports accept")
 
     def test_extract_normalized_rule_inputs(self):
         def _norm(v):
@@ -190,6 +490,158 @@ class FirewallRuleOpsTest(unittest.TestCase):
         self.assertFalse(defaults[86])
         self.assertFalse(defaults[88])
         self.assertTrue(defaults[89])
+
+        vmap_values = rule_ops.extract_normalized_rule_inputs(
+            payload={"vmap_stmt_expr": " meta l4proto ", "vmap_stmt_name": " proto_verdicts "},
+            normalize_value_fn=_norm,
+        )
+        self.assertEqual(vmap_values[-2], "meta l4proto")
+        self.assertEqual(vmap_values[-1], "proto_verdicts")
+
+    def test_normalize_firewall_rule_dynamic_set_statement(self):
+        def _norm(v):
+            if v is None:
+                return None
+            t = str(v).strip()
+            return t or None
+
+        def _normalize(payload, sets_data):
+            return rule_normalization_service_ops.normalize_firewall_rule(
+                payload,
+                normalize_value_fn=_norm,
+                default_family="inet",
+                schema_tables=firewall_schema.FIREWALL_SCHEMA["tables"],
+                ct_states=firewall_schema.FIREWALL_SCHEMA["ct_states"],
+                read_tables_fn=lambda: {"tables": []},
+                read_sets_fn=lambda: sets_data,
+                load_effective_objects_fn=lambda family, table: {},
+                id_factory=lambda: "rule-1",
+            )
+
+        dynamic_sets = {
+            "addr": [{"name": "ssh_flood", "enabled": True, "dynamic": True, "timeout": "10s", "size": 65536}],
+            "port": [{"name": "watched_ports", "enabled": True, "dynamic": True, "timeout": "10s", "size": 1024}],
+            "iface": [],
+        }
+        payload = {
+            "family": "inet",
+            "table": "filter",
+            "chain": "input",
+            "action": "accept",
+            "proto": "tcp",
+            "dport": "22",
+            "set_stmt_op": " add ",
+            "set_stmt_name": " ssh_flood ",
+            "set_stmt_expr": " ip saddr ",
+            "set_stmt_timeout": " 10S ",
+        }
+
+        normalized = _normalize(payload, dynamic_sets)
+
+        self.assertEqual(normalized["set_stmt_op"], "add")
+        self.assertEqual(normalized["set_stmt_name"], "ssh_flood")
+        self.assertEqual(normalized["set_stmt_expr"], "ip saddr")
+        self.assertEqual(normalized["set_stmt_timeout"], "10s")
+        self.assertIsNone(normalized["set_stmt_comment"])
+
+        normalized_port = _normalize(dict(payload, set_stmt_name="watched_ports", set_stmt_expr="tcp dport"), dynamic_sets)
+        self.assertEqual(normalized_port["set_stmt_expr"], "tcp dport")
+
+        invalid_cases = (
+            (dict(payload, set_stmt_timeout=None), dynamic_sets, "set_stmt_timeout is required for dynamic set statements"),
+            (dict(payload, set_stmt_op="delete"), dynamic_sets, "set_stmt_op must be add or update"),
+            (dict(payload, set_stmt_expr="ip saddr; drop"), dynamic_sets, "set_stmt_expr must be one of"),
+            (dict(payload, set_stmt_comment="runtime unsupported"), dynamic_sets, "set_stmt_comment is not supported"),
+            (dict(payload, family="ip"), dynamic_sets, "dynamic set statements are supported only for family=inet"),
+            (dict(payload, family="ip6"), dynamic_sets, "dynamic set statements are supported only for family=inet"),
+            (dict(payload, family="bridge"), dynamic_sets, "dynamic set statements are supported only for family=inet"),
+            (dict(payload, family="netdev"), dynamic_sets, "dynamic set statements are supported only for family=inet"),
+            (dict(payload, set_stmt_name="missing"), dynamic_sets, 'dynamic set "missing" is not found'),
+            (
+                dict(payload),
+                {"addr": [{"name": "ssh_flood", "enabled": True, "dynamic": False, "timeout": "10s", "size": 65536}], "port": [], "iface": []},
+                'dynamic set "ssh_flood" must have dynamic=true',
+            ),
+            (dict(payload, set_stmt_expr="tcp dport"), dynamic_sets, "target set kind is not compatible with set_stmt_expr"),
+        )
+        for invalid_payload, invalid_sets, message in invalid_cases:
+            with self.assertRaisesRegex(ValueError, message):
+                _normalize(invalid_payload, invalid_sets)
+
+    def test_normalize_firewall_rule_vmap_statement(self):
+        def _norm(v):
+            if v is None:
+                return None
+            t = str(v).strip()
+            return t or None
+
+        maps_data = {
+            "map": [],
+            "vmap": [
+                {
+                    "name": "proto_verdicts",
+                    "enabled": True,
+                    "entries": ["tcp:accept", "udp:drop"],
+                    "kind": "vmap",
+                }
+            ],
+        }
+
+        def _normalize(payload, maps=None):
+            return rule_normalization_service_ops.normalize_firewall_rule(
+                payload,
+                normalize_value_fn=_norm,
+                default_family="inet",
+                schema_tables=firewall_schema.FIREWALL_SCHEMA["tables"],
+                ct_states=firewall_schema.FIREWALL_SCHEMA["ct_states"],
+                read_tables_fn=lambda: {"tables": []},
+                read_sets_fn=lambda: {"addr": [], "port": [], "iface": []},
+                read_maps_fn=lambda: maps if maps is not None else maps_data,
+                load_effective_objects_fn=lambda family, table: {},
+                id_factory=lambda: "rule-1",
+            )
+
+        payload = {
+            "family": "inet",
+            "table": "filter",
+            "chain": "input",
+            "action": "",
+            "vmap_stmt_expr": " meta l4proto ",
+            "vmap_stmt_name": " proto_verdicts ",
+        }
+
+        normalized = _normalize(payload)
+
+        self.assertEqual(normalized["vmap_stmt_expr"], "meta l4proto")
+        self.assertEqual(normalized["vmap_stmt_name"], "proto_verdicts")
+
+        invalid_cases = (
+            (dict(payload, family="ip"), maps_data, "vmap statements are supported only for family=inet"),
+            (dict(payload, family="ip6"), maps_data, "vmap statements are supported only for family=inet"),
+            (dict(payload, family="bridge"), maps_data, "vmap statements are supported only for family=inet"),
+            (dict(payload, family="netdev"), maps_data, "vmap statements are supported only for family=inet"),
+            (dict(payload, action="accept"), maps_data, "vmap statements cannot be combined with terminal action"),
+            (dict(payload, vmap_stmt_expr="ip protocol"), maps_data, "vmap_stmt_expr must be one of"),
+            (dict(payload, vmap_stmt_name="missing"), maps_data, 'vmap "missing" is not found'),
+            (
+                dict(payload),
+                {"map": [], "vmap": [{"name": "proto_verdicts", "enabled": False, "entries": ["tcp:accept"], "kind": "vmap"}]},
+                'vmap "proto_verdicts" must be enabled',
+            ),
+            (
+                dict(payload),
+                {"map": [{"name": "proto_verdicts", "enabled": True, "entries": ["tcp:1"], "kind": "map"}], "vmap": []},
+                'vmap "proto_verdicts" is not found',
+            ),
+            (
+                dict(payload),
+                {"map": [], "vmap": [{"name": "proto_verdicts", "enabled": True, "entries": ["eth0:accept"], "kind": "vmap"}]},
+                "target vmap key type is not compatible with vmap_stmt_expr",
+            ),
+        )
+        for invalid_payload, invalid_maps, message in invalid_cases:
+            with self.assertRaisesRegex(ValueError, message):
+                _normalize(invalid_payload, invalid_maps)
 
     def test_build_normalized_rule_payload(self):
         payload = rule_ops.build_normalized_rule_payload(
@@ -320,13 +772,13 @@ class FirewallRuleOpsTest(unittest.TestCase):
 
         custom = rule_ops.resolve_table_chain_context(
             family="bridge",
-            nft_table="policy2",
+            nft_table="bridge_policy_tbl",
             chain="ingress_chain",
             default_family="inet",
             schema_tables={"filter": {"chains": ("input",)}, "nat": {"chains": ()}, "raw": {"chains": ()}, "mangle": {"chains": ()}},
             read_tables_fn=lambda: {
                 "tables": [
-                    {"family": "bridge", "table_name": "policy2", "chain_name": "ingress_chain", "chain_type": "nat", "hook": "prerouting"},
+                    {"family": "bridge", "table_name": "bridge_policy_tbl", "chain_name": "ingress_chain", "chain_type": "nat", "hook": "prerouting"},
                 ]
             },
         )
@@ -334,15 +786,35 @@ class FirewallRuleOpsTest(unittest.TestCase):
         self.assertEqual(custom["table_mode"], "nat")
         self.assertEqual(custom["selected_chain"]["hook"], "prerouting")
 
-        with self.assertRaisesRegex(ValueError, "family must be inet, bridge, or netdev"):
-            rule_ops.resolve_table_chain_context(
-                family="ip",
-                nft_table="filter",
-                chain="input",
-                default_family="inet",
-                schema_tables={"filter": {"chains": ("input",)}},
-                read_tables_fn=lambda: {"tables": []},
-            )
+        ip_custom = rule_ops.resolve_table_chain_context(
+            family="ip",
+            nft_table="wan_filter",
+            chain="input",
+            default_family="inet",
+            schema_tables={"filter": {"chains": ("input",)}},
+            read_tables_fn=lambda: {
+                "tables": [
+                    {"family": "ip", "table_name": "wan_filter", "chain_name": "input", "chain_type": "filter", "hook": "input"},
+                ]
+            },
+        )
+        self.assertEqual(ip_custom["family"], "ip")
+        self.assertEqual(ip_custom["table_mode"], "filter")
+
+        ip6_custom = rule_ops.resolve_table_chain_context(
+            family="ip6",
+            nft_table="wan6_filter",
+            chain="input",
+            default_family="inet",
+            schema_tables={"filter": {"chains": ("input",)}},
+            read_tables_fn=lambda: {
+                "tables": [
+                    {"family": "ip6", "table_name": "wan6_filter", "chain_name": "input", "chain_type": "filter", "hook": "input"},
+                ]
+            },
+        )
+        self.assertEqual(ip6_custom["family"], "ip6")
+        self.assertEqual(ip6_custom["table_mode"], "filter")
 
         with self.assertRaisesRegex(ValueError, "table name contains invalid characters"):
             rule_ops.resolve_table_chain_context(
@@ -354,24 +826,24 @@ class FirewallRuleOpsTest(unittest.TestCase):
                 read_tables_fn=lambda: {"tables": []},
             )
 
-        with self.assertRaisesRegex(ValueError, "table \"policy2\" is not found among built-in or custom tables"):
+        with self.assertRaisesRegex(ValueError, "table \"bridge_policy_tbl\" is not found among built-in or custom tables"):
             rule_ops.resolve_table_chain_context(
                 family="bridge",
-                nft_table="policy2",
+                nft_table="bridge_policy_tbl",
                 chain="input",
                 default_family="inet",
                 schema_tables={"filter": {"chains": ("input",)}},
                 read_tables_fn=lambda: {"tables": []},
             )
 
-        with self.assertRaisesRegex(ValueError, "chain \"missing\" is not valid for custom table \"policy2\""):
+        with self.assertRaisesRegex(ValueError, "chain \"missing\" is not valid for custom table \"bridge_policy_tbl\""):
             rule_ops.resolve_table_chain_context(
                 family="bridge",
-                nft_table="policy2",
+                nft_table="bridge_policy_tbl",
                 chain="missing",
                 default_family="inet",
                 schema_tables={"filter": {"chains": ("input",)}},
-                read_tables_fn=lambda: {"tables": [{"family": "bridge", "table_name": "policy2", "chain_name": "present"}]},
+                read_tables_fn=lambda: {"tables": [{"family": "bridge", "table_name": "bridge_policy_tbl", "chain_name": "present"}]},
             )
 
     def test_normalize_proto_and_basic_match_fields(self):
@@ -402,6 +874,160 @@ class FirewallRuleOpsTest(unittest.TestCase):
         self.assertEqual(normalized["ct_state"], "established,related")
         self.assertEqual(normalized["dscp"], "cs1")
         self.assertEqual(normalized["comment"], "quoted 'comment'")
+
+        normalized_sets = rule_ops.normalize_proto_and_basic_match_fields(
+            proto="tcp",
+            dport=None,
+            sport=None,
+            tcp_flags=None,
+            icmp_type=None,
+            icmp_code=None,
+            icmpv6_type=None,
+            icmpv6_code=None,
+            src="@trusted_hosts",
+            dst="@servers",
+            in_interface=None,
+            out_interface=None,
+            ibrname=None,
+            obrname=None,
+            enabled=True,
+            ct_state=None,
+            user_id=None,
+            hour=None,
+            dscp=None,
+            comment=None,
+            ct_states=("new",),
+        )
+        self.assertEqual(normalized_sets["src"], "@trusted_hosts")
+        self.assertEqual(normalized_sets["dst"], "@servers")
+
+        normalized_ports = rule_ops.normalize_proto_and_basic_match_fields(
+            proto="tcp",
+            dport="22,80,443",
+            sport="1024-65535",
+            tcp_flags=None,
+            icmp_type=None,
+            icmp_code=None,
+            icmpv6_type=None,
+            icmpv6_code=None,
+            src=None,
+            dst=None,
+            in_interface=None,
+            out_interface=None,
+            ibrname=None,
+            obrname=None,
+            enabled=True,
+            ct_state=None,
+            user_id=None,
+            hour=None,
+            dscp=None,
+            comment=None,
+            ct_states=("new",),
+        )
+        self.assertEqual(normalized_ports["dport"], "22,80,443")
+        self.assertEqual(normalized_ports["sport"], "1024:65535")
+
+        normalized_port_sets = rule_ops.normalize_proto_and_basic_match_fields(
+            proto="tcp",
+            dport="@admin_ports",
+            sport="@client_ports",
+            tcp_flags=None,
+            icmp_type=None,
+            icmp_code=None,
+            icmpv6_type=None,
+            icmpv6_code=None,
+            src=None,
+            dst=None,
+            in_interface=None,
+            out_interface=None,
+            ibrname=None,
+            obrname=None,
+            enabled=True,
+            ct_state=None,
+            user_id=None,
+            hour=None,
+            dscp=None,
+            comment=None,
+            ct_states=("new",),
+        )
+        self.assertEqual(normalized_port_sets["dport"], "@admin_ports")
+        self.assertEqual(normalized_port_sets["sport"], "@client_ports")
+
+        normalized_iface_sets = rule_ops.normalize_proto_and_basic_match_fields(
+            proto=None,
+            dport=None,
+            sport=None,
+            tcp_flags=None,
+            icmp_type=None,
+            icmp_code=None,
+            icmpv6_type=None,
+            icmpv6_code=None,
+            src=None,
+            dst=None,
+            in_interface="@lan_ifaces",
+            out_interface="@wan_ifaces",
+            ibrname=None,
+            obrname=None,
+            enabled=True,
+            ct_state=None,
+            user_id=None,
+            hour=None,
+            dscp=None,
+            comment=None,
+            ct_states=("new",),
+        )
+        self.assertEqual(normalized_iface_sets["in_interface"], "@lan_ifaces")
+        self.assertEqual(normalized_iface_sets["out_interface"], "@wan_ifaces")
+
+        with self.assertRaisesRegex(ValueError, "src must be one IP/CIDR prefix or one @collection reference"):
+            rule_ops.normalize_proto_and_basic_match_fields(
+                proto="tcp",
+                dport=None,
+                sport=None,
+                tcp_flags=None,
+                icmp_type=None,
+                icmp_code=None,
+                icmpv6_type=None,
+                icmpv6_code=None,
+                src="192.0.2.1,192.0.2.2",
+                dst=None,
+                in_interface=None,
+                out_interface=None,
+                ibrname=None,
+                obrname=None,
+                enabled=True,
+                ct_state=None,
+                user_id=None,
+                hour=None,
+                dscp=None,
+                comment=None,
+                ct_states=("new",),
+            )
+
+        with self.assertRaisesRegex(ValueError, "in_interface must be one interface name or one @collection reference"):
+            rule_ops.normalize_proto_and_basic_match_fields(
+                proto=None,
+                dport=None,
+                sport=None,
+                tcp_flags=None,
+                icmp_type=None,
+                icmp_code=None,
+                icmpv6_type=None,
+                icmpv6_code=None,
+                src=None,
+                dst=None,
+                in_interface="@bad/name",
+                out_interface=None,
+                ibrname=None,
+                obrname=None,
+                enabled=True,
+                ct_state=None,
+                user_id=None,
+                hour=None,
+                dscp=None,
+                comment=None,
+                ct_states=("new",),
+            )
 
         with self.assertRaisesRegex(ValueError, "tcp_flags requires proto tcp"):
             rule_ops.normalize_proto_and_basic_match_fields(
@@ -615,7 +1241,7 @@ class FirewallRuleOpsTest(unittest.TestCase):
             family="inet",
             field_values=(("src", "1.1.1.1"),),
         )
-        with self.assertRaisesRegex(ValueError, "src is not supported for family=bridge in Policy v2 MVP"):
+        with self.assertRaisesRegex(ValueError, "src is not supported for family=bridge in unified Policy"):
             rule_ops.validate_bridge_disallowed_fields(
                 family="bridge",
                 field_values=(("src", "1.1.1.1"),),
@@ -629,7 +1255,7 @@ class FirewallRuleOpsTest(unittest.TestCase):
                 field_values=(),
             )
 
-        with self.assertRaisesRegex(ValueError, "out_interface is not supported for family=netdev in Policy3"):
+        with self.assertRaisesRegex(ValueError, "out_interface is not supported for family=netdev in unified Policy"):
             rule_ops.validate_netdev_restrictions(
                 family="netdev",
                 selected_chain={"chain_type": "filter", "hook": "ingress"},
@@ -643,6 +1269,13 @@ class FirewallRuleOpsTest(unittest.TestCase):
             selected_device="eth0",
             field_values=(("out_interface", None), ("nftrace", False)),
         )
+        with self.assertRaisesRegex(ValueError, "netdev egress hook is not supported by current nft runtime profile"):
+            rule_ops.validate_netdev_restrictions(
+                family="netdev",
+                selected_chain={"chain_type": "filter", "hook": "egress"},
+                selected_device="eth0",
+                field_values=(("out_interface", None), ("nftrace", False)),
+            )
 
     def test_validate_family_specific_restrictions(self):
         rule_ops.validate_family_specific_restrictions(
@@ -711,7 +1344,7 @@ class FirewallRuleOpsTest(unittest.TestCase):
             quota_name=None,
         )
 
-        with self.assertRaisesRegex(ValueError, "src is not supported for family=bridge in Policy v2 MVP"):
+        with self.assertRaisesRegex(ValueError, "src is not supported for family=bridge in unified Policy"):
             rule_ops.validate_family_specific_restrictions(
                 family="bridge",
                 selected_chain=None,
@@ -874,6 +1507,24 @@ class FirewallRuleOpsTest(unittest.TestCase):
         self.assertEqual(bridge_ok["ct_helper_set"], "helper1")
         self.assertEqual(bridge_ok["quota_name"], "quota1")
 
+        inet_ok = rule_ops.normalize_limit_and_named_object_fields(
+            limit_rate=None,
+            counter=False,
+            ct_helper_set="helper1",
+            ct_timeout_set="timeout1",
+            ct_expectation_set="exp1",
+            counter_name="counter1",
+            limit_name="limit1",
+            quota_name="quota1",
+            family="inet",
+        )
+        self.assertEqual(inet_ok["ct_helper_set"], "helper1")
+        self.assertEqual(inet_ok["ct_timeout_set"], "timeout1")
+        self.assertEqual(inet_ok["ct_expectation_set"], "exp1")
+        self.assertEqual(inet_ok["counter_name"], "counter1")
+        self.assertEqual(inet_ok["limit_name"], "limit1")
+        self.assertEqual(inet_ok["quota_name"], "quota1")
+
         with self.assertRaisesRegex(ValueError, "counter_name and counter are mutually exclusive"):
             rule_ops.normalize_limit_and_named_object_fields(
                 limit_rate=None,
@@ -887,7 +1538,7 @@ class FirewallRuleOpsTest(unittest.TestCase):
                 family="bridge",
             )
 
-        with self.assertRaisesRegex(ValueError, "ct_helper_set/ct_timeout_set/ct_expectation_set are supported only for family=bridge in this sprint"):
+        with self.assertRaisesRegex(ValueError, "named object bindings are not supported for family=netdev"):
             rule_ops.normalize_limit_and_named_object_fields(
                 limit_rate=None,
                 counter=False,
@@ -897,10 +1548,10 @@ class FirewallRuleOpsTest(unittest.TestCase):
                 counter_name=None,
                 limit_name=None,
                 quota_name=None,
-                family="inet",
+                family="netdev",
             )
 
-        with self.assertRaisesRegex(ValueError, "ct_expectation_set is planned for family=bridge and is temporarily disabled"):
+        with self.assertRaisesRegex(ValueError, "ct_expectation_set is not supported for family=bridge"):
             rule_ops.normalize_limit_and_named_object_fields(
                 limit_rate=None,
                 counter=False,
@@ -1077,6 +1728,21 @@ class FirewallRuleOpsTest(unittest.TestCase):
         self.assertEqual(netdev["fwd_family"], "ip")
         self.assertEqual(netdev["fwd_to"], "192.0.2.1")
 
+        dup = rule_ops.normalize_queue_dup_fwd_fields(
+            action="accept",
+            table_mode="filter",
+            family="inet",
+            queue_num=None,
+            queue_flags_raw=None,
+            dup_to="192.0.2.55",
+            dup_dev="eth9",
+            fwd_to=None,
+            fwd_dev=None,
+            fwd_family=None,
+        )
+        self.assertEqual(dup["dup_to"], "192.0.2.55")
+        self.assertEqual(dup["dup_dev"], "eth9")
+
         with self.assertRaisesRegex(ValueError, "queue_flags supports only: bypass, fanout"):
             rule_ops.normalize_queue_dup_fwd_fields(
                 action="queue",
@@ -1105,6 +1771,20 @@ class FirewallRuleOpsTest(unittest.TestCase):
                 fwd_family="ip",
             )
 
+        with self.assertRaisesRegex(ValueError, "dup_to/dup_dev are planned for family=bridge"):
+            rule_ops.normalize_queue_dup_fwd_fields(
+                action="accept",
+                table_mode="filter",
+                family="bridge",
+                queue_num=None,
+                queue_flags_raw=None,
+                dup_to="192.0.2.55",
+                dup_dev="eth9",
+                fwd_to=None,
+                fwd_dev=None,
+                fwd_family=None,
+            )
+
     def test_validate_action_target_reject_and_proto_fields(self):
         normalized = rule_ops.validate_action_target_reject_and_proto_fields(
             action="reject",
@@ -1118,6 +1798,45 @@ class FirewallRuleOpsTest(unittest.TestCase):
             sport=None,
         )
         self.assertEqual(normalized["proto"], "tcp")
+
+        numeric_tcp = rule_ops.validate_action_target_reject_and_proto_fields(
+            action="accept",
+            family="inet",
+            table_mode="filter",
+            target_chain=None,
+            selected_chain=None,
+            reject_type=None,
+            proto=" 6 ",
+            dport="443",
+            sport=None,
+        )
+        self.assertEqual(numeric_tcp["proto"], "6")
+
+        numeric_udp = rule_ops.validate_action_target_reject_and_proto_fields(
+            action="accept",
+            family="inet",
+            table_mode="filter",
+            target_chain=None,
+            selected_chain=None,
+            reject_type=None,
+            proto="17",
+            dport="53",
+            sport=None,
+        )
+        self.assertEqual(numeric_udp["proto"], "17")
+
+        numeric_icmp = rule_ops.validate_action_target_reject_and_proto_fields(
+            action="accept",
+            family="inet",
+            table_mode="filter",
+            target_chain=None,
+            selected_chain=None,
+            reject_type=None,
+            proto="1",
+            dport=None,
+            sport=None,
+        )
+        self.assertEqual(numeric_icmp["proto"], "1")
 
         with self.assertRaisesRegex(ValueError, "target_chain is required for jump/goto"):
             rule_ops.validate_action_target_reject_and_proto_fields(
@@ -1156,6 +1875,32 @@ class FirewallRuleOpsTest(unittest.TestCase):
                 proto="icmp",
                 dport=None,
                 sport="53",
+            )
+
+        with self.assertRaisesRegex(ValueError, "dport requires proto tcp or udp"):
+            rule_ops.validate_action_target_reject_and_proto_fields(
+                action="accept",
+                family="inet",
+                table_mode="filter",
+                target_chain=None,
+                selected_chain=None,
+                reject_type=None,
+                proto="1",
+                dport="443",
+                sport=None,
+            )
+
+        with self.assertRaisesRegex(ValueError, "proto must be tcp, udp, icmp, icmpv6, or numeric protocol id 0..255"):
+            rule_ops.validate_action_target_reject_and_proto_fields(
+                action="accept",
+                family="inet",
+                table_mode="filter",
+                target_chain=None,
+                selected_chain=None,
+                reject_type=None,
+                proto="256",
+                dport=None,
+                sport=None,
             )
 
     def test_validate_l4_icmp_literal_fields(self):
@@ -1271,6 +2016,43 @@ class FirewallRuleOpsTest(unittest.TestCase):
         self.assertEqual(writes["count"], 0)
         self.assertEqual(applied["count"], 1)
 
+    def test_create_rule_rolls_back_on_apply_error(self):
+        rules_state = [{"id": "r1", "table": "filter", "family": "inet", "chain": "input", "action": "accept", "enabled": True}]
+        writes = {"count": 0}
+
+        def _list_rules():
+            return [dict(x) for x in rules_state]
+
+        def _normalize(payload, validate_runtime_objects=True):
+            row = dict(payload or {})
+            row.setdefault("id", "r2")
+            row.setdefault("table", "filter")
+            row.setdefault("family", "inet")
+            row.setdefault("chain", "forward")
+            row.setdefault("action", "drop")
+            row.setdefault("enabled", True)
+            return row
+
+        def _write_rules(data):
+            writes["count"] += 1
+            rules_state[:] = [dict(x) for x in data]
+
+        def _apply_fail():
+            raise RuntimeError("apply failed")
+
+        with self.assertRaisesRegex(RuntimeError, "apply failed"):
+            rule_ops.create_rule(
+                payload={"id": "r2"},
+                apply_now=True,
+                list_rules_fn=_list_rules,
+                normalize_rule_fn=_normalize,
+                write_rules_fn=_write_rules,
+                apply_rules_fn=_apply_fail,
+            )
+
+        self.assertEqual([x["id"] for x in rules_state], ["r1"])
+        self.assertEqual(writes["count"], 2)
+
     def test_update_and_delete_rule_with_rollback_on_apply_error(self):
         rules_state = [{"id": "r1", "table": "filter", "enabled": True}]
 
@@ -1361,6 +2143,47 @@ class FirewallRuleOpsTest(unittest.TestCase):
         self.assertEqual([x["id"] for x in items], ["r3", "r1"])
         self.assertEqual([x["id"] for x in rules_state], ["r3", "r1", "r2"])
         self.assertEqual(applied["count"], 1)
+
+    def test_reorder_rules_rolls_back_on_apply_error(self):
+        rules_state = [
+            {"id": "r1", "table": "filter"},
+            {"id": "r2", "table": "nat"},
+            {"id": "r3", "table": "filter"},
+        ]
+
+        def _list_rules():
+            return [dict(x) for x in rules_state]
+
+        def _read_tables():
+            return {"tables": []}
+
+        def _write_rules(data):
+            rules_state[:] = [dict(x) for x in data]
+
+        def _norm(v):
+            if v is None:
+                return None
+            t = str(v).strip()
+            return t or None
+
+        def _apply_fail():
+            raise RuntimeError("apply failed")
+
+        with self.assertRaisesRegex(RuntimeError, "apply failed"):
+            rule_ops.reorder_rules(
+                table="filter",
+                ordered_ids=["r3", "r1"],
+                apply_now=True,
+                list_rules_fn=_list_rules,
+                read_tables_fn=_read_tables,
+                normalize_value_fn=_norm,
+                default_family="inet",
+                default_tables=("filter", "nat"),
+                write_rules_fn=_write_rules,
+                apply_rules_fn=_apply_fail,
+            )
+
+        self.assertEqual([x["id"] for x in rules_state], ["r1", "r2", "r3"])
 
 
 if __name__ == "__main__":

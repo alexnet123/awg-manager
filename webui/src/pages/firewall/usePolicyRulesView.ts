@@ -1,25 +1,38 @@
 import * as React from 'react'
 import type { FirewallRule, FirewallState } from '../api'
+import { hasFirewallRuleObjectBinding, ruleHasFirewallObjectUsageKey } from './firewallObjectBindings'
+import { formatFirewallRuleAction } from './policyUtils'
 import { compareStr, nextSortState, type SortDirection } from './selectionUtils'
 
 type PolicySortKey = 'chain' | 'action' | 'proto' | 'src' | 'dst' | 'sport' | 'dport' | 'in_interface' | 'out_interface' | 'ct_state' | 'packets' | 'bytes'
+type TableFamily = 'inet' | 'ip' | 'ip6' | 'bridge' | 'netdev'
 
 type Params = {
   state: FirewallState | null
   activeRuleTableName: string
+  activeRuleTableFamily: TableFamily
   policySort: { key: PolicySortKey | null; dir: SortDirection }
   setPolicySort: React.Dispatch<React.SetStateAction<{ key: PolicySortKey | null; dir: SortDirection }>>
   visibleColumns: Record<string, boolean>
   policyColumnOrder: PolicySortKey[]
+  objectRulesFilter?: 'all' | 'with_objects' | 'without_objects'
+  objectRuleObjectFilterKey?: string | null
 }
 
 export function usePolicyRulesView(params: Params) {
   const activeRuleTable = params.activeRuleTableName
 
-  const visibleRules = React.useMemo(
-    () => (params.state?.rules || []).filter((r) => r.table === activeRuleTable && String(r.family || 'inet').toLowerCase() === 'inet'),
-    [params.state?.rules, activeRuleTable],
-  )
+  const visibleRules = React.useMemo(() => {
+    let rows = (params.state?.rules || []).filter((r) => (
+      r.table === activeRuleTable && String(r.family || 'inet').toLowerCase() === params.activeRuleTableFamily
+    ))
+    if (params.activeRuleTableFamily !== 'netdev') {
+      if (params.objectRulesFilter === 'with_objects') rows = rows.filter(hasFirewallRuleObjectBinding)
+      else if (params.objectRulesFilter === 'without_objects') rows = rows.filter((rule) => !hasFirewallRuleObjectBinding(rule))
+      if (params.objectRuleObjectFilterKey) rows = rows.filter((rule) => ruleHasFirewallObjectUsageKey(rule, params.objectRuleObjectFilterKey || ''))
+    }
+    return rows
+  }, [params.state?.rules, activeRuleTable, params.activeRuleTableFamily, params.objectRulesFilter, params.objectRuleObjectFilterKey])
 
   const sortedVisibleRules = React.useMemo(() => {
     const key = params.policySort.key
@@ -38,7 +51,7 @@ export function usePolicyRulesView(params: Params) {
         if (key === 'in_interface') return String(row.in_interface || '')
         if (key === 'out_interface') return String(row.out_interface || '')
         if (key === 'ct_state') return String(row.ct_state || '')
-        if (key === 'action') return String(row.action || '')
+        if (key === 'action') return formatFirewallRuleAction(row)
         if (key === 'chain') return String(row.chain || '')
         return ''
       }

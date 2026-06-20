@@ -145,6 +145,62 @@ class FirewallRuntimeOpsTest(unittest.TestCase):
         self.assertEqual(scripts, ["nat-script\n"])
         self.assertFalse(result["named_reset_supported"])
 
+    def test_reset_counters_custom_table_partial_reapply(self):
+        deleted = []
+        scripts = []
+        stats_writes = []
+        applied = {"count": 0}
+
+        def _append(
+            script_lines,
+            table_family,
+            nft_table,
+            table_defs,
+            sets_data,
+            maps_data,
+            rules,
+            named_objects_data,
+            include_runtime_objects,
+        ):
+            self.assertEqual(table_family, "inet")
+            self.assertEqual(nft_table, "wan_filter")
+            self.assertTrue(include_runtime_objects)
+            self.assertEqual(table_defs[("inet", "wan_filter")], [("input", "filter", "input", 10, None, "accept")])
+            script_lines.append("custom-script")
+
+        result = runtime_ops.reset_counters(
+            table="wan_filter",
+            read_tables_fn=lambda: {"tables": [{"family": "inet", "table_name": "wan_filter"}]},
+            normalize_value_fn=lambda v: str(v).strip() if v is not None and str(v).strip() else None,
+            default_family="inet",
+            default_tables=("filter", "nat", "raw", "mangle"),
+            list_rules_fn=lambda: [
+                {"id": "r1", "table": "wan_filter"},
+                {"id": "r2", "table": "filter"},
+            ],
+            read_sets_fn=lambda: {"addr": [], "port": [], "iface": []},
+            read_maps_fn=lambda: {"map": [], "vmap": []},
+            read_objects_fn=lambda: {"objects": []},
+            collect_table_defs_fn=lambda: {("inet", "wan_filter"): [("input", "filter", "input", 10, None, "accept")]},
+            reset_named_counters_fn=lambda family, table_name: False,
+            reset_named_quotas_fn=lambda family, table_name: False,
+            read_stats_fn=lambda: {"r1": {"packets": 10}, "r2": {"packets": 20}},
+            write_stats_fn=lambda payload: stats_writes.append(dict(payload)),
+            apply_rules_fn=lambda: applied.update(count=applied["count"] + 1),
+            delete_table_fn=lambda family, table_name: deleted.append((family, table_name)),
+            append_table_script_lines_fn=_append,
+            apply_script_fn=lambda script: scripts.append(script),
+            table_prefix="",
+        )
+
+        self.assertEqual(applied["count"], 0)
+        self.assertEqual(deleted, [("inet", "wan_filter")])
+        self.assertEqual(scripts, ["custom-script\n"])
+        self.assertEqual(stats_writes[-1], {"r2": {"packets": 20}})
+        self.assertEqual(result["rules_stats_reset"], 1)
+        self.assertTrue(result["runtime_reapplied"])
+        self.assertFalse(result["named_reset_supported"])
+
     def test_reset_counters_rejects_unknown_table(self):
         with self.assertRaisesRegex(ValueError, "table must be one of built-in or existing custom tables"):
             runtime_ops.reset_counters(

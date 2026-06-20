@@ -1,6 +1,6 @@
 # Module Map (EN)
 
-Last updated: 2026-05-27
+Last updated: 2026-05-28
 
 This document tracks module ownership during the modular refactor and explains which functions are responsible for what.
 
@@ -71,7 +71,7 @@ This document tracks module ownership during the modular refactor and explains w
     - firewall JSON store/runtime wiring is resolved inside facade callables (`_read/_write_firewall_*`, `_collect_firewall_table_defs`) and direct domain/store callbacks in `apply_firewall_rules`
     - facade `read/write` firewall store callbacks are centralized as named helper callables (and partials where needed), while preserving dynamic `_state_paths()` resolution
     - managed-table/runtime/append-script callbacks in facade `apply/reset` paths are centralized into shared callables (named helpers/partials; no lambda adapters in callback declarations)
-    - firewall collection/object helper wiring is facade-local (no awg_core helper sourcing for set/map/table/object normalization, timeout/runtime signatures, table script assembly, effective object merge)
+    - firewall collection runtime helper wiring (`normalize/timeout/enrich/cleanup/runtime-signature`) is delegated via `firewall_compat_entry_ops.build_collection_runtime_helpers`; object/set/map/table normalization and effective object merge wiring remain facade-local
     - firewall service `normalize_item_fn` paths are centralized via shared facade callables (`_normalize_firewall_*`) that delegate to domain normalizers (no duplicated inline lambda blocks in call sites)
     - named-object parse/validation callback wiring is centralized via shared facade callbacks (`_parse_firewall_named_objects_query`, `_validate_firewall_named_object_table_exists`)
     - firewall rule-id generation wiring in normalization path is centralized via `_generate_firewall_rule_id` callback
@@ -81,6 +81,7 @@ This document tracks module ownership during the modular refactor and explains w
     - firewall schema wiring is resolved from `backend.domains.firewall.schema.FIREWALL_SCHEMA` (no `awg_core` schema sourcing)
   - fallback routing:
     - `_backend_or_fallback` switches to legacy-target service wrapper on backend-path errors
+    - firewall backend validation/missing-resource errors (`ValueError`, `LookupError`) are re-raised by `_backend_or_fallback` and do not enter legacy fallback, preserving domain/API validation responses without changing non-firewall compatibility fallback
     - fallback call dispatch is routed through `legacy_manager_bridge.call_manager_method` (single app-layer seam for remove-cycle)
     - row-access fallback cursor is resolved via `legacy_manager_bridge.get_manager_attr("c")`; crypto fallback primitives are resolved via `legacy_manager_bridge.get_manager_attr("Fernet"/"InvalidToken")`
     - `_backend_or_fallback` / row-access / crypto and `__getattr__` fallback call sites are routed via `_legacy_manager_call` / `_legacy_manager_attr` helpers
@@ -136,8 +137,10 @@ This document tracks module ownership during the modular refactor and explains w
   - `list_rules`, `create_rule`, `update_rule`, `delete_rule`, `reorder_rules`, `reset_counters`
 - `runtime_adapter.py`: nft/runtime integration.
   - `apply_rules`, `list_tables`, `delete_table`, `build_runtime_counters_by_rule`
+  - `parse_runtime_collections_from_ruleset_json`, `list_runtime_collections`: parse best-effort runtime-only set/map/vmap overlays from `nft -j list ruleset` without writing manager state.
 - `store.py`: JSON persistence and normalization primitives.
   - `read_*`/`write_*`, `normalize_set_item`, `normalize_map_item`, named-object/table helpers
+  - `normalize_map_item` owns map/vmap entry normalization and `vmap` verdict value allowlist validation.
 - `schema.py`: canonical firewall constants used by compat and backend facade layers.
   - `FIREWALL_TABLE_FAMILY`, `FIREWALL_SUPPORTED_TABLE_FAMILIES`, `FIREWALL_NAMED_OBJECT_KINDS`
   - `FIREWALL_TABLE_PREFIX`, `FIREWALL_SCHEMA`, `FIREWALL_DEFAULT_TABLE_DEFS`, `FIREWALL_RESERVED_PRIORITIES`
@@ -154,30 +157,36 @@ This document tracks module ownership during the modular refactor and explains w
   - `render_firewall_rule`
   - `append_enabled_rule_script_lines`
   - `resolve_table_chain_context`
-  - `validate_action_target_reject_and_proto_fields`
-  - `normalize_proto_and_basic_match_fields`
+  - `resolve_table_chain_context` owns built-in `inet` table context plus custom table context for `inet/ip/ip6/bridge/netdev`
+  - `validate_action_target_reject_and_proto_fields` owns action/target/reject validation plus L4 protocol token validation for named protocols (`tcp`/`udp`/`icmp`/`icmpv6`) and numeric protocol IDs (`0..255`), including port eligibility for `tcp`/`udp`/`6`/`17`.
+  - `normalize_proto_and_basic_match_fields` owns basic L3 address match validation for one IP/CIDR prefix or one `@collection` reference in `src`/`dst`.
   - `validate_l4_icmp_literal_fields`
   - `normalize_nat_raw_fields`, `normalize_log_fields`
   - `normalize_meta_ct_fib_fields`, `normalize_l2_mark_fields`
+  - `normalize_dynamic_set_statement_fields`
+  - `normalize_vmap_statement_fields` owns first-scope named `vmap` rule statement validation/render fields (`vmap_stmt_expr`, `vmap_stmt_name`) for `inet` + `meta l4proto`.
   - `validate_bridge_disallowed_fields`, `validate_netdev_restrictions`
   - `validate_family_specific_restrictions`
 - `rule_normalization_service_ops.py`: composition-level full firewall rule normalization workflow.
   - `normalize_firewall_rule` (extract/validate/normalize/build payload pipeline)
+  - dynamic set statement target validation is wired through the existing sets reader while keeping the validation logic in `rule_ops.py`; facade normalization accepts the service-layer runtime validation flag and remains backend-first.
+  - named `vmap` statement target validation is wired through the existing maps reader while keeping expression/key-type validation in `rule_ops.py`.
   - default rule-id fallback is centralized via `_default_rule_id_factory`
 - `named_object_ops.py`: named object normalization, rendering, references.
   - `normalize_named_object_payload`, `render_named_object_add_statement`, `ensure_named_object_exists`
+  - `normalize_named_object_payload` owns named-object family/kind eligibility: `ct_helper`/`ct_timeout` are not supported for `netdev`, `ct_expectation` is limited to `inet/ip/ip6`, and `l3proto` must match `ip`/`ip6` object families
   - default named-object id fallback is centralized via `_default_named_object_id_factory`
-  - `validate_runtime_named_object_references`
+  - `validate_runtime_named_object_references` validates enabled named-object references for non-netdev rule families (`inet/ip/ip6/bridge`)
   - `append_enabled_named_object_script_lines`
 - `collection_ops.py`, `table_ops.py`, `state_ops.py`, `schema_ops.py`, `runtime_ops.py`: focused service helpers for collection/table/state/schema/runtime flows.
-  - `collection_ops.py`: `infer_map_token_type`, `format_map_token`, `build_map_declaration_and_elements`, `append_runtime_collection_script_lines`
+  - `collection_ops.py`: `infer_map_token_type`, `format_map_token`, `build_map_declaration_and_elements`, `append_runtime_collection_script_lines`; `infer_map_token_type` also owns protocol-token typing (`tcp/udp/icmp/...` -> `inet_proto`) for named `vmap` declarations.
 - `service_layer_ops.py`: firewall compatibility composition layer for legacy compatibility service wrappers.
   - rules/runtime/state wiring: `list_rules`, `apply_rules`, `create_rule`, `update_rule`, `delete_rule`, `reorder_rules`, `reset_counters`, `get_state`
   - collections/maps/tables/named-objects/schema wiring: `list_sets`, `upsert_set`, `delete_set`, `list_maps`, `upsert_map`, `delete_map`, `list_tables`, `list_named_objects`, `upsert_named_object`, `create_named_object`, `update_named_object`, `delete_named_object`, `upsert_table`, `delete_table`, `get_schema`
   - set/map cross-tab uniqueness callbacks (`other_names`) are centralized via shared helper iterators and `functools.partial`
 - `compat_entry_ops.py`: firewall compatibility entry layer used by `backend.app.legacy_manager_compat`.
   - delegates compat wrappers over `service_layer_ops` for rules/runtime/state and collections/maps/tables/named-objects/schema paths
-  - collection runtime helper factory for compat wiring: `build_collection_runtime_helpers`
+  - collection runtime helper factory used by both `backend.app.legacy_manager_compat` and `backend.app.manager_facade`: `build_collection_runtime_helpers`
 
 ### `backend/domains/awg`
 
@@ -361,6 +370,9 @@ This document tracks module ownership during the modular refactor and explains w
 
 - Firewall API contract client:
   - state/rules: `getFirewallState`, `getFirewallRules`, `createFirewallRule`, `updateFirewallRule`, `deleteFirewallRule`, `reorderFirewallRules`, `applyFirewallRules`, `resetFirewallCounters`
+  - rules expose optional `set_stmt_*` dynamic set statement fields without changing required payload shape.
+  - rules expose optional `vmap_stmt_*` named verdict map statement fields without changing required payload shape.
+  - sets expose optional runtime safety fields `dynamic`, `size`, and `gc_interval`.
   - objects/sets/maps/tables: `getFirewallObjects`, `upsertFirewallObject`, `deleteFirewallObject`, `getFirewallSets`, `upsertFirewallSet`, `getFirewallMaps`, `upsertFirewallMap`, `getFirewallTables`, `upsertFirewallTable`
 
 ### `webui/src/frontend/domains/interfaces_clients/api.ts`
@@ -375,6 +387,19 @@ This document tracks module ownership during the modular refactor and explains w
 - IPsec API contract client:
   - CRUD: `getIpsecPeers`, `upsertIpsecPeer`, `deleteIpsecPeer`, `getIpsecPolicies`, `upsertIpsecPolicy`, `deleteIpsecPolicy`, `deleteIpsecIdentity`, `deleteIpsecPhase1Profile`, `deleteIpsecPhase2Proposal`
   - runtime/actions: `applyIpsec`, `getIpsecActivePeers`, `getIpsecInstalledSas`, `getIpsecConfigPreview`, `initiateIpsecPolicy`, `terminateIpsecPeer`
+
+## Frontend: Firewall UI Ownership
+
+### `webui/src/pages/firewall.tsx` and `webui/src/pages/firewall/*`
+
+- `FirewallSectionTabs`: owns top-level Firewall sections. `policy2`/`policy3` are no longer exposed as top-level tabs; bridge/netdev rule flows are reached from the unified `policy` section, and nftables named-object management is exposed as the separate `objects` section after `collections`.
+- `PolicySectionToolbar`: owns the Policy table selector. Built-in `filter`/`nat`/`raw`/`mangle` shortcuts remain `inet`-scoped; the custom selector is family-aware and tracks table context as `(family, table)`.
+- `PolicyRuleEditorDialog` and `PolicyRuleEditor*Tab`: own unified Add/Edit rule form for `inet/ip/ip6/bridge/netdev` rule contexts. Bridge/netdev rule Add/Edit now uses the same Policy modal; bridge-specific interface fields, non-netdev named-object bindings with quick unlink, inet/ip/ip6 `ct_expectation_set`, runtime-safe `inet` dynamic set statement controls, runtime-safe `inet` named `vmap` controls, and netdev `fwd`/shared `queue` actions are enabled by `family`. The Action tab owns short why-disabled hints for `inet`-only dynamic set/verdict map controls, NAT action availability by family/table/chain context, bridge-disabled `ct_expectation`, and netdev-disabled named-object bindings.
+- `FirewallObjectsPanel`: owns named-object management inside the separate `objects` section. It reuses the existing `/firewall/objects` API and `FirewallObjectModal`, scopes rows by selected `family/table`, enables `use-in-rule` for `inet/ip/ip6/bridge`, and keeps netdev object bindings disabled.
+- `useFirewallPageGuards`, `usePolicyRuleFormContext`, `usePolicyRuleEditorSync`, `usePolicyRuleEditorActions`, `usePolicyRulesView`: own unified Policy context wiring for selected rule table family/name, chain options, create/edit defaults, save-payload sanitization, and visible rule filtering, including object-binding filters for non-netdev policy tables from the unified object panel; `usePolicyRuleEditorActions` also clears `set_stmt_*` when the selected rule family or form state is outside the supported `inet` dynamic set statement scope.
+- `useFirewallDataSync`: owns Firewall page data refresh orchestration and loads policy-table named objects for non-netdev families so Add/Edit rule selectors stay in sync after Objects `use in rule`.
+- `firewallObjectForm`, `firewallObjectSummary`, `firewallObjectBindings`, `useFirewallObjectState`, `useFirewallObjectActions`, `useFirewallObjectEditor`, `useFirewallObjectBindings`, and `FirewallObjectModal`: own object form state, summaries, binding usage keys, selection/filter state, create/edit/delete actions, modal presets, `ct_expectation` object create/edit for `inet/ip/ip6`, and non-netdev use-in-rule orchestration behind `FirewallObjectsPanel`. Historical `PolicyAdvancedPage`/`PolicyAdvancedSection`, old `PolicyAdvancedRuleEditor*`, and old `PolicyV2`/`PolicyBridgeObject` helper names have been removed from the active UI bundle.
+- Old entrypoints delegate through the unified Policy shell: hidden `policy2`/`policy3` capabilities are selected by family (`bridge`/`netdev`) instead of visible tabs, while existing API payloads and backend validation remain unchanged.
 
 ## Migration Rule for New Refactor Steps
 
