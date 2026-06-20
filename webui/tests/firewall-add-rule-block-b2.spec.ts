@@ -32,7 +32,7 @@ function getRuleLineByComment(ruleset: string, comment: string): string {
   return lines.find((line) => line.includes(`comment "${comment}"`)) || ''
 }
 
-test('block B2: packet priority editor explains QoS priority', async ({ page }) => {
+test('block B2: packet priority uses a simple text field', async ({ page }) => {
   await page.goto('/')
   await page.evaluate((apiKey) => {
     sessionStorage.setItem('awg_manager_auth_v1', JSON.stringify({ apiKey }))
@@ -50,11 +50,11 @@ test('block B2: packet priority editor explains QoS priority', async ({ page }) 
   }
   const priorityLine = modal.locator('div.space-y-1\\.5', { hasText: 'set packet priority (QoS)' }).first()
   await priorityLine.getByRole('button', { name: '+' }).click()
-  await expect(priorityLine.getByText('Common values')).toBeVisible()
-  await expect(priorityLine.getByText('Expert QoS action')).toBeVisible()
-  await expect(priorityLine.getByText('not firewall rule order')).toBeVisible()
-  await priorityLine.getByRole('button', { name: '1:10 tc classid major:minor' }).click()
-  await expect(priorityLine.getByPlaceholder('1:10 / 0x10 / 10')).toHaveValue('1:10')
+  const input = priorityLine.getByPlaceholder('1:10 / 0x10 / 10')
+  await expect(input).toHaveValue('1:10')
+  await input.fill('0x10')
+  await expect(input).toHaveValue('0x10')
+  await expect(priorityLine.getByText('Common values')).toHaveCount(0)
 })
 
 test('block B2: meta priority/cpu + ct direction/expiration map to runtime', async ({ request }) => {

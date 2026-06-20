@@ -103,12 +103,6 @@ const ICMPV6_CODE_PRESETS: Record<string, readonly { value: string; hint: string
   ],
 }
 
-const META_PRIORITY_PRESETS = [
-  { value: '1:10', hint: 'tc classid major:minor' },
-  { value: '0x10', hint: 'skb priority in hex' },
-  { value: '10', hint: 'skb priority decimal' },
-] as const
-
 function TcpFlagsPicker(props: {
   value?: FirewallRule['tcp_flags'] | null
   onChange: (value: FirewallRule['tcp_flags'] | null) => void
@@ -254,50 +248,6 @@ function IcmpMatchEditor(props: {
   )
 }
 
-function MetaPriorityEditor(props: {
-  value?: string | null
-  onChange: (value: string | null) => void
-}) {
-  return (
-    <div className='rounded-md border p-2'>
-      <div className='space-y-1'>
-        <div className='text-[10px] font-semibold text-muted-foreground'>Priority value</div>
-        <Input
-          className='h-7 text-xs'
-          placeholder='1:10 / 0x10 / 10'
-          value={props.value || ''}
-          onChange={(event) => props.onChange(event.target.value || null)}
-        />
-      </div>
-      <div className='mt-2 space-y-1'>
-        <div className='text-[9px] font-semibold uppercase tracking-wide text-muted-foreground'>Common values</div>
-        <div className='grid grid-cols-3 gap-1'>
-          {META_PRIORITY_PRESETS.map((preset) => {
-            const selected = props.value === preset.value
-            return (
-              <button
-                key={preset.value}
-                type='button'
-                className={[
-                  'rounded border px-2 py-1 text-left text-[10px] leading-3 transition-colors',
-                  selected ? 'border-primary bg-primary/10 text-foreground' : 'border-border bg-background hover:bg-muted',
-                ].join(' ')}
-                onClick={() => props.onChange(preset.value)}
-              >
-                <span className='block font-semibold'>{preset.value}</span>
-                <span className='block text-[9px] text-muted-foreground'>{preset.hint}</span>
-              </button>
-            )
-          })}
-        </div>
-      </div>
-      <div className='mt-1.5 rounded border border-amber-300/70 bg-amber-50 px-2 py-1 text-[9px] leading-3 text-amber-900'>
-        Expert QoS action: sets Linux packet priority. This is not firewall rule order.
-      </div>
-    </div>
-  )
-}
-
 export function PolicyRuleEditorAdvancedTab(props: Props) {
   return (
 <TabsContent value='advanced' className='mt-2 space-y-2.5'>
@@ -353,11 +303,8 @@ export function PolicyRuleEditorAdvancedTab(props: Props) {
                       <ToggleLine label='meta length' enabled={!!props.form.meta_length} inactiveHint='64-1500' onToggle={() => props.setForm((p) => ({ ...p, meta_length: p.meta_length ? null : '64-1500' }))}>
                         <Input className='h-7' placeholder='64-1500' value={props.form.meta_length || ''} onChange={(e) => props.setForm((p) => ({ ...p, meta_length: e.target.value || null }))} />
                       </ToggleLine>
-                      <ToggleLine label='set packet priority (QoS)' enabled={!!props.form.meta_priority} inactiveHint='expert: tc classid / skb priority' onToggle={() => props.setForm((p) => ({ ...p, meta_priority: p.meta_priority ? null : '1:10' }))}>
-                        <MetaPriorityEditor
-                          value={props.form.meta_priority || null}
-                          onChange={(value) => props.setForm((p) => ({ ...p, meta_priority: value }))}
-                        />
+                      <ToggleLine label='set packet priority (QoS)' enabled={!!props.form.meta_priority} inactiveHint='1:10 / 0x10 / 10' onToggle={() => props.setForm((p) => ({ ...p, meta_priority: p.meta_priority ? null : '1:10' }))}>
+                        <Input className='h-7' placeholder='1:10 / 0x10 / 10' value={props.form.meta_priority || ''} onChange={(e) => props.setForm((p) => ({ ...p, meta_priority: e.target.value || null }))} />
                       </ToggleLine>
                     </div>
                     <div className='grid grid-cols-2 gap-2'>
