@@ -22,14 +22,14 @@ meta l4proto vmap @proto_verdicts
 
 ## Основание в NFT/libnftables
 
-`docs/NFT.md` описывает `vmap` как аналог `map`, где value side содержит verdict:
+`docs/reference/NFT.md` описывает `vmap` как аналог `map`, где value side содержит verdict:
 
 ```nft
 expression vmap { VMAP_ELEMENTS }
 VMAP_ELEMENT := key : verdict
 ```
 
-`docs/libnftables-json-ManPage.md` описывает statement:
+`docs/reference/libnftables-json-ManPage.md` описывает statement:
 
 ```json
 { "vmap": { "key": EXPRESSION, "data": EXPRESSION } }

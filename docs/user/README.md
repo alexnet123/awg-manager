@@ -6,7 +6,18 @@
 
 Одна пользовательская функция — один канонический guide на язык.
 
-Рекомендуемые будущие разделы:
+## Firewall
+
+- [firewall/admin-guide.ru.md](firewall/admin-guide.ru.md) — руководство администратора Firewall, RU;
+- [firewall/add-rule.ru.md](firewall/add-rule.ru.md) — добавление firewall rule, RU;
+- [firewall/add-rule.md](firewall/add-rule.md) — Add Firewall Rule, EN;
+- [firewall/add-rule-field-reference.ru.md](firewall/add-rule-field-reference.ru.md) — справочник полей Add Rule, RU.
+
+## Шаблоны
+
+- [GUIDE_TEMPLATE.ru.md](GUIDE_TEMPLATE.ru.md) — шаблон нового пользовательского guide.
+
+## Будущая структура
 
 ```text
 docs/user/
@@ -14,18 +25,20 @@ docs/user/
 ├── getting-started.ru.md
 ├── interfaces-clients.ru.md
 ├── firewall/
-│   └── add-rule.ru.md
+│   ├── admin-guide.ru.md
+│   ├── add-rule.ru.md
+│   ├── add-rule.md
+│   └── add-rule-field-reference.ru.md
 ├── ipsec.ru.md
 ├── ntp.ru.md
 └── troubleshooting.ru.md
 ```
 
-Не создавать отдельные `*-ui`, `*-api`, `*-design` и `*-notes` документы для
-одной функции.
+Не создавать отдельные `*-ui`, `*-api`, `*-design` и `*-notes` документы для одной функции.
 
 ## Содержание guide
 
-Использовать `GUIDE_TEMPLATE.ru.md`.
+Использовать [GUIDE_TEMPLATE.ru.md](GUIDE_TEMPLATE.ru.md).
 
 Guide должен соответствовать фактическому интерфейсу на принятой версии:
 
@@ -34,5 +47,4 @@ Guide должен соответствовать фактическому ин�
 - ограничения указаны явно;
 - скриншоты обновляются только когда действительно помогают.
 
-Пользовательская документация обновляется после готового и проверенного UI, по
-фактическому коду и стенду.
+Пользовательская документация обновляется после готового и проверенного UI, по фактическому коду и стенду.

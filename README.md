@@ -124,11 +124,11 @@ Source:
 
 ## Docs
 
-- [docs/API.md](docs/API.md)
-- [docs/DEPLOY.md](docs/DEPLOY.md)
-- [docs/STAND_SETUP_FIXES.md](docs/STAND_SETUP_FIXES.md) (stand setup issues and fixes log)
+- [docs/reference/API.md](docs/reference/API.md)
+- [docs/operations/DEPLOY.md](docs/operations/DEPLOY.md)
+- [docs/operations/STAND_SETUP_FIXES.md](docs/operations/STAND_SETUP_FIXES.md) (stand setup issues and fixes log)
 - [docs/README.md](docs/README.md) (full docs index)
 - [docs/development/README.md](docs/development/README.md) (development docs index: module ownership and refactor rules)
 - [docs/development/MODULE_MAP.md](docs/development/MODULE_MAP.md) (module ownership map, EN)
 - [docs/development/MODULE_MAP.ru.md](docs/development/MODULE_MAP.ru.md) (module ownership map, RU)
-- [docs/TESTS_CATALOG.ru.md](docs/TESTS_CATALOG.ru.md) (complete tests catalog, RU)
+- [docs/testing/TESTS_CATALOG.ru.md](docs/testing/TESTS_CATALOG.ru.md) (complete tests catalog, RU)

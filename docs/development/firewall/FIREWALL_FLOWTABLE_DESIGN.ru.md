@@ -17,7 +17,7 @@ Flowtable не является обычным rule action. Это отдель�
 
 ## Основание в NFT/libnftables
 
-`docs/NFT.md` описывает flowtables как ресурс:
+`docs/reference/NFT.md` описывает flowtables как ресурс:
 
 ```nft
 {add | create} flowtable [family] table flowtable { hook hook priority priority ; devices = { device[, ...] } ; }
@@ -31,7 +31,7 @@ list flowtables [family]
 flow add @flowtable
 ```
 
-`docs/libnftables-json-ManPage.md` описывает JSON object:
+`docs/reference/libnftables-json-ManPage.md` описывает JSON object:
 
 ```json
 {

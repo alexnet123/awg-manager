@@ -407,4 +407,4 @@
 
 1. Обновить владение модулем в этом файле.
 2. Обновить `docs/development/MODULE_MAP.md` с эквивалентной информацией.
-3. Обновить `docs/REFRACTOR_PROGRESS.ru.md` (номер шага + результаты тестов).
+3. Обновить `docs/development/REFRACTOR_PROGRESS.ru.md` (номер шага + результаты тестов).

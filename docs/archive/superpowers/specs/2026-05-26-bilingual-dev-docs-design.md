@@ -28,10 +28,10 @@ Create stable developer-facing documentation that explains module boundaries and
 - `docs/development/MODULE_MAP.ru.md`
 - Link updates in:
   - `docs/README.md`
-  - `docs/DOCS_INDEX.ru.md`
+  - `docs/archive/DOCS_INDEX.ru.md`
   - `README.md`
   - `README.ru.md`
-  - `docs/REFRACTOR_PROGRESS.ru.md`
+  - `docs/development/REFRACTOR_PROGRESS.ru.md`
 
 ## Acceptance Criteria
 

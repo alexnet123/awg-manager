@@ -66,7 +66,7 @@ Important:
 - request authentication is API-key based (`X-API-Key`)
 - a server reboot does not restore runtime AWG interfaces by itself
 - restore is performed by `python3 awg_manager.py -r ${AWG_MANAGER_DATA_DIR}/encryption.key`
-- for automatic restore, use the systemd unit documented in [DEPLOY.md](DEPLOY.md)
+- for automatic restore, use the systemd unit documented in [DEPLOY.md](../operations/DEPLOY.md)
 
 ## Common Headers
 

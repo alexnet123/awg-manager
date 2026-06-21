@@ -92,7 +92,7 @@ When moving responsibilities between files/modules, update documentation in the 
 
 - English map: `docs/development/MODULE_MAP.md`
 - Russian map: `docs/development/MODULE_MAP.ru.md`
-- Refactor progress log: `docs/REFRACTOR_PROGRESS.ru.md`
+- Refactor progress log: `docs/development/REFRACTOR_PROGRESS.ru.md`
 
 Minimum update requirement per refactor step:
 

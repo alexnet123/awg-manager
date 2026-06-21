@@ -95,9 +95,9 @@
   - [x] `--data-dir`
   - [x] `--stand-profile`
 - [x] Документация обновлена:
-  - [x] `docs/DEPLOY.md`
-  - [x] `docs/API.md`
-  - [x] `docs/PARALLEL_DEVELOPMENT.md`
+  - [x] `docs/operations/DEPLOY.md`
+  - [x] `docs/reference/API.md`
+  - [x] `docs/operations/PARALLEL_DEVELOPMENT.md`
 
 ## 1.1) Backend модульные границы (app/common/domains)
 
@@ -3147,7 +3147,7 @@
 ## 1.177) Ускоренный батч (`x4`): фиксация remove-cycle прогресса в формате блоков `N/4`
 
 - [x] Обновлены документы прогресса:
-  - [x] `docs/REFRACTOR_PROGRESS.ru.md` — счетчик шагов до `1.177`.
+  - [x] `docs/development/REFRACTOR_PROGRESS.ru.md` — счетчик шагов до `1.177`.
   - [x] введен формат остатка remove-cycle блоками (`3/4` remaining).
   - [x] `docs/development/MODULE_MAP.md` / `MODULE_MAP.ru.md` дополнены ownership секцией `legacy_manager_target`.
 - [x] Проверки:
@@ -3222,7 +3222,7 @@
     - [x] добавлен ownership `backend/app/legacy_manager_compat.py`;
     - [x] `legacy_manager_target` default обновлен на `backend.app.legacy_manager_compat`;
     - [x] `awg_core.py` зафиксирован как compat shim.
-  - [x] Обновлен статусный блок и быстрый срез в `docs/REFRACTOR_PROGRESS.ru.md`.
+  - [x] Обновлен статусный блок и быстрый срез в `docs/development/REFRACTOR_PROGRESS.ru.md`.
 - [x] Regression lock (AGENTS gate):
   - [x] `python3 -m pytest -q tests/test_firewall_rule_ops.py` → `20 passed`
   - [x] `python3 -m pytest -q tests/test_api_contract.py` → `9 passed` (run вне sandbox)
@@ -3447,7 +3447,7 @@
 - [x] Добавлен deploy-runbook скрипт:
   - [x] `scripts/redeploy_single_stand_from_main.sh` (упаковка из local `main`, upload, deploy, optional clean-data, smoke).
 - [x] Обновлена эксплуатационная документация:
-  - [x] `docs/DEPLOY.md` дополнен разделом `Final Single-Stand Redeploy From main`.
+  - [x] `docs/operations/DEPLOY.md` дополнен разделом `Final Single-Stand Redeploy From main`.
 
 ## 1.188) IPsec UI toolbar и delete-контракты для редактируемых вкладок
 
@@ -4465,7 +4465,7 @@
 - Step scope:
   - Updated the Policy unification plan with the current functional status of the `Policy1/Policy2/Policy3` collapse.
   - Marked the parity/removal step for separate `policy2`/`policy3` UI as complete after the bridge/netdev/built-in Policy verification passes.
-  - Added a checkbox roadmap for further firewall development toward broader `docs/NFT.md` and `docs/libnftables-json-ManPage.md` coverage.
+  - Added a checkbox roadmap for further firewall development toward broader `docs/reference/NFT.md` and `docs/reference/libnftables-json-ManPage.md` coverage.
   - No backend/frontend runtime behavior, validation logic, HTTP status mapping, API payload fields, or stand deployment were changed.
 - Ownership moved:
   - No module boundary moved; this is a planning/documentation step only.
@@ -4482,7 +4482,7 @@
 ## 1.230) Firewall planning: NFT/libnftables capability matrix
 
 - Step scope:
-  - Added `docs/FIREWALL_CAPABILITY_MATRIX.ru.md` as the explicit feature matrix for `docs/NFT.md` / `docs/libnftables-json-ManPage.md` coverage.
+  - Added `docs/FIREWALL_CAPABILITY_MATRIX.ru.md` as the explicit feature matrix for `docs/reference/NFT.md` / `docs/reference/libnftables-json-ManPage.md` coverage.
   - Classified firewall capabilities as `supported`, `limited`, `planned`, or `not planned without approval`.
   - Covered families, table/chain/rule operations, statements, matches, collections/maps/vmaps, named objects, flowtables, current test gates, and suggested next implementation order.
   - Marked roadmap item `A1` in `docs/FIREWALL_POLICY_UNIFICATION_PLAN.ru.md` as complete.

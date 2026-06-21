@@ -407,4 +407,4 @@ When a function is moved out of `awg_core.py`:
 
 1. Add/update target module ownership in this file.
 2. Update `docs/development/MODULE_MAP.ru.md` with equivalent information.
-3. Update `docs/REFRACTOR_PROGRESS.ru.md` with step number and tests.
+3. Update `docs/development/REFRACTOR_PROGRESS.ru.md` with step number and tests.

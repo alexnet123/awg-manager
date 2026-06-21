@@ -214,11 +214,11 @@
 
 ## 6) Связанные документы
 
-- [libnftables-json-ManPage.md](libnftables-json-ManPage.md)
-- [NFT.md](NFT.md)
+- [libnftables-json-ManPage.md](../../reference/libnftables-json-ManPage.md)
+- [NFT.md](../../reference/NFT.md)
 - [FIREWALL_ADD_RULE_FIELDS_INVENTORY.md](FIREWALL_ADD_RULE_FIELDS_INVENTORY.md)
-- [FIREWALL_ADD_RULE_IMPLEMENTATION_PLAN.md](FIREWALL_ADD_RULE_IMPLEMENTATION_PLAN.md)
-- [FIREWALL_ADD_RULE_TESTPLAN.md](FIREWALL_ADD_RULE_TESTPLAN.md)
+- [FIREWALL_ADD_RULE_IMPLEMENTATION_PLAN.md](../../archive/firewall-plans/FIREWALL_ADD_RULE_IMPLEMENTATION_PLAN.md)
+- [FIREWALL_ADD_RULE_TESTPLAN.md](../../testing/FIREWALL_ADD_RULE_TESTPLAN.md)
 - [FIREWALL_LIBNFTABLES_FULL_COVERAGE_PLAN.ru.md](FIREWALL_LIBNFTABLES_FULL_COVERAGE_PLAN.ru.md)
 
 ---

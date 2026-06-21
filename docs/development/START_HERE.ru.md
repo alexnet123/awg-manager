@@ -14,7 +14,7 @@
 - `AGENTS.md`
 - `docs/development/MODULE_MAP.md`
 - `docs/development/MODULE_MAP.ru.md`
-- `docs/REFRACTOR_PROGRESS.ru.md`
+- `docs/development/REFRACTOR_PROGRESS.ru.md`
 
 ## 2) Чеклист первых 5 минут
 
@@ -43,7 +43,7 @@
 
 1. Кодовые изменения завершены и ограничены по объему.
 2. Обновлена документация владения (RU+EN для `docs/development/`).
-3. В `docs/REFRACTOR_PROGRESS.ru.md` добавлена запись о прогрессе.
+3. В `docs/development/REFRACTOR_PROGRESS.ru.md` добавлена запись о прогрессе.
 4. Выполнены проверки:
    - `python3 -m pytest -q tests/test_firewall_rule_ops.py` (или релевантная целевая замена)
    - `python3 -m pytest -q tests/test_api_contract.py`
@@ -87,7 +87,7 @@
 
 ## 7) Мини-шаблон записи прогресса
 
-Использовать в `docs/REFRACTOR_PROGRESS.ru.md`:
+Использовать в `docs/development/REFRACTOR_PROGRESS.ru.md`:
 
 - Scope шага:
 - Что перенесено по ответственности:

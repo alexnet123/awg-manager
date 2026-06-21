@@ -42,7 +42,7 @@
 - [x] 1. Зафиксировать правило: UI остается как Policy1, без визуального редизайна.
 - [x] 2. Проверить текущие repo-инструкции, ветку и firewall-границы.
 - [x] 3. Инвентаризировать текущие frontend-точки: `PolicyRuleEditor*`, `PolicyAdvanced*`, `PolicySectionToolbar`, table builder, objects.
-- [x] 4. Сверить nftables-модель по `docs/NFT.md` и `docs/libnftables-json-ManPage.md`.
+- [x] 4. Сверить nftables-модель по `docs/reference/NFT.md` и `docs/reference/libnftables-json-ManPage.md`.
 - [x] 5. Добавить shared frontend context helper для Policy1: вычислять `family/table/chain/chain_type/hook/device` для текущего выбора.
 - [x] 6. Расширить Policy1 custom table selection: показывать не только `inet`, но и `bridge/netdev`, не меняя внешний стиль контролов.
 - [x] 7. Перенести create/edit bridge/netdev rules из `PolicyAdvancedRuleEditor*` в текущий `PolicyRuleEditorDialog`.
@@ -96,7 +96,7 @@
 
 ### A. Матрица возможностей и runtime parity
 
-- [x] A1. Завести явную capability matrix: `docs/NFT.md` / `docs/libnftables-json-ManPage.md` feature -> текущий backend -> UI -> tests -> статус (`docs/FIREWALL_CAPABILITY_MATRIX.ru.md`).
+- [x] A1. Завести явную capability matrix: `docs/reference/NFT.md` / `docs/reference/libnftables-json-ManPage.md` feature -> текущий backend -> UI -> tests -> статус (`docs/FIREWALL_CAPABILITY_MATRIX.ru.md`).
 - [x] A2. Разделить статусы на `supported`, `limited`, `planned`, `not planned without approval`.
 - [x] A3. Зафиксировать family compatibility для `inet/ip/ip6/bridge/netdev` по table/chain/rule/object/collection/statement.
 - [ ] A4. Добавить backend tests для каждой строки matrix, где поведение уже реализовано, но покрыто только e2e или не покрыто явно.

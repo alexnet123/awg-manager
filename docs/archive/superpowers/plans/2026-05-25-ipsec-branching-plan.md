@@ -172,7 +172,7 @@ Expected: one controlled integration point for the full IPsec stream.
 
 Update docs:
 ```text
-docs/REFRACTOR_PROGRESS.ru.md
-docs/PARALLEL_DEVELOPMENT.md (if process changed)
+docs/development/REFRACTOR_PROGRESS.ru.md
+docs/operations/PARALLEL_DEVELOPMENT.md (if process changed)
 ```
 Expected: delivery and stand verification are documented.

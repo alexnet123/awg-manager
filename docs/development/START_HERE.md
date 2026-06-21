@@ -14,7 +14,7 @@ Source of truth:
 - `AGENTS.md`
 - `docs/development/MODULE_MAP.md`
 - `docs/development/MODULE_MAP.ru.md`
-- `docs/REFRACTOR_PROGRESS.ru.md`
+- `docs/development/REFRACTOR_PROGRESS.ru.md`
 
 ## 2) First 5 Minutes Checklist
 
@@ -43,7 +43,7 @@ A refactor step is done only when all are true:
 
 1. Code changes are complete and scoped.
 2. Ownership docs are updated (RU+EN when inside `docs/development/`).
-3. `docs/REFRACTOR_PROGRESS.ru.md` has a progress entry.
+3. `docs/development/REFRACTOR_PROGRESS.ru.md` has a progress entry.
 4. Verification commands executed:
    - `python3 -m pytest -q tests/test_firewall_rule_ops.py` (or relevant targeted replacement)
    - `python3 -m pytest -q tests/test_api_contract.py`
@@ -87,7 +87,7 @@ A refactor step is done only when all are true:
 
 ## 7) Minimal Progress Note Template
 
-Use this in `docs/REFRACTOR_PROGRESS.ru.md`:
+Use this in `docs/development/REFRACTOR_PROGRESS.ru.md`:
 
 - Step scope:
 - Ownership moved:

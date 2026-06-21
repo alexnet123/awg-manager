@@ -2,7 +2,7 @@
 
 Дата: 2026-05-31
 
-Цель: зафиксировать, что уже покрыто в firewall, что покрыто частично, что запланировано, и что не добавляем без отдельного согласования. Матрица опирается на `docs/NFT.md`, `docs/libnftables-json-ManPage.md`, текущие backend modules `backend/domains/firewall/*`, UI `webui/src/pages/firewall/*` и активные тесты.
+Цель: зафиксировать, что уже покрыто в firewall, что покрыто частично, что запланировано, и что не добавляем без отдельного согласования. Матрица опирается на `docs/reference/NFT.md`, `docs/reference/libnftables-json-ManPage.md`, текущие backend modules `backend/domains/firewall/*`, UI `webui/src/pages/firewall/*` и активные тесты.
 
 Статусы:
 

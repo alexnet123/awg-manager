@@ -167,7 +167,7 @@ webui/tests/ntp.spec.ts
 Обновить существующий API reference:
 
 ```text
-docs/API.md
+docs/reference/API.md
 ```
 
 Создать один новый пользовательский guide, потому что функции раньше не было:
@@ -200,7 +200,7 @@ webui/tests/ntp.spec.ts
 webui/dist/*
 tests/test_ntp_*.py
 tests/test_api_contract.py
-docs/API.md
+docs/reference/API.md
 docs/user/ntp.ru.md
 docs/development/MODULE_MAP.md
 docs/development/MODULE_MAP.ru.md

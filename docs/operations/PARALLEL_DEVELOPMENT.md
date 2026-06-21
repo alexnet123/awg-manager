@@ -3,7 +3,7 @@
 This repository supports parallel development streams with isolated branches, local worktrees, and stand roles.
 
 Current refactor progress tracker:
-- [REFRACTOR_PROGRESS.ru.md](REFRACTOR_PROGRESS.ru.md)
+- [REFRACTOR_PROGRESS.ru.md](../development/REFRACTOR_PROGRESS.ru.md)
 
 ## Target Model
 
