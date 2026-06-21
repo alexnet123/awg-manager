@@ -54,6 +54,31 @@ test('block B6: packet/ct mark match map to runtime', async ({ request }) => {
   await deleteRule(request, created.id)
 })
 
+test('block B6: mark match fields explain match vs set', async ({ page }) => {
+  await page.goto('/')
+  await page.evaluate((apiKey) => {
+    sessionStorage.setItem('awg_manager_auth_v1', JSON.stringify({ apiKey }))
+  }, process.env.PLAYWRIGHT_API_KEY || '')
+  await page.reload()
+
+  await page.getByRole('button', { name: 'Firewall' }).click()
+  await page.getByRole('button', { name: 'Add' }).first().click({ force: true })
+  const modal = page.locator('div.fixed.inset-0.z-40').last()
+  await expect(modal.getByText('Add Firewall Rule')).toBeVisible()
+
+  const packetMarkLine = modal.locator('div.space-y-1\\.5', { hasText: 'packet mark' }).first()
+  await expect(packetMarkLine.getByText('match existing mark')).toBeVisible()
+  await packetMarkLine.getByRole('button', { name: '+' }).click()
+  await expect(packetMarkLine.getByPlaceholder('0x1 / 10')).toHaveValue('0x1')
+  await expect(packetMarkLine.getByText('Matches existing packet mark. To set it, use Action -> meta mark set.')).toBeVisible()
+
+  const ctMarkLine = modal.locator('div.space-y-1\\.5', { hasText: 'connection mark' }).first()
+  await expect(ctMarkLine.getByText('match existing mark')).toBeVisible()
+  await ctMarkLine.getByRole('button', { name: '+' }).click()
+  await expect(ctMarkLine.getByPlaceholder('0x1 / 10')).toHaveValue('0x1')
+  await expect(ctMarkLine.getByText('Matches existing connection mark. To set it, use Action -> ct mark set.')).toBeVisible()
+})
+
 test('block B6: invalid mark match values are rejected', async ({ request }) => {
   const bad1 = await createRule(request, {
     table: 'mangle',

@@ -50,8 +50,8 @@ test('add-rule key advanced toggles are present and context-aware', async ({ pag
   const modal = await openAddRuleModal(page)
 
   // Base mark match fields are now editable
-  const connMark = modal.locator("label:has-text('Connection mark')").first()
-  const pktMark = modal.locator("label:has-text('Packet mark')").first()
+  const connMark = modal.locator("label:has-text('connection mark')").first()
+  const pktMark = modal.locator("label:has-text('packet mark')").first()
   await expect(connMark).toBeVisible()
   await expect(pktMark).toBeVisible()
   await expect(connMark.locator('xpath=ancestor::div[contains(@class,"space-y-1.5")]').locator('button', { hasText: '+' }).first()).toBeVisible()

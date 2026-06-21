@@ -1,7 +1,9 @@
 import * as React from 'react'
+import { Check, ChevronDown, X } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { TabsContent } from '@/components/ui/tabs'
-import { ToggleLine } from './RuleFieldControls'
+import { cn } from '@/lib/utils'
+import { MarkMatchInput, ToggleLine } from './RuleFieldControls'
 import type { FirewallRule } from '../api'
 
 type Props = {
@@ -21,6 +23,27 @@ const TCP_FLAG_PRESETS = [
   { value: 'psh,ack', label: 'PSH + ACK', hint: 'data push' },
   { value: 'fin,ack', label: 'FIN + ACK', hint: 'close reply' },
   { value: 'rst,ack', label: 'RST + ACK', hint: 'reset reply' },
+] as const
+
+const META_PKTTYPE_PRESETS = ['host', 'broadcast', 'multicast', 'other'] as const
+const CT_DIRECTION_PRESETS = ['original', 'reply'] as const
+const CT_STATUS_PRESETS = [
+  { value: 'expected', label: 'expected', hint: 'helper-expected flow' },
+  { value: 'seen-reply', label: 'seen-reply', hint: 'reply side seen' },
+  { value: 'assured', label: 'assured', hint: 'stable tracked flow' },
+  { value: 'confirmed', label: 'confirmed', hint: 'confirmed by kernel' },
+  { value: 'snat', label: 'snat', hint: 'source NAT applied' },
+  { value: 'dnat', label: 'dnat', hint: 'destination NAT applied' },
+  { value: 'dying', label: 'dying', hint: 'being removed' },
+] as const
+
+const ARPHRD_TYPE_OPTIONS = [
+  { label: 'Ethernet', value: '1' },
+  { label: 'Loopback', value: '772' },
+  { label: 'PPP', value: '512' },
+  { label: 'Tunnel', value: '768' },
+  { label: 'IPv6 tunnel', value: '769' },
+  { label: 'None', value: '65534' },
 ] as const
 
 const ICMP_TYPE_PRESETS = [
@@ -126,6 +149,241 @@ function TcpFlagsPicker(props: {
       </div>
       <div className='mt-1.5 text-[9px] leading-3 text-muted-foreground'>
         Choose one preset. Requires Protocol=tcp.
+      </div>
+    </div>
+  )
+}
+
+function ArphrdTypeCombobox(props: {
+  value?: string | null
+  onChange: (value: string | null) => void
+  optionsId: string
+}) {
+  const [open, setOpen] = React.useState(false)
+  const rootRef = React.useRef<HTMLDivElement | null>(null)
+  const value = props.value || ''
+  const knownOption = ARPHRD_TYPE_OPTIONS.find((option) => option.value === value.trim())
+  const displayValue = knownOption ? knownOption.label : value
+  const query = displayValue.trim().toLowerCase()
+  const queryMatchesKnownOption = !!knownOption || ARPHRD_TYPE_OPTIONS.some((option) => option.label.toLowerCase() === query)
+  const visibleOptions = query && !queryMatchesKnownOption
+    ? ARPHRD_TYPE_OPTIONS.filter((option) => option.value.includes(query) || option.label.toLowerCase().includes(query))
+    : ARPHRD_TYPE_OPTIONS
+
+  React.useEffect(() => {
+    if (!open) return
+    function onPointerDown(event: MouseEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    return () => document.removeEventListener('mousedown', onPointerDown)
+  }, [open])
+
+  return (
+    <div ref={rootRef} className='relative'>
+      <Input
+        className='h-7 pr-16'
+        placeholder='Ethernet'
+        value={displayValue}
+        onFocus={() => setOpen(true)}
+        onChange={(e) => {
+          const nextValue = e.target.value
+          const optionByLabel = ARPHRD_TYPE_OPTIONS.find((option) => option.label.toLowerCase() === nextValue.trim().toLowerCase())
+          props.onChange(optionByLabel?.value || nextValue || null)
+          setOpen(true)
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') setOpen(false)
+          if (e.key === 'ArrowDown') {
+            e.preventDefault()
+            setOpen(true)
+          }
+        }}
+        role='combobox'
+        aria-expanded={open}
+        aria-controls={props.optionsId}
+        aria-autocomplete='list'
+      />
+      {props.value ? (
+        <button
+          type='button'
+          className='absolute right-7 top-1 flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground'
+          aria-label='Clear interface type'
+          onClick={() => {
+            props.onChange(null)
+            setOpen(false)
+          }}
+        >
+          <X className='h-3.5 w-3.5' />
+        </button>
+      ) : null}
+      <button
+        type='button'
+        className='absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground'
+        aria-label='Show interface hardware types'
+        onClick={() => setOpen((prev) => !prev)}
+      >
+        <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', open && 'rotate-180')} />
+      </button>
+      {open ? (
+        <div
+          id={props.optionsId}
+          role='listbox'
+          aria-multiselectable='false'
+          className='absolute z-50 mt-1 max-h-56 w-full overflow-auto rounded-md border bg-popover p-1 text-xs shadow-lg'
+        >
+          {visibleOptions.length ? visibleOptions.map((option) => {
+            const selected = props.value?.trim() === option.value
+            return (
+              <button
+                key={option.value}
+                type='button'
+                role='option'
+                aria-selected={selected}
+                className={cn(
+                  'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left font-normal hover:bg-accent hover:text-accent-foreground',
+                  selected && 'bg-accent text-accent-foreground'
+                )}
+                onClick={() => {
+                  props.onChange(option.value)
+                  setOpen(false)
+                }}
+              >
+                <span className='flex h-4 w-4 items-center justify-center text-primary'>
+                  {selected ? <Check className='h-3.5 w-3.5' /> : null}
+                </span>
+                <span>{option.label}</span>
+                <span className='ml-auto text-[11px] font-normal tabular-nums text-muted-foreground'>{option.value}</span>
+              </button>
+            )
+          }) : (
+            <div className='px-2 py-2 text-muted-foreground'>Type an ARPHRD numeric ID</div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function LinuxDevGroupInput(props: {
+  value?: string | null
+  placeholder?: string
+  onChange: (value: string | null) => void
+}) {
+  return (
+    <div className='space-y-1'>
+      <Input
+        className='h-7'
+        inputMode='numeric'
+        placeholder={props.placeholder || '10'}
+        value={props.value || ''}
+        onChange={(e) => props.onChange(e.target.value || null)}
+      />
+      <div className='text-[9px] leading-3 text-muted-foreground'>
+        Expert: Linux dev group id from ip link group. Usually leave empty.
+      </div>
+    </div>
+  )
+}
+
+function PacketLengthInput(props: {
+  value?: string | null
+  onChange: (value: string | null) => void
+}) {
+  return (
+    <div className='space-y-1'>
+      <Input
+        className='h-7'
+        placeholder='64-1500'
+        value={props.value || ''}
+        onChange={(e) => props.onChange(e.target.value || null)}
+      />
+      <div className='text-[9px] leading-3 text-muted-foreground'>
+        Matches packet size in bytes. This does not change the packet.
+      </div>
+    </div>
+  )
+}
+
+function PacketPriorityInput(props: {
+  value?: string | null
+  onChange: (value: string | null) => void
+}) {
+  return (
+    <div className='space-y-1'>
+      <Input
+        className='h-7'
+        placeholder='1:10 / 0x10 / 10'
+        value={props.value || ''}
+        onChange={(e) => props.onChange(e.target.value || null)}
+      />
+      <div className='text-[9px] leading-3 text-muted-foreground'>
+        Sets Linux packet priority for tc/QoS. This is not firewall rule order.
+      </div>
+    </div>
+  )
+}
+
+function CtDirectionSelect(props: {
+  value?: string | null
+  onChange: (value: string | null) => void
+}) {
+  return (
+    <div className='space-y-1'>
+      <select
+        className='h-7 w-full rounded-md border bg-background px-2 text-xs'
+        value={props.value || 'original'}
+        onChange={(e) => props.onChange(e.target.value || null)}
+      >
+        {CT_DIRECTION_PRESETS.map((value) => (
+          <option key={value} value={value}>{value}</option>
+        ))}
+      </select>
+      <div className='text-[9px] leading-3 text-muted-foreground'>
+        original = direction that started the connection; reply = return traffic.
+      </div>
+    </div>
+  )
+}
+
+function CtStatusPicker(props: {
+  value?: string | null
+  onChange: (value: string | null) => void
+}) {
+  return (
+    <div className='space-y-1'>
+      <select
+        className='h-7 w-full rounded-md border bg-background px-2 text-xs'
+        value={props.value || 'dnat'}
+        onChange={(e) => props.onChange(e.target.value || null)}
+      >
+        {CT_STATUS_PRESETS.map((preset) => (
+          <option key={preset.value} value={preset.value}>{preset.label}</option>
+        ))}
+      </select>
+      <div className='text-[9px] leading-3 text-muted-foreground'>
+        Choose one conntrack status flag. Backend/API can still accept comma-separated flags.
+      </div>
+    </div>
+  )
+}
+
+function CtTupleAddressInput(props: {
+  value?: string | null
+  placeholder: string
+  helper: string
+  onChange: (value: string | null) => void
+}) {
+  return (
+    <div className='space-y-1'>
+      <Input
+        className='h-7'
+        placeholder={props.placeholder}
+        value={props.value || ''}
+        onChange={(e) => props.onChange(e.target.value || null)}
+      />
+      <div className='text-[9px] leading-3 text-muted-foreground'>
+        {props.helper}
       </div>
     </div>
   )
@@ -300,43 +558,81 @@ export function PolicyRuleEditorAdvancedTab(props: Props) {
                     <button type='button' className='w-full text-left text-[11px] font-semibold text-muted-foreground' onClick={() => props.setAdvOpen((p) => ({ ...p, meta: !p.meta }))}>Meta match {props.advOpen.meta ? '−' : '+'}</button>
                     {props.advOpen.meta ? <>
                     <div className='grid grid-cols-2 gap-2'>
-                      <ToggleLine label='meta length' enabled={!!props.form.meta_length} inactiveHint='64-1500' onToggle={() => props.setForm((p) => ({ ...p, meta_length: p.meta_length ? null : '64-1500' }))}>
-                        <Input className='h-7' placeholder='64-1500' value={props.form.meta_length || ''} onChange={(e) => props.setForm((p) => ({ ...p, meta_length: e.target.value || null }))} />
+                      <ToggleLine label='packet length' enabled={!!props.form.meta_length} inactiveHint='match packet size' onToggle={() => props.setForm((p) => ({ ...p, meta_length: p.meta_length ? null : '64-1500' }))}>
+                        <PacketLengthInput
+                          value={props.form.meta_length || null}
+                          onChange={(value) => props.setForm((p) => ({ ...p, meta_length: value }))}
+                        />
                       </ToggleLine>
                       <ToggleLine label='set packet priority (QoS)' enabled={!!props.form.meta_priority} inactiveHint='1:10 / 0x10 / 10' onToggle={() => props.setForm((p) => ({ ...p, meta_priority: p.meta_priority ? null : '1:10' }))}>
-                        <Input className='h-7' placeholder='1:10 / 0x10 / 10' value={props.form.meta_priority || ''} onChange={(e) => props.setForm((p) => ({ ...p, meta_priority: e.target.value || null }))} />
+                        <PacketPriorityInput
+                          value={props.form.meta_priority || null}
+                          onChange={(value) => props.setForm((p) => ({ ...p, meta_priority: value }))}
+                        />
                       </ToggleLine>
                     </div>
                     <div className='grid grid-cols-2 gap-2'>
-                      <ToggleLine label='meta pkttype' enabled={!!props.form.meta_pkttype} inactiveHint='host/multicast' onToggle={() => props.setForm((p) => ({ ...p, meta_pkttype: p.meta_pkttype ? null : 'host' }))}>
-                        <Input className='h-7' placeholder='host/multicast' value={props.form.meta_pkttype || ''} onChange={(e) => props.setForm((p) => ({ ...p, meta_pkttype: e.target.value || null }))} />
+                      <ToggleLine label='meta pkttype' enabled={!!props.form.meta_pkttype} inactiveHint='host / broadcast / multicast / other' onToggle={() => props.setForm((p) => ({ ...p, meta_pkttype: p.meta_pkttype ? null : 'host' }))}>
+                        <select
+                          className='flex h-7 w-full rounded-md border border-input bg-background px-2 py-1 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring'
+                          value={props.form.meta_pkttype || 'host'}
+                          onChange={(e) => props.setForm((p) => ({ ...p, meta_pkttype: e.target.value || null }))}
+                        >
+                          {META_PKTTYPE_PRESETS.map((value) => (
+                            <option key={value} value={value}>{value}</option>
+                          ))}
+                        </select>
                       </ToggleLine>
-                      <ToggleLine label='meta cpu' enabled={!!props.form.meta_cpu} inactiveHint='0-3' onToggle={() => props.setForm((p) => ({ ...p, meta_cpu: p.meta_cpu ? null : '0' }))}>
-                        <Input className='h-7' placeholder='0-3' value={props.form.meta_cpu || ''} onChange={(e) => props.setForm((p) => ({ ...p, meta_cpu: e.target.value || null }))} />
-                      </ToggleLine>
-                    </div>
-                    <div className='grid grid-cols-2 gap-2'>
-                      <ToggleLine label='meta iiftype' enabled={!!props.form.meta_iiftype} inactiveHint='1 (ARPHRD_ETHER)' onToggle={() => props.setForm((p) => ({ ...p, meta_iiftype: p.meta_iiftype ? null : '1' }))}>
-                        <Input className='h-7' placeholder='1 (ARPHRD_ETHER)' value={props.form.meta_iiftype || ''} onChange={(e) => props.setForm((p) => ({ ...p, meta_iiftype: e.target.value || null }))} />
-                      </ToggleLine>
-                      <ToggleLine label='meta oiftype' enabled={!!props.form.meta_oiftype} inactiveHint='1 (ARPHRD_ETHER)' onToggle={() => props.setForm((p) => ({ ...p, meta_oiftype: p.meta_oiftype ? null : '1' }))}>
-                        <Input className='h-7' placeholder='1 (ARPHRD_ETHER)' value={props.form.meta_oiftype || ''} onChange={(e) => props.setForm((p) => ({ ...p, meta_oiftype: e.target.value || null }))} />
-                      </ToggleLine>
-                    </div>
-                    <div className='grid grid-cols-2 gap-2'>
-                      <ToggleLine label='meta iifgroup' enabled={!!props.form.meta_iifgroup} inactiveHint='10' onToggle={() => props.setForm((p) => ({ ...p, meta_iifgroup: p.meta_iifgroup ? null : '10' }))}>
-                        <Input className='h-7' placeholder='10' value={props.form.meta_iifgroup || ''} onChange={(e) => props.setForm((p) => ({ ...p, meta_iifgroup: e.target.value || null }))} />
-                      </ToggleLine>
-                      <ToggleLine label='meta oifgroup' enabled={!!props.form.meta_oifgroup} inactiveHint='10' onToggle={() => props.setForm((p) => ({ ...p, meta_oifgroup: p.meta_oifgroup ? null : '10' }))}>
-                        <Input className='h-7' placeholder='10' value={props.form.meta_oifgroup || ''} onChange={(e) => props.setForm((p) => ({ ...p, meta_oifgroup: e.target.value || null }))} />
+                      <ToggleLine label='meta cpu' enabled={!!props.form.meta_cpu} inactiveHint='CPU id, expert/debug' onToggle={() => props.setForm((p) => ({ ...p, meta_cpu: p.meta_cpu ? null : '0' }))}>
+                        <Input className='h-7' placeholder='0 / 1 / 2' value={props.form.meta_cpu || ''} onChange={(e) => props.setForm((p) => ({ ...p, meta_cpu: e.target.value || null }))} />
                       </ToggleLine>
                     </div>
                     <div className='grid grid-cols-2 gap-2'>
-                      <ToggleLine label='packet mark match' enabled={!!props.form.mark_match} inactiveHint='0x1 / 10' onToggle={() => props.setForm((p) => ({ ...p, mark_match: p.mark_match ? null : '0x1' }))}>
-                        <Input className='h-7' placeholder='0x1 / 10' value={props.form.mark_match || ''} onChange={(e) => props.setForm((p) => ({ ...p, mark_match: e.target.value || null }))} />
+                      <ToggleLine label='meta iiftype' enabled={!!props.form.meta_iiftype} inactiveHint='interface type, expert' onToggle={() => props.setForm((p) => ({ ...p, meta_iiftype: p.meta_iiftype ? null : '1' }))}>
+                        <ArphrdTypeCombobox
+                          value={props.form.meta_iiftype || null}
+                          optionsId='firewall-meta-iiftype-options'
+                          onChange={(value) => props.setForm((p) => ({ ...p, meta_iiftype: value }))}
+                        />
                       </ToggleLine>
-                      <ToggleLine label='ct mark match' enabled={!!props.form.ct_mark_match} inactiveHint='0x1 / 10' onToggle={() => props.setForm((p) => ({ ...p, ct_mark_match: p.ct_mark_match ? null : '0x1' }))}>
-                        <Input className='h-7' placeholder='0x1 / 10' value={props.form.ct_mark_match || ''} onChange={(e) => props.setForm((p) => ({ ...p, ct_mark_match: e.target.value || null }))} />
+                      <ToggleLine label='meta oiftype' enabled={!!props.form.meta_oiftype} inactiveHint='interface type, expert' onToggle={() => props.setForm((p) => ({ ...p, meta_oiftype: p.meta_oiftype ? null : '1' }))}>
+                        <ArphrdTypeCombobox
+                          value={props.form.meta_oiftype || null}
+                          optionsId='firewall-meta-oiftype-options'
+                          onChange={(value) => props.setForm((p) => ({ ...p, meta_oiftype: value }))}
+                        />
+                      </ToggleLine>
+                    </div>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <ToggleLine label='input interface group' enabled={!!props.form.meta_iifgroup} inactiveHint='Linux dev group id' onToggle={() => props.setForm((p) => ({ ...p, meta_iifgroup: p.meta_iifgroup ? null : '10' }))}>
+                        <LinuxDevGroupInput
+                          value={props.form.meta_iifgroup || null}
+                          placeholder='Linux dev group id'
+                          onChange={(value) => props.setForm((p) => ({ ...p, meta_iifgroup: value }))}
+                        />
+                      </ToggleLine>
+                      <ToggleLine label='output interface group' enabled={!!props.form.meta_oifgroup} inactiveHint='Linux dev group id' onToggle={() => props.setForm((p) => ({ ...p, meta_oifgroup: p.meta_oifgroup ? null : '10' }))}>
+                        <LinuxDevGroupInput
+                          value={props.form.meta_oifgroup || null}
+                          placeholder='Linux dev group id'
+                          onChange={(value) => props.setForm((p) => ({ ...p, meta_oifgroup: value }))}
+                        />
+                      </ToggleLine>
+                    </div>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <ToggleLine label='packet mark' enabled={!!props.form.mark_match} inactiveHint='match existing mark' onToggle={() => props.setForm((p) => ({ ...p, mark_match: p.mark_match ? null : '0x1' }))}>
+                        <MarkMatchInput
+                          kind='packet'
+                          value={props.form.mark_match || null}
+                          onChange={(value) => props.setForm((p) => ({ ...p, mark_match: value }))}
+                        />
+                      </ToggleLine>
+                      <ToggleLine label='connection mark' enabled={!!props.form.ct_mark_match} inactiveHint='match existing mark' onToggle={() => props.setForm((p) => ({ ...p, ct_mark_match: p.ct_mark_match ? null : '0x1' }))}>
+                        <MarkMatchInput
+                          kind='connection'
+                          value={props.form.ct_mark_match || null}
+                          onChange={(value) => props.setForm((p) => ({ ...p, ct_mark_match: value }))}
+                        />
                       </ToggleLine>
                     </div>
                     </> : null}
@@ -346,27 +642,53 @@ export function PolicyRuleEditorAdvancedTab(props: Props) {
                     <button type='button' className='w-full text-left text-[11px] font-semibold text-muted-foreground' onClick={() => props.setAdvOpen((p) => ({ ...p, ct: !p.ct }))}>Conntrack match {props.advOpen.ct ? '−' : '+'}</button>
                     {props.advOpen.ct ? <>
                     <div className='grid grid-cols-2 gap-2'>
-                      <ToggleLine label='ct direction' enabled={!!props.form.ct_direction} inactiveHint='original/reply' onToggle={() => props.setForm((p) => ({ ...p, ct_direction: p.ct_direction ? null : 'original' }))}>
-                        <Input className='h-7' placeholder='original/reply' value={props.form.ct_direction || ''} onChange={(e) => props.setForm((p) => ({ ...p, ct_direction: e.target.value || null }))} />
+                      <ToggleLine label='ct direction' enabled={!!props.form.ct_direction} inactiveHint='original / reply' onToggle={() => props.setForm((p) => ({ ...p, ct_direction: p.ct_direction ? null : 'original' }))}>
+                        <CtDirectionSelect
+                          value={props.form.ct_direction || null}
+                          onChange={(value) => props.setForm((p) => ({ ...p, ct_direction: value }))}
+                        />
                       </ToggleLine>
-                      <ToggleLine label='ct status' enabled={!!props.form.ct_status} inactiveHint='dnat,snat,assured' onToggle={() => props.setForm((p) => ({ ...p, ct_status: p.ct_status ? null : 'dnat' }))}>
-                        <Input className='h-7' placeholder='dnat,snat,assured' value={props.form.ct_status || ''} onChange={(e) => props.setForm((p) => ({ ...p, ct_status: e.target.value || null }))} />
-                      </ToggleLine>
-                    </div>
-                    <div className='grid grid-cols-2 gap-2'>
-                      <ToggleLine label='ct original saddr' enabled={!!props.form.ct_original_saddr} inactiveHint='192.168.1.10' onToggle={() => props.setForm((p) => ({ ...p, ct_original_saddr: p.ct_original_saddr ? null : '192.168.1.10' }))}>
-                        <Input className='h-7' placeholder='192.168.1.10' value={props.form.ct_original_saddr || ''} onChange={(e) => props.setForm((p) => ({ ...p, ct_original_saddr: e.target.value || null }))} />
-                      </ToggleLine>
-                      <ToggleLine label='ct original daddr' enabled={!!props.form.ct_original_daddr} inactiveHint='203.0.113.10' onToggle={() => props.setForm((p) => ({ ...p, ct_original_daddr: p.ct_original_daddr ? null : '203.0.113.10' }))}>
-                        <Input className='h-7' placeholder='203.0.113.10' value={props.form.ct_original_daddr || ''} onChange={(e) => props.setForm((p) => ({ ...p, ct_original_daddr: e.target.value || null }))} />
+                      <ToggleLine label='ct status' enabled={!!props.form.ct_status} inactiveHint='expected / seen-reply / assured / snat' onToggle={() => props.setForm((p) => ({ ...p, ct_status: p.ct_status ? null : 'dnat' }))}>
+                        <CtStatusPicker
+                          value={props.form.ct_status || null}
+                          onChange={(value) => props.setForm((p) => ({ ...p, ct_status: value }))}
+                        />
                       </ToggleLine>
                     </div>
                     <div className='grid grid-cols-2 gap-2'>
-                      <ToggleLine label='ct reply saddr' enabled={!!props.form.ct_reply_saddr} inactiveHint='203.0.113.10' onToggle={() => props.setForm((p) => ({ ...p, ct_reply_saddr: p.ct_reply_saddr ? null : '203.0.113.10' }))}>
-                        <Input className='h-7' placeholder='203.0.113.10' value={props.form.ct_reply_saddr || ''} onChange={(e) => props.setForm((p) => ({ ...p, ct_reply_saddr: e.target.value || null }))} />
+                      <ToggleLine label='original source address' enabled={!!props.form.ct_original_saddr} inactiveHint='initiator address' onToggle={() => props.setForm((p) => ({ ...p, ct_original_saddr: p.ct_original_saddr ? null : '192.168.1.10' }))}>
+                        <CtTupleAddressInput
+                          value={props.form.ct_original_saddr || null}
+                          placeholder='192.168.1.10'
+                          helper='Conntrack original direction: source that started the flow.'
+                          onChange={(value) => props.setForm((p) => ({ ...p, ct_original_saddr: value }))}
+                        />
                       </ToggleLine>
-                      <ToggleLine label='ct reply daddr' enabled={!!props.form.ct_reply_daddr} inactiveHint='192.168.1.10' onToggle={() => props.setForm((p) => ({ ...p, ct_reply_daddr: p.ct_reply_daddr ? null : '192.168.1.10' }))}>
-                        <Input className='h-7' placeholder='192.168.1.10' value={props.form.ct_reply_daddr || ''} onChange={(e) => props.setForm((p) => ({ ...p, ct_reply_daddr: e.target.value || null }))} />
+                      <ToggleLine label='original destination address' enabled={!!props.form.ct_original_daddr} inactiveHint='target address' onToggle={() => props.setForm((p) => ({ ...p, ct_original_daddr: p.ct_original_daddr ? null : '203.0.113.10' }))}>
+                        <CtTupleAddressInput
+                          value={props.form.ct_original_daddr || null}
+                          placeholder='203.0.113.10'
+                          helper='Conntrack original direction: destination the flow was started to.'
+                          onChange={(value) => props.setForm((p) => ({ ...p, ct_original_daddr: value }))}
+                        />
+                      </ToggleLine>
+                    </div>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <ToggleLine label='reply source address' enabled={!!props.form.ct_reply_saddr} inactiveHint='return source' onToggle={() => props.setForm((p) => ({ ...p, ct_reply_saddr: p.ct_reply_saddr ? null : '203.0.113.10' }))}>
+                        <CtTupleAddressInput
+                          value={props.form.ct_reply_saddr || null}
+                          placeholder='203.0.113.10'
+                          helper='Conntrack reply direction: source of return traffic.'
+                          onChange={(value) => props.setForm((p) => ({ ...p, ct_reply_saddr: value }))}
+                        />
+                      </ToggleLine>
+                      <ToggleLine label='reply destination address' enabled={!!props.form.ct_reply_daddr} inactiveHint='return destination' onToggle={() => props.setForm((p) => ({ ...p, ct_reply_daddr: p.ct_reply_daddr ? null : '192.168.1.10' }))}>
+                        <CtTupleAddressInput
+                          value={props.form.ct_reply_daddr || null}
+                          placeholder='192.168.1.10'
+                          helper='Conntrack reply direction: destination of return traffic.'
+                          onChange={(value) => props.setForm((p) => ({ ...p, ct_reply_daddr: value }))}
+                        />
                       </ToggleLine>
                     </div>
                     <div className='grid grid-cols-2 gap-2'>

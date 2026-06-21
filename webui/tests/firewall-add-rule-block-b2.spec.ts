@@ -55,6 +55,108 @@ test('block B2: packet priority uses a simple text field', async ({ page }) => {
   await input.fill('0x10')
   await expect(input).toHaveValue('0x10')
   await expect(priorityLine.getByText('Common values')).toHaveCount(0)
+  await expect(priorityLine.getByText('Sets Linux packet priority for tc/QoS. This is not firewall rule order.')).toBeVisible()
+})
+
+test('block B2: packet length explains size match semantics', async ({ page }) => {
+  await page.goto('/')
+  await page.evaluate((apiKey) => {
+    sessionStorage.setItem('awg_manager_auth_v1', JSON.stringify({ apiKey }))
+  }, process.env.PLAYWRIGHT_API_KEY || '')
+  await page.reload()
+
+  await page.getByRole('button', { name: 'Firewall' }).click()
+  await page.getByRole('button', { name: 'Add' }).first().click({ force: true })
+  const modal = page.locator('div.fixed.inset-0.z-40').last()
+  await expect(modal.getByText('Add Firewall Rule')).toBeVisible()
+
+  await modal.getByRole('tab', { name: 'Advanced match' }).click()
+  if (await modal.getByRole('button', { name: 'Meta match +' }).isVisible()) {
+    await modal.getByRole('button', { name: 'Meta match +' }).click()
+  }
+  const lengthLine = modal.locator('div.space-y-1\\.5', { hasText: 'packet length' }).first()
+  await expect(lengthLine.getByText('match packet size')).toBeVisible()
+  await lengthLine.getByRole('button', { name: '+' }).click()
+  await expect(lengthLine.getByPlaceholder('64-1500')).toHaveValue('64-1500')
+  await expect(lengthLine.getByText('Matches packet size in bytes. This does not change the packet.')).toBeVisible()
+})
+
+test('block B2: ct direction is a fixed original/reply selector', async ({ page }) => {
+  await page.goto('/')
+  await page.evaluate((apiKey) => {
+    sessionStorage.setItem('awg_manager_auth_v1', JSON.stringify({ apiKey }))
+  }, process.env.PLAYWRIGHT_API_KEY || '')
+  await page.reload()
+
+  await page.getByRole('button', { name: 'Firewall' }).click()
+  await page.getByRole('button', { name: 'Add' }).first().click({ force: true })
+  const modal = page.locator('div.fixed.inset-0.z-40').last()
+  await expect(modal.getByText('Add Firewall Rule')).toBeVisible()
+
+  await modal.getByRole('tab', { name: 'Advanced match' }).click()
+  if (await modal.getByRole('button', { name: 'Conntrack match +' }).isVisible()) {
+    await modal.getByRole('button', { name: 'Conntrack match +' }).click()
+  }
+  const directionLine = modal.locator('div.space-y-1\\.5', { hasText: 'ct direction' }).first()
+  await expect(directionLine.getByText('original / reply')).toBeVisible()
+  await directionLine.getByRole('button', { name: '+' }).click()
+  const select = directionLine.locator('select')
+  await expect(select).toHaveValue('original')
+  await expect(select.locator('option')).toHaveText(['original', 'reply'])
+  await select.selectOption('reply')
+  await expect(select).toHaveValue('reply')
+  await expect(directionLine.getByText('original = direction that started the connection; reply = return traffic.')).toBeVisible()
+})
+
+test('block B2: ct status uses a fixed single selector', async ({ page }) => {
+  await page.goto('/')
+  await page.evaluate((apiKey) => {
+    sessionStorage.setItem('awg_manager_auth_v1', JSON.stringify({ apiKey }))
+  }, process.env.PLAYWRIGHT_API_KEY || '')
+  await page.reload()
+
+  await page.getByRole('button', { name: 'Firewall' }).click()
+  await page.getByRole('button', { name: 'Add' }).first().click({ force: true })
+  const modal = page.locator('div.fixed.inset-0.z-40').last()
+  await expect(modal.getByText('Add Firewall Rule')).toBeVisible()
+
+  await modal.getByRole('tab', { name: 'Advanced match' }).click()
+  if (await modal.getByRole('button', { name: 'Conntrack match +' }).isVisible()) {
+    await modal.getByRole('button', { name: 'Conntrack match +' }).click()
+  }
+  const statusLine = modal.locator('div.space-y-1\\.5', { hasText: 'ct status' }).first()
+  await expect(statusLine.getByText('expected / seen-reply / assured / snat')).toBeVisible()
+  await statusLine.getByRole('button', { name: '+' }).click()
+
+  const select = statusLine.locator('select')
+  await expect(select).toHaveValue('dnat')
+  await expect(select.locator('option')).toHaveText(['expected', 'seen-reply', 'assured', 'confirmed', 'snat', 'dnat', 'dying'])
+  await select.selectOption('assured')
+  await expect(select).toHaveValue('assured')
+  await expect(statusLine.getByText('Choose one conntrack status flag. Backend/API can still accept comma-separated flags.')).toBeVisible()
+})
+
+test('block B2: all ct status flags map to runtime', async ({ request }) => {
+  const comment = `block-b2-all-ct-status-${Date.now()}`
+  const allStatuses = 'expected,seen-reply,assured,confirmed,snat,dnat,dying'
+  const res = await createRule(request, {
+    table: 'mangle',
+    chain: 'forward',
+    action: 'accept',
+    proto: 'tcp',
+    dport: '45582',
+    ct_status: allStatuses,
+    comment,
+    enabled: true,
+  })
+  if (!res.ok()) throw new Error(`create failed ${res.status()}: ${await res.text()}`)
+  const created = (await res.json()).item
+
+  const state = await getFirewallState(request)
+  const line = getRuleLineByComment(state?.item?.ruleset || '', comment)
+  expect(line).toContain(`ct status ${allStatuses}`)
+
+  await deleteRule(request, created.id)
 })
 
 test('block B2: meta priority/cpu + ct direction/expiration map to runtime', async ({ request }) => {

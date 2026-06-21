@@ -42,3 +42,26 @@ export function PlannedField(props: { label: string; placeholder: string }) {
   )
 }
 
+export function MarkMatchInput(props: {
+  value?: string | null
+  kind: 'packet' | 'connection'
+  onChange: (value: string | null) => void
+}) {
+  const helper = props.kind === 'packet'
+    ? 'Matches existing packet mark. To set it, use Action -> meta mark set.'
+    : 'Matches existing connection mark. To set it, use Action -> ct mark set.'
+
+  return (
+    <div className='space-y-1'>
+      <Input
+        className='h-7'
+        placeholder='0x1 / 10'
+        value={props.value || ''}
+        onChange={(e) => props.onChange(e.target.value || null)}
+      />
+      <div className='text-[9px] leading-3 text-muted-foreground'>
+        {helper}
+      </div>
+    </div>
+  )
+}

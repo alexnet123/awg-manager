@@ -4,7 +4,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { TabsContent } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
-import { ToggleLine } from './RuleFieldControls'
+import { MarkMatchInput, ToggleLine } from './RuleFieldControls'
 import type { FirewallRule, FirewallSchema } from '../api'
 
 type Props = {
@@ -276,11 +276,19 @@ export function PolicyRuleEditorBaseTab(props: Props) {
         </div>
       </ToggleLine> : null}
       <div className='grid grid-cols-2 gap-2'>
-        <ToggleLine label='Connection mark' enabled={!!props.form.ct_mark_match} inactiveHint='0x1 / 10' onToggle={() => props.setForm((p) => ({ ...p, ct_mark_match: p.ct_mark_match ? null : '0x1' }))}>
-          <Input className='h-7' placeholder='0x1 / 10' value={props.form.ct_mark_match || ''} onChange={(e) => props.setForm((p) => ({ ...p, ct_mark_match: e.target.value || null }))} />
+        <ToggleLine label='connection mark' enabled={!!props.form.ct_mark_match} inactiveHint='match existing mark' onToggle={() => props.setForm((p) => ({ ...p, ct_mark_match: p.ct_mark_match ? null : '0x1' }))}>
+          <MarkMatchInput
+            kind='connection'
+            value={props.form.ct_mark_match || null}
+            onChange={(value) => props.setForm((p) => ({ ...p, ct_mark_match: value }))}
+          />
         </ToggleLine>
-        <ToggleLine label='Packet mark' enabled={!!props.form.mark_match} inactiveHint='0x1 / 10' onToggle={() => props.setForm((p) => ({ ...p, mark_match: p.mark_match ? null : '0x1' }))}>
-          <Input className='h-7' placeholder='0x1 / 10' value={props.form.mark_match || ''} onChange={(e) => props.setForm((p) => ({ ...p, mark_match: e.target.value || null }))} />
+        <ToggleLine label='packet mark' enabled={!!props.form.mark_match} inactiveHint='match existing mark' onToggle={() => props.setForm((p) => ({ ...p, mark_match: p.mark_match ? null : '0x1' }))}>
+          <MarkMatchInput
+            kind='packet'
+            value={props.form.mark_match || null}
+            onChange={(value) => props.setForm((p) => ({ ...p, mark_match: value }))}
+          />
         </ToggleLine>
       </div>
 

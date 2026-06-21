@@ -27,6 +27,44 @@ function getRuleLineByComment(ruleset: string, comment: string): string {
   return lines.find((line) => line.includes(`comment "${comment}"`)) || ''
 }
 
+test('block B9: ct tuple address fields explain original and reply directions', async ({ page }) => {
+  await page.goto('/')
+  await page.evaluate((apiKey) => {
+    sessionStorage.setItem('awg_manager_auth_v1', JSON.stringify({ apiKey }))
+  }, process.env.PLAYWRIGHT_API_KEY || '')
+  await page.reload()
+
+  await page.getByRole('button', { name: 'Firewall' }).click()
+  await page.getByRole('button', { name: 'Add' }).first().click({ force: true })
+  const modal = page.locator('div.fixed.inset-0.z-40').last()
+  await expect(modal.getByText('Add Firewall Rule')).toBeVisible()
+
+  await modal.getByRole('tab', { name: 'Advanced match' }).click()
+  if (await modal.getByRole('button', { name: 'Conntrack match +' }).isVisible()) {
+    await modal.getByRole('button', { name: 'Conntrack match +' }).click()
+  }
+
+  const originalSource = modal.locator('div.space-y-1\\.5', { hasText: 'original source address' }).first()
+  await expect(originalSource.getByText('initiator address')).toBeVisible()
+  await originalSource.getByRole('button', { name: '+' }).click()
+  await expect(originalSource.getByText('Conntrack original direction: source that started the flow.')).toBeVisible()
+
+  const originalDestination = modal.locator('div.space-y-1\\.5', { hasText: 'original destination address' }).first()
+  await expect(originalDestination.getByText('target address')).toBeVisible()
+  await originalDestination.getByRole('button', { name: '+' }).click()
+  await expect(originalDestination.getByText('Conntrack original direction: destination the flow was started to.')).toBeVisible()
+
+  const replySource = modal.locator('div.space-y-1\\.5', { hasText: 'reply source address' }).first()
+  await expect(replySource.getByText('return source')).toBeVisible()
+  await replySource.getByRole('button', { name: '+' }).click()
+  await expect(replySource.getByText('Conntrack reply direction: source of return traffic.')).toBeVisible()
+
+  const replyDestination = modal.locator('div.space-y-1\\.5', { hasText: 'reply destination address' }).first()
+  await expect(replyDestination.getByText('return destination')).toBeVisible()
+  await replyDestination.getByRole('button', { name: '+' }).click()
+  await expect(replyDestination.getByText('Conntrack reply direction: destination of return traffic.')).toBeVisible()
+})
+
 test('block B9: ct original/reply addr fields map to runtime', async ({ request }) => {
   const comment = `block-b9-${Date.now()}`
   const res = await createRule(request, {

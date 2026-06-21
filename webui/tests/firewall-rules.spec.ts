@@ -228,11 +228,11 @@ test('firewall add rule: connection and packet mark match fields create rule', a
 
     await ruleModal.getByPlaceholder('Rule comment (optional)').fill(comment)
 
-    const ctMarkLine = ruleModal.locator('div.space-y-1\\.5', { hasText: 'Connection mark' }).first()
+    const ctMarkLine = ruleModal.locator('div.space-y-1\\.5', { hasText: 'connection mark' }).first()
     await ctMarkLine.getByRole('button', { name: '+' }).click()
     await ctMarkLine.getByPlaceholder('0x1 / 10').fill('0x20')
 
-    const pktMarkLine = ruleModal.locator('div.space-y-1\\.5', { hasText: 'Packet mark' }).first()
+    const pktMarkLine = ruleModal.locator('div.space-y-1\\.5', { hasText: 'packet mark' }).first()
     await pktMarkLine.getByRole('button', { name: '+' }).click()
     await pktMarkLine.getByPlaceholder('0x1 / 10').fill('0x10')
 

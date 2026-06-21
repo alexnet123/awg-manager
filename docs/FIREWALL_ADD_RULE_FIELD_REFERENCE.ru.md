@@ -587,16 +587,21 @@ UX заметки:
 - в `raw` таблице `Connection state` скрыт, потому что raw/notrack используется до обычного conntrack-сценария;
 - в `nat` таблице поле сейчас скрыто в UI, чтобы не смешивать NAT actions и policy filtering в одной форме.
 
-### Connection mark / Packet mark
+### Packet mark / Connection mark
 
-Поля: `Connection mark`, `Packet mark`
+Поля: `packet mark`, `connection mark`
 
-Где находятся: `Add Firewall Rule -> Base match -> Connection tracking match`
+API-поля: `mark_match`, `ct_mark_match`
+
+Где находятся:
+
+- `Add Firewall Rule -> Base match -> Connection tracking match`;
+- `Add Firewall Rule -> Advanced match -> Meta match`.
 
 Что делают:
 
-- `Packet mark` матчится по `meta mark`: это mark конкретного пакета;
-- `Connection mark` матчится по `ct mark`: это mark conntrack-записи, то есть состояние/метка всего соединения.
+- `packet mark` матчится по `meta mark`: это mark конкретного пакета;
+- `connection mark` матчится по `ct mark`: это mark conntrack-записи, то есть состояние/метка всего соединения.
 
 Зачем это нужно:
 
@@ -618,21 +623,21 @@ UX заметки:
 
 Что делает backend/runtime:
 
-- `Packet mark: 0x10` рендерится как `meta mark 0x10`;
-- `Connection mark: 0x20` рендерится как `ct mark 0x20`;
+- `packet mark: 0x10` рендерится как `meta mark 0x10`;
+- `connection mark: 0x20` рендерится как `ct mark 0x20`;
 - nft может показывать hex в каноническом 32-bit виде: `0x10` будет видно как `0x00000010`.
 
 Примеры:
 
 ```text
-Packet mark: 0x10
+packet mark: 0x10
 Action: accept
 ```
 
 Результат по смыслу: правило сработает только на пакеты, у которых уже установлен packet mark `0x10`.
 
 ```text
-Connection mark: 0x20
+connection mark: 0x20
 Action: accept
 ```
 
@@ -647,9 +652,181 @@ Action: accept
 
 UX заметки:
 
-- это advanced match, хотя сейчас он виден в Base match; без схемы marking пользователь обычно должен оставить поле пустым;
-- `Connection mark`/`Packet mark` здесь только проверяют mark, но не устанавливают его;
+- без схемы marking пользователь обычно должен оставить поле пустым;
+- `connection mark` / `packet mark` здесь только проверяют mark, но не устанавливают его;
 - чтобы установить mark, используются action/runtime поля `meta mark set` и `ct mark set`.
+- inactive hint в UI: `match existing mark`;
+- helper для `packet mark`: `Matches existing packet mark. To set it, use Action -> meta mark set.`;
+- helper для `connection mark`: `Matches existing connection mark. To set it, use Action -> ct mark set.`;
+- placeholder остается `0x1 / 10`, потому значения пользовательские и могут быть hex или decimal.
+
+### Conntrack direction
+
+Поле: `ct direction`
+
+API-поле: `ct_direction`
+
+Где находится: `Add Firewall Rule -> Advanced match -> Conntrack match`
+
+Что делает: добавляет match по направлению conntrack-потока через nft `ct direction ...`.
+
+Допустимые значения:
+
+- `original` — направление стороны, которая начала соединение;
+- `reply` — обратное направление, то есть ответная сторона соединения.
+
+Пример:
+
+```text
+client 10.0.0.10:50000 -> server 203.0.113.10:443
+```
+
+Для этого conntrack-соединения:
+
+- `ct direction original` матчится на пакеты от клиента к серверу;
+- `ct direction reply` матчится на пакеты от сервера к клиенту.
+
+Когда использовать:
+
+- когда нужно различать две стороны одного conntrack-соединения;
+- в NAT/forward/debug сценариях;
+- когда `Connection state` уже недостаточно и важно понять, инициатор это или ответная сторона.
+
+Что делает backend/runtime:
+
+- принимает только `original` или `reply`;
+- нормализует регистр, например `REPLY` -> `reply`;
+- рендерит nft expression как `ct direction original` или `ct direction reply`.
+
+UX решение:
+
+- поле должно быть single-select, как `meta pkttype`;
+- варианты строго `original` и `reply`;
+- default при включении: `original`;
+- inactive hint: `original / reply`;
+- helper: `original = direction that started the connection; reply = return traffic.`;
+- свободный input не нужен, потому других валидных значений нет.
+
+### Conntrack status
+
+Поле: `ct status`
+
+API-поле: `ct_status`
+
+Где находится: `Add Firewall Rule -> Advanced match -> Conntrack match`
+
+Что делает: добавляет match по status-флагам conntrack-записи через nft `ct status ...`.
+
+Допустимые значения:
+
+- `expected` — соединение ожидается conntrack helper-ом;
+- `seen-reply` — conntrack уже видел ответную сторону;
+- `assured` — соединение считается устойчивым/подтвержденным;
+- `confirmed` — conntrack-запись подтверждена ядром;
+- `snat` — к соединению применялся source NAT;
+- `dnat` — к соединению применялся destination NAT;
+- `dying` — conntrack-запись находится в процессе удаления.
+
+Можно выбирать несколько значений:
+
+```text
+assured,snat
+confirmed,dnat
+seen-reply,assured
+```
+
+Когда использовать:
+
+- для диагностики NAT/conntrack;
+- когда нужно различать соединения, к которым уже применялся `snat` или `dnat`;
+- когда обычного `Connection state` (`new`, `established`, `related`) недостаточно.
+
+Что делает backend/runtime:
+
+- принимает только фиксированный набор status-флагов;
+- нормализует пробелы и регистр, например `assured, snat` -> `assured,snat`;
+- рендерит nft expression как `ct status assured,snat`.
+
+UX решение:
+
+- в UI поле должно быть single-select, как `ct direction`;
+- пользователь выбирает один status-флаг за раз;
+- backend/API сохраняет совместимость и может принимать comma-separated status-флаги;
+- default при включении: `dnat`;
+- inactive hint: `expected / seen-reply / assured / snat`;
+- helper: `Choose one conntrack status flag. Backend/API can still accept comma-separated flags.`;
+- свободный input не нужен, потому значения фиксированы.
+
+### Conntrack original/reply addresses
+
+Поля:
+
+- `original source address`
+- `original destination address`
+- `reply source address`
+- `reply destination address`
+
+API-поля:
+
+- `ct_original_saddr`
+- `ct_original_daddr`
+- `ct_reply_saddr`
+- `ct_reply_daddr`
+
+Где находится: `Add Firewall Rule -> Advanced match -> Conntrack match`
+
+Что делает: матчится по адресам, сохраненным в conntrack-записи, а не просто по текущим `ip saddr` / `ip daddr` пакета.
+
+Пример соединения:
+
+```text
+client 192.168.1.10:50000 -> server 203.0.113.10:443
+```
+
+Для такого conntrack tuple:
+
+- `original source address` — `192.168.1.10`, инициатор соединения;
+- `original destination address` — `203.0.113.10`, куда соединение было начато;
+- `reply source address` — `203.0.113.10`, источник обратного трафика;
+- `reply destination address` — `192.168.1.10`, получатель обратного трафика.
+
+Когда использовать:
+
+- когда нужно матчить именно conntrack tuple, а не текущие адреса пакета;
+- в NAT/debug сценариях, где текущие адреса пакета могут отличаться от original/reply tuple;
+- когда нужно явно различать сторону инициатора и сторону ответа.
+
+Что принимает:
+
+- один IPv4-адрес: `192.168.1.10`;
+- один IPv6-адрес: `2001:db8::10`.
+
+Что не принимает:
+
+- CIDR-префиксы: `192.168.1.0/24`;
+- collections: `@trusted_hosts`;
+- несколько адресов в одном поле;
+- произвольные строки.
+
+Что делает backend/runtime:
+
+- проверяет, что значение — валидный IPv4/IPv6 address;
+- сам выбирает nft family token `ip` или `ip6`;
+- рендерит выражения вида `ct original ip saddr 192.168.1.10` или `ct reply ip6 daddr 2001:db8::10`.
+
+UX решение:
+
+- labels должны быть человекочитаемыми, не `ct original saddr`;
+- inactive hints:
+  - `initiator address`
+  - `target address`
+  - `return source`
+  - `return destination`
+- helper должен объяснять direction:
+  - `Conntrack original direction: source that started the flow.`
+  - `Conntrack original direction: destination the flow was started to.`
+  - `Conntrack reply direction: source of return traffic.`
+  - `Conntrack reply direction: destination of return traffic.`
 
 ### Set packet priority (QoS)
 
@@ -712,7 +889,191 @@ UX заметки:
 - label должен говорить `set packet priority (QoS)`, а не просто `meta priority`;
 - поле должно оставаться простым текстовым input, без карточек/presets;
 - placeholder должен показывать поддерживаемые форматы: `1:10 / 0x10 / 10`;
+- helper в UI: `Sets Linux packet priority for tc/QoS. This is not firewall rule order.`;
 - в будущем это поле лучше вынести из “match”-мысленной группы в отдельную expert/QoS группу, если будем глубже чистить Advanced UI.
+
+### Packet length
+
+Поле: `packet length`
+
+API-поле: `meta_length`
+
+Где находится: `Add Firewall Rule -> Advanced match -> Meta match`
+
+Что делает: добавляет match по размеру пакета в байтах через nft `meta length ...`.
+
+Важно:
+
+- это match-условие, а не изменение пакета;
+- поле не ограничивает MTU и не меняет размер пакета;
+- правило сработает только для пакетов, размер которых попадает в указанное значение/диапазон.
+
+Что должно принимать:
+
+- одно число байт: `64`;
+- диапазон байт: `64-1500`.
+
+Примеры:
+
+```text
+packet length: 64-1500
+Action: accept
+```
+
+Результат по смыслу: правило сработает только на пакеты размером от `64` до `1500` байт.
+
+Что делает backend/runtime:
+
+- сохраняет значение в старом API-поле `meta_length`;
+- рендерит nft expression как `meta length <value>`;
+- для диапазона рендерит `meta length 64-1500`.
+
+UX заметки:
+
+- label должен быть `packet length`, а не `meta length`;
+- inactive hint: `match packet size`;
+- placeholder: `64-1500`;
+- helper в UI: `Matches packet size in bytes. This does not change the packet.`;
+- если пользователю нужно матчить “большие пакеты”, это поле можно раскрыть как expert match.
+
+### Meta packet type
+
+Поле: `Meta pkttype`
+
+API-поле: `meta_pkttype`
+
+Где находится: `Add Firewall Rule -> Advanced match -> Meta match`
+
+Что делает: фильтрует пакет по L2 packet type, который ядро Linux видит для входящего/обрабатываемого пакета.
+
+Допустимые значения:
+
+- `host` — пакет адресован этому хосту;
+- `broadcast` — широковещательный пакет;
+- `multicast` — multicast-пакет;
+- `other` — прочий packet type, если он есть в runtime-контексте.
+
+UX решение:
+
+- в UI это простой single-select;
+- свободный ввод не нужен, потому что backend принимает только фиксированный набор значений;
+- по умолчанию при включении выбирается `host`.
+
+### Meta CPU
+
+Поле: `Meta cpu`
+
+API-поле: `meta_cpu`
+
+Где находится: `Add Firewall Rule -> Advanced match -> Meta match`
+
+Что делает: фильтрует пакет по номеру CPU, на котором пакет обрабатывается ядром Linux.
+
+Важно:
+
+- это не лимит CPU;
+- это не выбор CPU для firewall-правила;
+- это не нагрузка процессора;
+- это expert/debug match для диагностики или специальных performance-сценариев.
+
+Когда может понадобиться:
+
+- отладка RSS/RPS/XPS, multi-queue NIC, IRQ affinity;
+- проверка, на каких CPU реально обрабатывается трафик;
+- очень специфичная traffic engineering/performance-настройка.
+
+Что принимает:
+
+- один номер CPU: `0`, `1`, `2`, ...
+
+UX решение:
+
+- поле остается простым input;
+- hint должен быть `CPU id, expert/debug`;
+- placeholder должен показывать примеры `0 / 1 / 2`;
+- обычному пользователю почти всегда нужно оставить поле пустым.
+
+### Meta interface type
+
+Поля: `Meta iiftype`, `Meta oiftype`
+
+API-поля: `meta_iiftype`, `meta_oiftype`
+
+Где находится: `Add Firewall Rule -> Advanced match -> Meta match`
+
+Что делает:
+
+- `meta_iiftype` фильтрует по типу входного интерфейса;
+- `meta_oiftype` фильтрует по типу выходного интерфейса;
+- значение — Linux ARPHRD numeric ID.
+
+Обычные варианты:
+
+- `Ethernet` -> `1`
+- `Loopback` -> `772`
+- `PPP` -> `512`
+- `Tunnel` -> `768`
+- `IPv6 tunnel` -> `769`
+- `None` -> `65534`
+
+Важно:
+
+- это не имя интерфейса (`eth0`, `lo`, `wg0`);
+- для обычной настройки чаще нужно поле `Input interface` / `Output interface`;
+- это expert-поле для случаев, когда правило должно матчить именно аппаратный/канальный тип интерфейса.
+
+UX решение:
+
+- поле должно работать как `Protocol`: input + dropdown популярных значений;
+- в списке слева показывается имя типа, справа numeric ID;
+- можно вручную ввести редкий ARPHRD ID, если его нет в списке.
+
+### Meta interface group
+
+Поля: `Input interface group`, `Output interface group`
+
+API-поля: `meta_iifgroup`, `meta_oifgroup`
+
+Где находится: `Add Firewall Rule -> Advanced match -> Meta match`
+
+Что делает:
+
+- `meta_iifgroup` фильтрует по Linux group входного интерфейса;
+- `meta_oifgroup` фильтрует по Linux group выходного интерфейса;
+- в nft это рендерится как `meta iifgroup <id>` / `meta oifgroup <id>`.
+
+Важно:
+
+- это Linux `devgroup`, а не firewall collection;
+- это не `@lan_ifaces` и не список интерфейсов из нашего UI;
+- группа задается в системе командой вида `ip link set dev eth0 group 10`;
+- для обычных правил чаще нужно использовать `Input interface` / `Output interface` или collection интерфейсов;
+- это expert-поле для машин, где интерфейсы реально разложены по Linux device groups.
+
+Что принимает:
+
+- один numeric id группы: `10`, `20`, `100`.
+
+Пример системной настройки:
+
+```bash
+ip link set dev eth0 group 10
+ip link show group 10
+```
+
+Пример nft-матча:
+
+```text
+meta iifgroup 10
+meta oifgroup 20
+```
+
+UX решение:
+
+- в UI показываем понятные подписи `input interface group` / `output interface group`;
+- hint: `Linux dev group id`;
+- внутри включенного поля показываем expert-пояснение: `Linux dev group id from ip link group. Usually leave empty.`;
+- dropdown не нужен, потому что значения зависят от конкретной Linux-машины.
 
 ### Hour
 
