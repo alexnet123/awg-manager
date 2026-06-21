@@ -1,0 +1,4 @@
+active/*
+!active/.gitkeep
+results/*
+!results/.gitkeep

@@ -1,5 +1,18 @@
 # Documentation
 
+## Agent Rules
+
+- [agents/PRODUCT_UI.ru.md](agents/PRODUCT_UI.ru.md) — product UI rules for agent work
+- [agents/MODULE_WORKFLOW.ru.md](agents/MODULE_WORKFLOW.ru.md) — feature/module workflow standard
+- [agents/DOCUMENTATION_POLICY.ru.md](agents/DOCUMENTATION_POLICY.ru.md) — documentation ownership and creation policy
+
+## User Guides
+
+- [user/README.md](user/README.md) — user documentation index
+- [user/GUIDE_TEMPLATE.ru.md](user/GUIDE_TEMPLATE.ru.md) — Russian user guide template
+
+## Existing Documentation
+
 - [API.md](API.md) — AWG Manager HTTP API reference
 - [DEPLOY.md](DEPLOY.md) — deployment, systemd, restore workflow
 - [STAND_SETUP_FIXES.md](STAND_SETUP_FIXES.md) — real stand setup issues + applied fixes log
