@@ -30,6 +30,39 @@ function getRuleLineByComment(ruleset: string, comment: string): string {
   return lines.find((line) => line.includes(`comment "${comment}"`)) || ''
 }
 
+test('block B5: ct helper match is a combobox with presets and custom input', async ({ page }) => {
+  await page.goto('/')
+  await page.evaluate((apiKey) => {
+    sessionStorage.setItem('awg_manager_auth_v1', JSON.stringify({ apiKey }))
+  }, process.env.PLAYWRIGHT_API_KEY || '')
+  await page.reload()
+
+  await page.getByRole('button', { name: 'Firewall' }).click()
+  await page.getByRole('button', { name: 'Add' }).first().click({ force: true })
+  const modal = page.locator('div.fixed.inset-0.z-40').last()
+  await expect(modal.getByText('Add Firewall Rule')).toBeVisible()
+
+  await modal.getByRole('tab', { name: 'Advanced match' }).click()
+  if (await modal.getByRole('button', { name: 'Conntrack match +' }).isVisible()) {
+    await modal.getByRole('button', { name: 'Conntrack match +' }).click()
+  }
+
+  const helperLine = modal.locator('div.space-y-1\\.5', { hasText: 'ct helper' }).first()
+  await expect(helperLine.getByText('ftp / sip')).toBeVisible()
+  await helperLine.getByRole('button', { name: '+' }).click()
+
+  const input = helperLine.getByRole('combobox')
+  await expect(input).toHaveValue('ftp')
+  await expect(helperLine.getByText('Matches an already assigned conntrack helper.')).toBeVisible()
+  await helperLine.getByRole('button', { name: 'Show ct helper presets' }).click()
+  await expect(helperLine.getByRole('option', { name: 'sip SIP signaling helper' })).toBeVisible()
+  await helperLine.getByRole('option', { name: 'sip SIP signaling helper' }).click()
+  await expect(input).toHaveValue('sip')
+
+  await input.fill('ftp-custom')
+  await expect(input).toHaveValue('ftp-custom')
+})
+
 test('block B5: ct helper match maps to runtime', async ({ request }) => {
   const comment = `block-b5-${Date.now()}`
   const res = await createRule(request, {

@@ -828,6 +828,64 @@ UX решение:
   - `Conntrack reply direction: source of return traffic.`
   - `Conntrack reply direction: destination of return traffic.`
 
+### Conntrack helper match
+
+Поле: `ct helper`
+
+API-поле: `ct_helper_match`
+
+Где находится: `Add Firewall Rule -> Advanced match -> Conntrack match`
+
+Что делает: добавляет match по helper-у, который уже назначен conntrack-записи.
+
+Важно: это поле **не назначает** helper. Оно только проверяет, что у соединения уже есть helper.
+
+Чем отличается от `ct helper object`:
+
+- `ct helper` в `Advanced match` — условие: `ct helper "ftp"`;
+- `ct helper object` в `Action` — действие назначения helper-а: `ct helper set "ftp-standard"`.
+
+Когда использовать:
+
+- когда helper уже назначается другим правилом;
+- когда нужно фильтровать или логировать только соединения с конкретным conntrack helper;
+- для FTP/SIP/TFTP и похожих протоколов, где conntrack helper помогает отслеживать связанные потоки.
+
+Что должно принимать:
+
+- одно имя helper-а без пробелов;
+- буквы, цифры, `_`, `.`, `-`;
+- популярные значения из UI-подсказки: `ftp`, `sip`, `tftp`, `irc`, `h323`, `pptp`;
+- пользовательское имя, если оно реально используется на стенде.
+
+Примеры:
+
+```text
+ftp
+sip
+tftp
+ftp-custom
+```
+
+Что не принимать:
+
+- несколько значений через запятую;
+- пробелы: `ftp helper`;
+- inline set/list;
+- произвольное nft expression.
+
+Что делает backend/runtime:
+
+- проверяет безопасный формат имени;
+- рендерит nft expression как `ct helper "ftp"`.
+
+UX решение:
+
+- поле должно быть combobox: можно выбрать популярный helper или напечатать свой;
+- inactive hint: `ftp / sip`;
+- helper под полем: `Matches an already assigned conntrack helper. To assign one, use Action -> ct helper object.`;
+- не показывать это поле как object picker, потому object picker уже есть отдельно в `Action`.
+
 ### Set packet priority (QoS)
 
 Поле: `Set packet priority (QoS)`

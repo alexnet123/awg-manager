@@ -37,6 +37,15 @@ const CT_STATUS_PRESETS = [
   { value: 'dying', label: 'dying', hint: 'being removed' },
 ] as const
 
+const CT_HELPER_PRESETS = [
+  { value: 'ftp', hint: 'FTP control/data helper' },
+  { value: 'sip', hint: 'SIP signaling helper' },
+  { value: 'tftp', hint: 'TFTP helper' },
+  { value: 'irc', hint: 'IRC DCC helper' },
+  { value: 'h323', hint: 'H.323 helper' },
+  { value: 'pptp', hint: 'PPTP helper' },
+] as const
+
 const ARPHRD_TYPE_OPTIONS = [
   { label: 'Ethernet', value: '1' },
   { label: 'Loopback', value: '772' },
@@ -389,6 +398,117 @@ function CtTupleAddressInput(props: {
   )
 }
 
+function CtHelperCombobox(props: {
+  value?: string | null
+  onChange: (value: string | null) => void
+}) {
+  const [open, setOpen] = React.useState(false)
+  const rootRef = React.useRef<HTMLDivElement | null>(null)
+  const value = props.value || ''
+  const query = value.trim().toLowerCase()
+  const queryMatchesPreset = CT_HELPER_PRESETS.some((option) => option.value === query)
+  const visibleOptions = query && !queryMatchesPreset
+    ? CT_HELPER_PRESETS.filter((option) => option.value.includes(query) || option.hint.toLowerCase().includes(query))
+    : CT_HELPER_PRESETS
+
+  React.useEffect(() => {
+    if (!open) return
+    function onPointerDown(event: MouseEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    return () => document.removeEventListener('mousedown', onPointerDown)
+  }, [open])
+
+  return (
+    <div className='space-y-1'>
+      <div ref={rootRef} className='relative'>
+        <Input
+          className='h-7 pr-16'
+          placeholder='ftp'
+          value={value}
+          onFocus={() => setOpen(true)}
+          onChange={(e) => {
+            props.onChange(e.target.value || null)
+            setOpen(true)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setOpen(false)
+            if (e.key === 'ArrowDown') {
+              e.preventDefault()
+              setOpen(true)
+            }
+          }}
+          role='combobox'
+          aria-expanded={open}
+          aria-controls='ct-helper-options'
+          aria-autocomplete='list'
+        />
+        {props.value ? (
+          <button
+            type='button'
+            className='absolute right-7 top-1 flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground'
+            aria-label='Clear ct helper'
+            onClick={() => {
+              props.onChange(null)
+              setOpen(false)
+            }}
+          >
+            <X className='h-3.5 w-3.5' />
+          </button>
+        ) : null}
+        <button
+          type='button'
+          className='absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground'
+          aria-label='Show ct helper presets'
+          onClick={() => setOpen((prev) => !prev)}
+        >
+          <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', open && 'rotate-180')} />
+        </button>
+        {open ? (
+          <div
+            id='ct-helper-options'
+            role='listbox'
+            aria-multiselectable='false'
+            className='absolute z-50 mt-1 max-h-56 w-full overflow-auto rounded-md border bg-popover p-1 text-xs shadow-lg'
+          >
+            {visibleOptions.length ? visibleOptions.map((option) => {
+              const selected = props.value === option.value
+              return (
+                <button
+                  key={option.value}
+                  type='button'
+                  role='option'
+                  aria-selected={selected}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left font-normal hover:bg-accent hover:text-accent-foreground',
+                    selected && 'bg-accent text-accent-foreground'
+                  )}
+                  onClick={() => {
+                    props.onChange(option.value)
+                    setOpen(false)
+                  }}
+                >
+                  <span className='flex h-4 w-4 items-center justify-center text-primary'>
+                    {selected ? <Check className='h-3.5 w-3.5' /> : null}
+                  </span>
+                  <span className='font-semibold'>{option.value}</span>
+                  <span className='ml-auto text-[10px] font-normal text-muted-foreground'>{option.hint}</span>
+                </button>
+              )
+            }) : (
+              <div className='px-2 py-2 text-muted-foreground'>Type a helper name, for example ftp-custom</div>
+            )}
+          </div>
+        ) : null}
+      </div>
+      <div className='text-[9px] leading-3 text-muted-foreground'>
+        Matches an already assigned conntrack helper. To assign one, use Action -&gt; ct helper object.
+      </div>
+    </div>
+  )
+}
+
 function IcmpMatchEditor(props: {
   typeValue?: string | null
   codeValue?: string | null
@@ -696,7 +816,10 @@ export function PolicyRuleEditorAdvancedTab(props: Props) {
                         <Input className='h-7' placeholder='30s / 1m' value={props.form.ct_expiration || ''} onChange={(e) => props.setForm((p) => ({ ...p, ct_expiration: e.target.value || null }))} />
                       </ToggleLine>
                       <ToggleLine label='ct helper' enabled={!!props.form.ct_helper_match} inactiveHint='ftp / sip' onToggle={() => props.setForm((p) => ({ ...p, ct_helper_match: p.ct_helper_match ? null : 'ftp' }))}>
-                        <Input className='h-7' placeholder='ftp / sip' value={props.form.ct_helper_match || ''} onChange={(e) => props.setForm((p) => ({ ...p, ct_helper_match: e.target.value || null }))} />
+                        <CtHelperCombobox
+                          value={props.form.ct_helper_match || null}
+                          onChange={(value) => props.setForm((p) => ({ ...p, ct_helper_match: value }))}
+                        />
                       </ToggleLine>
                     </div>
                     <div className='grid grid-cols-2 gap-2'>
