@@ -186,7 +186,7 @@ const ADVANCED_SECTIONS_CLOSED = {
   meta: false,
   ct: false,
   fib: false,
-  raw: false,
+  l2: false,
 }
 
 export function FirewallPage(props: { auth: AuthState; refreshNonce: number }) {

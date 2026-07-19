@@ -2,6 +2,8 @@ import * as React from 'react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { TabsContent } from '@/components/ui/tabs'
+import { CtEventPicker } from './CtEventPicker'
+import { PacketPriorityInput } from './PacketPriorityInput'
 import { ToggleLine } from './RuleFieldControls'
 import type { FirewallRule } from '../api'
 
@@ -42,6 +44,7 @@ export function PolicyRuleEditorActionTab(props: Props) {
   const supportsObjectBindings = family !== 'netdev'
   const supportsDynamicSetStatements = family === 'inet'
   const supportsVmapStatements = family === 'inet'
+  const supportsRawActions = props.hasSupport('nftrace') || props.hasSupport('notrack')
   const dynamicSetEnabled = !!props.form.set_stmt_name
   const vmapEnabled = !!props.form.vmap_stmt_name
   const selectedDynamicSet = props.dynamicSetOptions.find((item) => item.name === props.form.set_stmt_name) || null
@@ -148,6 +151,73 @@ export function PolicyRuleEditorActionTab(props: Props) {
           }}
         />
       </ToggleLine>
+
+      <ToggleLine
+        label='ct event set'
+        enabled={!!props.form.ct_event}
+        inactiveHint='new / related / destroy'
+        onToggle={() => props.setForm((p) => ({ ...p, ct_event: p.ct_event ? null : 'new' }))}
+      >
+        <CtEventPicker
+          value={props.form.ct_event || null}
+          onChange={(value) => props.setForm((p) => ({ ...p, ct_event: value }))}
+        />
+      </ToggleLine>
+
+      <ToggleLine
+        label='set packet priority (QoS)'
+        enabled={!!props.form.meta_priority}
+        inactiveHint='1:10 / 0x10 / 10'
+        onToggle={() => props.setForm((p) => ({ ...p, meta_priority: p.meta_priority ? null : '1:10' }))}
+      >
+        <PacketPriorityInput
+          value={props.form.meta_priority || null}
+          onChange={(value) => props.setForm((p) => ({ ...p, meta_priority: value }))}
+        />
+      </ToggleLine>
+
+      <div className='rounded-md border p-2'>
+        <div className='mb-1 text-[11px] font-semibold text-muted-foreground'>Raw actions</div>
+        <div className='grid grid-cols-2 gap-2'>
+          {props.hasSupport('nftrace') ? (
+            <label className='flex items-center gap-2 rounded-md border p-2 text-xs'>
+              <input
+                type='checkbox'
+                className='h-4 w-4'
+                checked={!!props.form.nftrace}
+                onChange={(e) => props.setForm((p) => ({ ...p, nftrace: e.target.checked }))}
+              />
+              nftrace
+            </label>
+          ) : (
+            <label className='flex items-center gap-2 rounded-md border p-2 text-xs text-muted-foreground'>
+              <input type='checkbox' disabled className='h-4 w-4' />
+              nftrace (raw table only)
+            </label>
+          )}
+          {props.hasSupport('notrack') ? (
+            <label className='flex items-center gap-2 rounded-md border p-2 text-xs'>
+              <input
+                type='checkbox'
+                className='h-4 w-4'
+                checked={!!props.form.notrack}
+                onChange={(e) => props.setForm((p) => ({ ...p, notrack: e.target.checked }))}
+              />
+              notrack
+            </label>
+          ) : (
+            <label className='flex items-center gap-2 rounded-md border p-2 text-xs text-muted-foreground'>
+              <input type='checkbox' disabled className='h-4 w-4' />
+              notrack (raw table only)
+            </label>
+          )}
+        </div>
+        {supportsRawActions ? (
+          <div className='mt-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[10px] text-amber-900'>
+            `notrack` is usually meaningful only in raw prerouting/output contexts.
+          </div>
+        ) : null}
+      </div>
 
       {props.form.action === 'reject' ? (
         <div className='space-y-1.5 rounded-md border p-2'>

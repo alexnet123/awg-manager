@@ -892,7 +892,7 @@ UX решение:
 
 API-поле: `meta_priority`
 
-Где находится: `Add Firewall Rule -> Advanced match -> Meta match`
+Где находится: `Add Firewall Rule -> Action`
 
 Что делает: выставляет Linux packet priority (`meta priority set ...`) для пакета. Это QoS/traffic-control действие, а не match-условие.
 
@@ -945,10 +945,11 @@ Set packet priority (QoS): 0x10
 UX заметки:
 
 - label должен говорить `set packet priority (QoS)`, а не просто `meta priority`;
+- поле находится рядом с action statement-ами, потому оно меняет пакет (`meta priority set ...`), а не проверяет условие;
 - поле должно оставаться простым текстовым input, без карточек/presets;
 - placeholder должен показывать поддерживаемые форматы: `1:10 / 0x10 / 10`;
 - helper в UI: `Sets Linux packet priority for tc/QoS. This is not firewall rule order.`;
-- в будущем это поле лучше вынести из “match”-мысленной группы в отдельную expert/QoS группу, если будем глубже чистить Advanced UI.
+- не переносить это поле обратно в `Advanced match`, пока backend рендерит его как `meta priority set`.
 
 ### Packet length
 
@@ -1132,6 +1133,147 @@ UX решение:
 - hint: `Linux dev group id`;
 - внутри включенного поля показываем expert-пояснение: `Linux dev group id from ip link group. Usually leave empty.`;
 - dropdown не нужен, потому что значения зависят от конкретной Linux-машины.
+
+### Route lookup checks
+
+Поле: `Route lookup checks (expert)`
+
+API-поле: `fib_expr`
+
+Где находится: `Add Firewall Rule -> Advanced match -> FIB / socket / routing`
+
+Что делает:
+
+- проверяет Linux routing table / FIB для адресов пакета;
+- в nft это рендерится как полное выражение `fib ...`;
+- правило не меняет маршрут, а только матчится по результату lookup.
+
+Когда заполнять:
+
+- для anti-spoofing/reverse path check;
+- когда нужно проверить, что до destination есть маршрут;
+- когда нужно проверить, что destination является локальным адресом машины;
+- в обычных allow/drop правилах чаще не нужно.
+
+Что должно принимать:
+
+- один готовый scenario из UI;
+- либо одно ручное nft fib expression, если preset не подходит.
+
+Основные варианты:
+
+```text
+fib saddr . iif oif missing
+fib saddr . iif oif exists
+fib daddr . iif oif exists
+fib daddr . iif type local
+fib daddr . iif type != local
+fib daddr . iif oif missing
+```
+
+Смысл популярных вариантов:
+
+- `fib saddr . iif oif missing` — reverse route для source отсутствует, типовой anti-spoofing сигнал;
+- `fib saddr . iif oif exists` — reverse route для source существует;
+- `fib daddr . iif oif exists` — есть маршрут к destination с учетом входного интерфейса;
+- `fib daddr . iif type local` — destination является локальным адресом этой машины;
+- `fib daddr . iif type != local` — destination не является локальным адресом этой машины;
+- `fib daddr . iif oif missing` — route к destination отсутствует.
+
+UX решение:
+
+- поле показывается как `Route lookup checks (expert)`, а не только `fib expression`;
+- в выключенном состоянии hint должен говорить `Usually leave empty. Checks Linux routing table.`;
+- во включенном состоянии сверху показывается предупреждение: `This does not create routes...`;
+- пользователь выбирает один radio-сценарий: `Block spoofed source`, `Require source return route`, `Require destination route`, `Match local destination`, `Match non-local destination`, `Drop unroutable destination`;
+- ниже показывается `What this selected check does` человеческим текстом;
+- ручной ввод не показывать в этом поле, чтобы пользователь не ломал правило raw nft-выражением;
+- generated nft expression по умолчанию скрыт и показывается только через `Show nft expression`;
+- для редких ручных случаев использовать прямой API-клиент; обычная форма Add Rule raw FIB-синтаксис не показывает.
+
+### Route next hop
+
+Поле: `Route next hop`
+
+API-поле: `rt_nexthop`
+
+Где находится: `Add Firewall Rule -> Advanced match -> FIB / socket / routing`
+
+Что делает:
+
+- матчится по пакетам, для которых выбранный Linux route использует указанный next-hop;
+- принимает IP-адрес next-hop, например `192.0.2.1`;
+- не создает маршрут и не меняет таблицу маршрутизации.
+
+UX решение:
+
+- показывать пользователю поле как route-check, а не как raw `rt expression`;
+- не смешивать это поле с IPsec UI: Firewall не должен выглядеть так, будто он настраивает вкладку IPsec;
+- raw API-поле `rt_expr` остается только для совместимости старых сохраненных правил и не показывается в обычной форме Add Rule.
+
+### Socket compatibility fields
+
+API-поля: `socket_match`, `socket_expr`
+
+Что делают: поддерживают nftables socket expressions, включая `socket transparent 1`, для старых сохраненных правил и прямых API-клиентов.
+
+UX решение:
+
+- не показывать в обычной форме Add Rule: сценарий нужен только для заранее настроенного Linux TPROXY/transparent proxy и без такого внешнего setup бесполезен;
+- сохранить оба API-поля и backend-rendering для wire/API совместимости;
+- существующие правила с этими значениями продолжают загружаться и применяться, но редактировать socket expression через обычный UI нельзя.
+
+### IPv6 extension header
+
+Поле: `IPv6 extension header`
+
+API-поле: `ipv6_exthdrs`
+
+Где находится: `Add Firewall Rule -> Advanced match -> FIB / socket / routing`
+
+Что делает:
+
+- проверяет наличие или отсутствие одного IPv6 extension header;
+- рендерится как `exthdr <header> <exists|missing>`;
+- не изменяет пакет.
+
+Доступные заголовки:
+
+- `Fragment` -> `frag`;
+- `Hop-by-Hop` -> `hbh`;
+- `Routing` -> `rt`;
+- `Destination Options` -> `dst`;
+- `Mobility` -> `mh`.
+
+Доступные условия:
+
+- `is present` -> `exists`;
+- `is missing` -> `missing`.
+
+Пример: `Fragment + is missing` формирует `exthdr frag missing` и матчится по нефрагментированным IPv6-пакетам.
+
+UX решение:
+
+- показывать два select: header и condition;
+- не разрешать ручной nft-синтаксис в обычной форме;
+- raw API-поле `exthdr_expr` сохраняется для wire/API совместимости старых правил, но скрывается из Add Rule;
+- старое структурированное значение без явного условия, например `rt`, отображается как `Routing + is present` и не переписывается до явного изменения пользователем.
+
+### Raw expression compatibility fields
+
+API-поля: `raw_expr`, `fib_check`
+
+Что делают:
+
+- `raw_expr` вставляет переданную строку непосредственно в nft-правило и разрешен backend только для таблицы `raw`;
+- `fib_check` принимает хвост выражения, перед которым backend добавляет `fib`.
+
+UX решение:
+
+- секцию `Raw expression & debug` не показывать в обычной форме Add Rule;
+- типовые FIB-сценарии создавать через `Route lookup checks`;
+- сохранить оба поля в backend/API для старых правил и прямых API-клиентов;
+- существующие значения продолжают загружаться и применяться, но не редактируются через обычный UI.
 
 ### Hour
 

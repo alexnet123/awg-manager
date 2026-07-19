@@ -1146,9 +1146,9 @@ def normalize_meta_ct_fib_fields(
 
     if ct_event is not None:
         raw_events = [t.strip().lower() for t in str(ct_event).split(",") if t.strip()]
-        allowed_events = {"new", "related", "destroy", "reply", "assured", "protoinfo", "helper", "mark", "natseqinfo", "secmark"}
+        allowed_events = {"new", "related", "destroy", "reply", "assured", "protoinfo", "helper", "mark", "seqadj", "natseqinfo", "secmark", "label"}
         if not raw_events or any(t not in allowed_events for t in raw_events):
-            raise ValueError("ct_event must use: new, related, destroy, reply, assured, protoinfo, helper, mark, natseqinfo, secmark")
+            raise ValueError("ct_event must use: new, related, destroy, reply, assured, protoinfo, helper, mark, seqadj, natseqinfo, secmark, label")
         ct_event = ",".join(raw_events)
 
     for fld, val in (

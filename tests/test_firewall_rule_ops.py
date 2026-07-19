@@ -1161,6 +1161,34 @@ class FirewallRuleOpsTest(unittest.TestCase):
         self.assertEqual(normalized["ct_expiration"], "30s")
         self.assertEqual(normalized["ct_event"], "new,destroy")
 
+        normalized_events = rule_ops.normalize_meta_ct_fib_fields(
+            meta_length=None,
+            meta_priority=None,
+            meta_cpu=None,
+            meta_pkttype=None,
+            meta_iiftype=None,
+            meta_oiftype=None,
+            meta_iifgroup=None,
+            meta_oifgroup=None,
+            mark_match=None,
+            ct_mark_match=None,
+            ct_status=None,
+            ct_direction=None,
+            ct_expiration=None,
+            ct_helper_match=None,
+            ct_label=None,
+            ct_event="seqadj, label, natseqinfo",
+            fib_check=None,
+            socket_match=None,
+            rt_nexthop=None,
+            ipv6_exthdrs=None,
+            ct_original_saddr=None,
+            ct_original_daddr=None,
+            ct_reply_saddr=None,
+            ct_reply_daddr=None,
+        )
+        self.assertEqual(normalized_events["ct_event"], "seqadj,label,natseqinfo")
+
         with self.assertRaisesRegex(ValueError, "meta_pkttype must be one of: host, broadcast, multicast, other"):
             rule_ops.normalize_meta_ct_fib_fields(
                 meta_length=None,

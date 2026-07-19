@@ -41,23 +41,16 @@
 Подсказка: поля с `+` не активны, пока вы их не включите. Кнопка `-` отключает поле и убирает его из payload.
 
 ## 3) Вкладка Advanced match
+Поля сгруппированы по назначению. `vlan id`, `ether src`, `ether dst` и `ether type` находятся в отдельной сворачиваемой секции `Ethernet / VLAN (L2)`. Проверки маршрутизации остаются в `FIB / socket / routing`.
+
 Сейчас реально работают:
-- `fib expression`
-- `socket expression`
-- `rt expression`
-- `exthdr expression`
-- `fib check`
-- `socket match`
-- `rt nexthop`
-- `ipv6 extension headers`
-- `raw expression` (только для raw)
-- `nftrace` (только для raw)
-- `notrack` advanced toggle (только для raw)
+- `Route lookup checks (expert)` (`fib expression`)
+- `Route next hop` (`rt nexthop`)
+- `IPv6 extension header`
 - `tcp flags`
 - `icmp type` / `icmp code`
 - `icmpv6 type` / `icmpv6 code`
 - `meta length`
-- `meta priority`
 - `meta cpu`
 - `meta pkttype`
 - `meta iifgroup`
@@ -67,7 +60,6 @@
 - `ct expiration`
 - `ct helper`
 - `ct label`
-- `ct event`
 - `ct original saddr` / `ct original daddr`
 - `ct reply saddr` / `ct reply daddr`
 - `vlan id`
@@ -79,7 +71,6 @@
 - `icmp type/code`: `echo-request` + `0` (требует `proto=icmp`)
 - `icmpv6 type/code`: `echo-request` + `0` (требует `proto=icmpv6`)
 - `meta length`: `64-1500`
-- `meta priority`: `1:10`
 - `meta cpu`: `0`
 - `meta pkttype`: `host`
 - `meta iifgroup`: `10`
@@ -88,13 +79,12 @@
 - `ct direction`: `original`
 - `ct expiration`: `30s`
 - `ct helper`: `ftp`
-- `ct label`: `0x1`
-- `ct event`: `new,related`
+- `ct label`: `0x1` или имя из connlabel-конфига сервера. Поле матчится по уже существующей conntrack label; если имена не настроены, используйте hex-маску.
+- `ct event set`: на вкладке `Action`, например `new,related,destroy` или другие event bits (`reply`, `assured`, `protoinfo`, `helper`, `mark`, `seqadj`, `secmark`, `label`). Это statement `ct event set ...`: он задает маску conntrack events, а не матчится по пакету.
 - `ct original/reply saddr`: `10.8.0.2` / `10.8.0.1`
-- `fib check`: `daddr . iif type`
-- `socket match`: `transparent 1`
-- `rt nexthop`: `10.0.0.1`
-- `ipv6 exthdrs`: `frag`
+- `Route lookup checks (expert)`: выберите один понятный сценарий (`Block spoofed source`, `Require source return route`, `Require destination route`, `Match local destination`, `Match non-local destination` или `Drop unroutable destination`). Ручного ввода нет; полное nft-выражение скрыто в `Show nft expression` и нужно только для проверки.
+- `Route next hop`: `10.0.0.1`; матчится по пакетам, для которых выбранный Linux route использует указанный next-hop. Это не создает маршрут.
+- `IPv6 extension header`: выберите один заголовок (`Fragment`, `Hop-by-Hop`, `Routing`, `Destination Options` или `Mobility`) и условие `is present/is missing`. Комбинация `Fragment + is missing` матчится по нефрагментированным IPv6-пакетам.
 - `vlan id`: `10`
 - `ether type`: `0x0800`
 
@@ -114,6 +104,10 @@
 - `Reject type`: только для `action=reject`.
 - `NAT options`: `random`, `fully-random`, `persistent`.
 - `meta mark set`, `ct mark set`: установка mark.
+- `nftrace`: на вкладке `Action`, только для `raw`; включает runtime debug statement `meta nftrace set 1`.
+- `notrack`: на вкладке `Action`, только для `raw`; добавляет statement `notrack` и обычно используется в raw `prerouting/output`.
+- `set packet priority (QoS)`: на вкладке `Action`, например `1:10`, `0x10` или `10`. Это statement `meta priority set ...`: он выставляет Linux packet priority для tc/QoS, а не порядок firewall-правила.
+- `ct event set`: на вкладке `Action`, например `new,related,destroy` или другие event bits (`reply`, `assured`, `protoinfo`, `helper`, `mark`, `seqadj`, `secmark`, `label`). Это statement `ct event set ...`: он задает маску conntrack events, а не матчится по пакету.
 - `log prefix`, `log level`: параметры логирования.
 
 Bridge Policy v2 B2:

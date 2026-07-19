@@ -32,7 +32,7 @@ function getRuleLineByComment(ruleset: string, comment: string): string {
   return lines.find((line) => line.includes(`comment "${comment}"`)) || ''
 }
 
-test('block B2: packet priority uses a simple text field', async ({ page }) => {
+test('block B2: packet priority is configured from action statements', async ({ page }) => {
   await page.goto('/')
   await page.evaluate((apiKey) => {
     sessionStorage.setItem('awg_manager_auth_v1', JSON.stringify({ apiKey }))
@@ -48,6 +48,9 @@ test('block B2: packet priority uses a simple text field', async ({ page }) => {
   if (await modal.getByRole('button', { name: 'Meta match +' }).isVisible()) {
     await modal.getByRole('button', { name: 'Meta match +' }).click()
   }
+  await expect(modal.locator('div.space-y-1\\.5', { hasText: 'set packet priority (QoS)' })).toHaveCount(0)
+
+  await modal.getByRole('tab', { name: 'Action' }).click()
   const priorityLine = modal.locator('div.space-y-1\\.5', { hasText: 'set packet priority (QoS)' }).first()
   await priorityLine.getByRole('button', { name: '+' }).click()
   const input = priorityLine.getByPlaceholder('1:10 / 0x10 / 10')

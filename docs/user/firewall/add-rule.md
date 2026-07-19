@@ -41,23 +41,16 @@ Pick the table first, then open **Add**.
 Tip: fields with `+` are inactive until enabled. `-` disables and removes the value from payload.
 
 ## 3) Advanced match tab
+Fields are grouped by purpose. `vlan id`, `ether src`, `ether dst`, and `ether type` are in the separate collapsed `Ethernet / VLAN (L2)` section. Routing checks remain in `FIB / socket / routing`.
+
 Currently active:
-- `fib expression`
-- `socket expression`
-- `rt expression`
-- `exthdr expression`
-- `fib check`
-- `socket match`
-- `rt nexthop`
-- `ipv6 extension headers`
-- `raw expression` (raw table only)
-- `nftrace` (raw table only)
-- `notrack` advanced toggle (raw table only)
+- `Route lookup checks (expert)` (`fib expression`)
+- `Route next hop` (`rt nexthop`)
+- `IPv6 extension header`
 - `tcp flags`
 - `icmp type` / `icmp code`
 - `icmpv6 type` / `icmpv6 code`
 - `meta length`
-- `meta priority`
 - `meta cpu`
 - `meta pkttype`
 - `meta iifgroup`
@@ -67,7 +60,6 @@ Currently active:
 - `ct expiration`
 - `ct helper`
 - `ct label`
-- `ct event`
 - `ct original saddr` / `ct original daddr`
 - `ct reply saddr` / `ct reply daddr`
 - `vlan id`
@@ -79,7 +71,6 @@ Working examples:
 - `icmp type/code`: `echo-request` + `0` (requires `proto=icmp`)
 - `icmpv6 type/code`: `echo-request` + `0` (requires `proto=icmpv6`)
 - `meta length`: `64-1500`
-- `meta priority`: `1:10`
 - `meta cpu`: `0`
 - `meta pkttype`: `host`
 - `meta iifgroup`: `10`
@@ -88,13 +79,12 @@ Working examples:
 - `ct direction`: `original`
 - `ct expiration`: `30s`
 - `ct helper`: `ftp`
-- `ct label`: `0x1`
-- `ct event`: `new,related`
+- `ct label`: `0x1` or a name from the server connlabel config. This matches an existing conntrack label; if names are not configured, use an explicit hex mask.
+- `ct event set`: on the `Action` tab, for example `new,related,destroy` or other event bits (`reply`, `assured`, `protoinfo`, `helper`, `mark`, `seqadj`, `secmark`, `label`). This is a `ct event set ...` statement: it sets the conntrack event mask, not a packet match.
 - `ct original/reply saddr`: `10.8.0.2` / `10.8.0.1`
-- `fib check`: `daddr . iif type`
-- `socket match`: `transparent 1`
-- `rt nexthop`: `10.0.0.1`
-- `ipv6 exthdrs`: `frag`
+- `Route lookup checks (expert)`: choose one human scenario (`Block spoofed source`, `Require source return route`, `Require destination route`, `Match local destination`, `Match non-local destination`, or `Drop unroutable destination`). There is no manual input; the full nft expression is hidden behind `Show nft expression` and is only for verification.
+- `Route next hop`: `10.0.0.1`; matches packets whose selected Linux route uses the specified next-hop. It does not create a route.
+- `IPv6 extension header`: choose one header (`Fragment`, `Hop-by-Hop`, `Routing`, `Destination Options`, or `Mobility`) and whether it must be present or missing. `Fragment + is missing` matches non-fragmented IPv6 packets.
 - `vlan id`: `10`
 - `ether type`: `0x0800`
 
@@ -114,6 +104,10 @@ Common rejects (expected):
 - `Reject type`: only for `action=reject`.
 - `NAT options`: `random`, `fully-random`, `persistent`.
 - `meta mark set`, `ct mark set`: mark operations.
+- `nftrace`: on the `Action` tab, raw table only; enables the runtime debug statement `meta nftrace set 1`.
+- `notrack`: on the `Action` tab, raw table only; adds the `notrack` statement and is usually used in raw `prerouting/output`.
+- `set packet priority (QoS)`: on the `Action` tab, for example `1:10`, `0x10`, or `10`. This is a `meta priority set ...` statement: it sets Linux packet priority for tc/QoS, not firewall rule order.
+- `ct event set`: on the `Action` tab, for example `new,related,destroy` or other event bits (`reply`, `assured`, `protoinfo`, `helper`, `mark`, `seqadj`, `secmark`, `label`). This is a `ct event set ...` statement: it sets the conntrack event mask, not a packet match.
 - `log prefix`, `log level`: logging controls.
 
 Bridge Policy v2 B2 notes:

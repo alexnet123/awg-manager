@@ -46,6 +46,53 @@ const CT_HELPER_PRESETS = [
   { value: 'pptp', hint: 'PPTP helper' },
 ] as const
 
+const FIB_EXPR_PRESETS = [
+  {
+    value: 'fib saddr . iif oif missing',
+    label: 'Block spoofed source',
+    short: 'Source has no return route',
+    hint: 'Use this for anti-spoofing: match packets when Linux cannot route traffic back to the source through the input interface.',
+  },
+  {
+    value: 'fib saddr . iif oif exists',
+    label: 'Require source return route',
+    short: 'Source has a valid return route',
+    hint: 'Match packets only when Linux can route traffic back to the source through the input interface.',
+  },
+  {
+    value: 'fib daddr . iif oif exists',
+    label: 'Require destination route',
+    short: 'Destination is reachable',
+    hint: 'Match only packets whose destination has a valid route in the Linux routing table.',
+  },
+  {
+    value: 'fib daddr . iif type local',
+    label: 'Match local destination',
+    short: 'Destination belongs to this server',
+    hint: 'Match packets whose destination address is configured locally on this machine.',
+  },
+  {
+    value: 'fib daddr . iif type != local',
+    label: 'Match non-local destination',
+    short: 'Destination is not this server',
+    hint: 'Match packets whose destination is routed through this machine instead of terminating on it.',
+  },
+  {
+    value: 'fib daddr . iif oif missing',
+    label: 'Drop unroutable destination',
+    short: 'Destination has no route',
+    hint: 'Match packets when Linux has no route for the destination address.',
+  },
+] as const
+
+const IPV6_EXTENSION_HEADER_OPTIONS = [
+  { value: 'frag', label: 'Fragment' },
+  { value: 'hbh', label: 'Hop-by-Hop' },
+  { value: 'rt', label: 'Routing' },
+  { value: 'dst', label: 'Destination Options' },
+  { value: 'mh', label: 'Mobility' },
+] as const
+
 const ARPHRD_TYPE_OPTIONS = [
   { label: 'Ethernet', value: '1' },
   { label: 'Loopback', value: '772' },
@@ -295,6 +342,74 @@ function LinuxDevGroupInput(props: {
   )
 }
 
+function FibRouteLookupInput(props: {
+  value?: string | null
+  onChange: (value: string | null) => void
+}) {
+  const value = props.value || ''
+  const selectedPreset = FIB_EXPR_PRESETS.find((option) => option.value === value)
+  const activeValue = selectedPreset ? selectedPreset.value : FIB_EXPR_PRESETS[0].value
+  const activePreset = selectedPreset || FIB_EXPR_PRESETS[0]
+  const [showTechnical, setShowTechnical] = React.useState(false)
+
+  return (
+    <div className='space-y-2 rounded-md border bg-background p-2.5'>
+      <div className='space-y-0.5'>
+        <div className='text-xs font-semibold text-foreground'>Route lookup check</div>
+        <div className='text-[10px] leading-4 text-muted-foreground'>
+          Usually leave empty. This only checks the Linux routing table; it does not create or change routes.
+        </div>
+      </div>
+
+      <div className='grid gap-1.5'>
+        {FIB_EXPR_PRESETS.map((preset) => (
+          <label
+            key={preset.value}
+            className={cn(
+              'flex cursor-pointer gap-2 rounded-md border px-2 py-1.5 transition-colors',
+              activeValue === preset.value ? 'border-primary bg-primary/5' : 'border-border bg-muted/20 hover:bg-muted/40',
+            )}
+          >
+            <input
+              type='radio'
+              className='mt-0.5 h-3.5 w-3.5'
+              checked={activeValue === preset.value}
+              onChange={() => {
+                setShowTechnical(false)
+                props.onChange(preset.value)
+              }}
+            />
+            <span className='min-w-0 space-y-0.5'>
+              <span className='block text-xs font-semibold text-foreground'>{preset.label}</span>
+              <span className='block text-[10px] leading-4 text-muted-foreground'>{preset.short}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+
+      <div className='rounded-md border border-dashed bg-muted/20 px-2 py-1.5'>
+        <div className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>What this selected check does</div>
+        <div className='text-[10px] leading-4 text-muted-foreground'>
+          {activePreset.hint}
+        </div>
+      </div>
+
+      <button
+        type='button'
+        className='text-[10px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline'
+        onClick={() => setShowTechnical((open) => !open)}
+      >
+        {showTechnical ? 'Hide nft expression' : 'Show nft expression'}
+      </button>
+      {showTechnical ? (
+        <div className='rounded bg-muted/30 px-2 py-1 text-[10px] text-muted-foreground'>
+          <span className='font-mono text-foreground'>{activeValue}</span>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function PacketLengthInput(props: {
   value?: string | null
   onChange: (value: string | null) => void
@@ -314,7 +429,7 @@ function PacketLengthInput(props: {
   )
 }
 
-function PacketPriorityInput(props: {
+function RouteNextHopInput(props: {
   value?: string | null
   onChange: (value: string | null) => void
 }) {
@@ -322,13 +437,60 @@ function PacketPriorityInput(props: {
     <div className='space-y-1'>
       <Input
         className='h-7'
-        placeholder='1:10 / 0x10 / 10'
+        placeholder='192.0.2.1'
         value={props.value || ''}
         onChange={(e) => props.onChange(e.target.value || null)}
       />
-      <div className='text-[9px] leading-3 text-muted-foreground'>
-        Sets Linux packet priority for tc/QoS. This is not firewall rule order.
+      <div className='text-[10px] leading-4 text-muted-foreground'>
+        Matches packets whose selected Linux route uses this next-hop. Does not create routes.
       </div>
+    </div>
+  )
+}
+
+function Ipv6ExtensionHeaderInput(props: {
+  value?: string | null
+  onChange: (value: string | null) => void
+}) {
+  const parts = (props.value || 'frag missing').trim().split(/\s+/)
+  const header = IPV6_EXTENSION_HEADER_OPTIONS.some((option) => option.value === parts[0]) ? parts[0] : 'frag'
+  const condition = parts[1] === 'missing' ? 'missing' : 'exists'
+  const explanation = header === 'frag' && condition === 'missing'
+    ? 'Matches non-fragmented IPv6 packets.'
+    : `Matches IPv6 packets where the selected header ${condition === 'missing' ? 'is absent' : 'is present'}.`
+
+  const update = (nextHeader: string, nextCondition: string) => {
+    props.onChange(`${nextHeader} ${nextCondition}`)
+  }
+
+  return (
+    <div className='space-y-1.5'>
+      <div className='grid grid-cols-2 gap-2'>
+        <label className='space-y-1'>
+          <span className='text-[10px] font-semibold text-muted-foreground'>Header</span>
+          <select
+            className='h-7 w-full rounded-md border bg-background px-2 text-xs'
+            value={header}
+            onChange={(event) => update(event.target.value, condition)}
+          >
+            {IPV6_EXTENSION_HEADER_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className='space-y-1'>
+          <span className='text-[10px] font-semibold text-muted-foreground'>Condition</span>
+          <select
+            className='h-7 w-full rounded-md border bg-background px-2 text-xs'
+            value={condition}
+            onChange={(event) => update(header, event.target.value)}
+          >
+            <option value='exists'>is present</option>
+            <option value='missing'>is missing</option>
+          </select>
+        </label>
+      </div>
+      <div className='text-[10px] leading-4 text-muted-foreground'>{explanation}</div>
     </div>
   )
 }
@@ -372,6 +534,25 @@ function CtStatusPicker(props: {
       </select>
       <div className='text-[9px] leading-3 text-muted-foreground'>
         Choose one conntrack status flag. Backend/API can still accept comma-separated flags.
+      </div>
+    </div>
+  )
+}
+
+function CtLabelInput(props: {
+  value?: string | null
+  onChange: (value: string | null) => void
+}) {
+  return (
+    <div className='space-y-1'>
+      <Input
+        className='h-7'
+        placeholder='0x1 or label_name'
+        value={props.value || ''}
+        onChange={(e) => props.onChange(e.target.value || null)}
+      />
+      <div className='text-[9px] leading-3 text-muted-foreground'>
+        Matches existing conntrack label. Names depend on server connlabel config; hex mask is always explicit.
       </div>
     </div>
   )
@@ -684,12 +865,7 @@ export function PolicyRuleEditorAdvancedTab(props: Props) {
                           onChange={(value) => props.setForm((p) => ({ ...p, meta_length: value }))}
                         />
                       </ToggleLine>
-                      <ToggleLine label='set packet priority (QoS)' enabled={!!props.form.meta_priority} inactiveHint='1:10 / 0x10 / 10' onToggle={() => props.setForm((p) => ({ ...p, meta_priority: p.meta_priority ? null : '1:10' }))}>
-                        <PacketPriorityInput
-                          value={props.form.meta_priority || null}
-                          onChange={(value) => props.setForm((p) => ({ ...p, meta_priority: value }))}
-                        />
-                      </ToggleLine>
+                      <div />
                     </div>
                     <div className='grid grid-cols-2 gap-2'>
                       <ToggleLine label='meta pkttype' enabled={!!props.form.meta_pkttype} inactiveHint='host / broadcast / multicast / other' onToggle={() => props.setForm((p) => ({ ...p, meta_pkttype: p.meta_pkttype ? null : 'host' }))}>
@@ -824,132 +1000,67 @@ export function PolicyRuleEditorAdvancedTab(props: Props) {
                     </div>
                     <div className='grid grid-cols-2 gap-2'>
                       <ToggleLine label='ct label' enabled={!!props.form.ct_label} inactiveHint='label_name / 0x1' onToggle={() => props.setForm((p) => ({ ...p, ct_label: p.ct_label ? null : '0x1' }))}>
-                        <Input className='h-7' placeholder='label_name / 0x1' value={props.form.ct_label || ''} onChange={(e) => props.setForm((p) => ({ ...p, ct_label: e.target.value || null }))} />
-                      </ToggleLine>
-                      <ToggleLine label='ct event' enabled={!!props.form.ct_event} inactiveHint='new,related,destroy' onToggle={() => props.setForm((p) => ({ ...p, ct_event: p.ct_event ? null : 'new,related,destroy' }))}>
-                        <Input className='h-7' placeholder='new,related,destroy' value={props.form.ct_event || ''} onChange={(e) => props.setForm((p) => ({ ...p, ct_event: e.target.value || null }))} />
+                        <CtLabelInput
+                          value={props.form.ct_label || null}
+                          onChange={(value) => props.setForm((p) => ({ ...p, ct_label: value }))}
+                        />
                       </ToggleLine>
                     </div>
                     </> : null}
                   </div>
 
                   <div className='rounded-md border p-2.5 space-y-2'>
-                    <button type='button' className='w-full text-left text-[11px] font-semibold text-muted-foreground' onClick={() => props.setAdvOpen((p) => ({ ...p, fib: !p.fib }))}>FIB / socket / routing / L2 {props.advOpen.fib ? '−' : '+'}</button>
+                    <button type='button' className='w-full text-left text-[11px] font-semibold text-muted-foreground' onClick={() => props.setAdvOpen((p) => ({ ...p, fib: !p.fib }))}>FIB / socket / routing {props.advOpen.fib ? '−' : '+'}</button>
                     {props.advOpen.fib ? <>
-                    <div className='grid grid-cols-2 gap-2'>
-                      <ToggleLine label='fib expression' enabled={!!props.form.fib_expr} inactiveHint='fib daddr . iif oif exists' onToggle={() => props.setForm((p) => ({ ...p, fib_expr: p.fib_expr ? null : 'fib daddr . iif oif exists' }))}>
-                        <Input className='h-7' placeholder='fib daddr . iif oif exists' value={props.form.fib_expr || ''} onChange={(e) => props.setForm((p) => ({ ...p, fib_expr: e.target.value || null }))} />
-                      </ToggleLine>
-                      <ToggleLine label='socket expression' enabled={!!props.form.socket_expr} inactiveHint='socket transparent 1' onToggle={() => props.setForm((p) => ({ ...p, socket_expr: p.socket_expr ? null : 'socket transparent 1' }))}>
-                        <Input className='h-7' placeholder='socket transparent 1' value={props.form.socket_expr || ''} onChange={(e) => props.setForm((p) => ({ ...p, socket_expr: e.target.value || null }))} />
-                      </ToggleLine>
-                    </div>
-                    <div className='grid grid-cols-2 gap-2'>
-                      <ToggleLine label='rt expression' enabled={!!props.form.rt_expr} inactiveHint='rt nexthop 192.168.0.1' onToggle={() => props.setForm((p) => ({ ...p, rt_expr: p.rt_expr ? null : 'rt nexthop 192.168.0.1' }))}>
-                        <Input className='h-7' placeholder='rt nexthop 192.168.0.1' value={props.form.rt_expr || ''} onChange={(e) => props.setForm((p) => ({ ...p, rt_expr: e.target.value || null }))} />
-                      </ToggleLine>
-                      <ToggleLine label='exthdr expression' enabled={!!props.form.exthdr_expr} inactiveHint='exthdr frag missing' onToggle={() => props.setForm((p) => ({ ...p, exthdr_expr: p.exthdr_expr ? null : 'exthdr frag missing' }))}>
-                        <Input className='h-7' placeholder='exthdr frag missing' value={props.form.exthdr_expr || ''} onChange={(e) => props.setForm((p) => ({ ...p, exthdr_expr: e.target.value || null }))} />
+                    <div className='grid grid-cols-1 gap-2'>
+                      <ToggleLine label='Route lookup checks (expert)' enabled={!!props.form.fib_expr} inactiveHint='Usually leave empty. Checks Linux routing table.' onToggle={() => props.setForm((p) => ({ ...p, fib_expr: p.fib_expr ? null : 'fib saddr . iif oif missing' }))}>
+                        <FibRouteLookupInput
+                          value={props.form.fib_expr || null}
+                          onChange={(value) => props.setForm((p) => ({ ...p, fib_expr: value }))}
+                        />
                       </ToggleLine>
                     </div>
                     <div className='grid grid-cols-2 gap-2'>
-                      <ToggleLine label='fib check' enabled={!!props.form.fib_check} inactiveHint='daddr type local' onToggle={() => props.setForm((p) => ({ ...p, fib_check: p.fib_check ? null : 'daddr type local' }))}>
-                        <Input className='h-7' placeholder='daddr type local' value={props.form.fib_check || ''} onChange={(e) => props.setForm((p) => ({ ...p, fib_check: e.target.value || null }))} />
-                      </ToggleLine>
-                      <ToggleLine label='socket match' enabled={!!props.form.socket_match} inactiveHint='transparent 1' onToggle={() => props.setForm((p) => ({ ...p, socket_match: p.socket_match ? null : 'transparent 1' }))}>
-                        <Input className='h-7' placeholder='transparent 1' value={props.form.socket_match || ''} onChange={(e) => props.setForm((p) => ({ ...p, socket_match: e.target.value || null }))} />
+                      <ToggleLine label='IPv6 extension header' enabled={!!props.form.ipv6_exthdrs} inactiveHint='Usually leave empty. Checks whether an IPv6 extension header is present or missing.' onToggle={() => props.setForm((p) => ({ ...p, ipv6_exthdrs: p.ipv6_exthdrs ? null : 'frag missing' }))}>
+                        <Ipv6ExtensionHeaderInput
+                          value={props.form.ipv6_exthdrs || null}
+                          onChange={(value) => props.setForm((p) => ({ ...p, ipv6_exthdrs: value }))}
+                        />
                       </ToggleLine>
                     </div>
                     <div className='grid grid-cols-2 gap-2'>
-                      <ToggleLine label='rt nexthop' enabled={!!props.form.rt_nexthop} inactiveHint='192.0.2.1' onToggle={() => props.setForm((p) => ({ ...p, rt_nexthop: p.rt_nexthop ? null : '192.0.2.1' }))}>
-                        <Input className='h-7' placeholder='192.0.2.1' value={props.form.rt_nexthop || ''} onChange={(e) => props.setForm((p) => ({ ...p, rt_nexthop: e.target.value || null }))} />
+                      <ToggleLine label='Route next hop' enabled={!!props.form.rt_nexthop} inactiveHint='192.0.2.1' onToggle={() => props.setForm((p) => ({ ...p, rt_nexthop: p.rt_nexthop ? null : '192.0.2.1' }))}>
+                        <RouteNextHopInput
+                          value={props.form.rt_nexthop || null}
+                          onChange={(value) => props.setForm((p) => ({ ...p, rt_nexthop: value }))}
+                        />
                       </ToggleLine>
+                    </div>
+                    </> : null}
+                  </div>
+
+                  <div className='rounded-md border p-2.5 space-y-2'>
+                    <button type='button' className='w-full text-left text-[11px] font-semibold text-muted-foreground' onClick={() => props.setAdvOpen((p) => ({ ...p, l2: !p.l2 }))}>Ethernet / VLAN (L2) {props.advOpen.l2 ? '−' : '+'}</button>
+                    {props.advOpen.l2 ? <>
+                    <div className='grid grid-cols-2 gap-2'>
                       <ToggleLine label='vlan id' enabled={!!props.form.vlan_id} inactiveHint='10' onToggle={() => props.setForm((p) => ({ ...p, vlan_id: p.vlan_id ? null : '10' }))}>
                         <Input className='h-7' placeholder='10' value={props.form.vlan_id || ''} onChange={(e) => props.setForm((p) => ({ ...p, vlan_id: e.target.value || null }))} />
                       </ToggleLine>
-                    </div>
-                    <div className='grid grid-cols-2 gap-2'>
                       <ToggleLine label='ether src' enabled={!!props.form.ether_src} inactiveHint='aa:bb:cc:dd:ee:ff' onToggle={() => props.setForm((p) => ({ ...p, ether_src: p.ether_src ? null : 'aa:bb:cc:dd:ee:ff' }))}>
                         <Input className='h-7' placeholder='aa:bb:cc:dd:ee:ff' value={props.form.ether_src || ''} onChange={(e) => props.setForm((p) => ({ ...p, ether_src: e.target.value || null }))} />
                       </ToggleLine>
+                    </div>
+                    <div className='grid grid-cols-2 gap-2'>
                       <ToggleLine label='ether dst' enabled={!!props.form.ether_dst} inactiveHint='aa:bb:cc:dd:ee:ff' onToggle={() => props.setForm((p) => ({ ...p, ether_dst: p.ether_dst ? null : 'aa:bb:cc:dd:ee:ff' }))}>
                         <Input className='h-7' placeholder='aa:bb:cc:dd:ee:ff' value={props.form.ether_dst || ''} onChange={(e) => props.setForm((p) => ({ ...p, ether_dst: e.target.value || null }))} />
                       </ToggleLine>
-                    </div>
-                    <div className='grid grid-cols-2 gap-2'>
                       <ToggleLine label='ether type' enabled={!!props.form.ether_type} inactiveHint='0x0800' onToggle={() => props.setForm((p) => ({ ...p, ether_type: p.ether_type ? null : '0x0800' }))}>
                         <Input className='h-7' placeholder='0x0800' value={props.form.ether_type || ''} onChange={(e) => props.setForm((p) => ({ ...p, ether_type: e.target.value || null }))} />
                       </ToggleLine>
-                      <ToggleLine label='ipv6 extension headers' enabled={!!props.form.ipv6_exthdrs} inactiveHint='frag missing' onToggle={() => props.setForm((p) => ({ ...p, ipv6_exthdrs: p.ipv6_exthdrs ? null : 'frag missing' }))}>
-                        <Input className='h-7' placeholder='frag missing' value={props.form.ipv6_exthdrs || ''} onChange={(e) => props.setForm((p) => ({ ...p, ipv6_exthdrs: e.target.value || null }))} />
-                      </ToggleLine>
                     </div>
                     </> : null}
                   </div>
 
-                  <div className='rounded-md border p-2.5 space-y-2'>
-                    <button type='button' className='w-full text-left text-[11px] font-semibold text-muted-foreground' onClick={() => props.setAdvOpen((p) => ({ ...p, raw: !p.raw }))}>Raw expression & debug {props.advOpen.raw ? '−' : '+'}</button>
-                    {props.advOpen.raw ? <>
-                    {props.hasSupport('raw_expr') ? (
-                      <ToggleLine
-                        label='raw expression'
-                        enabled={!!props.form.raw_expr}
-                        inactiveHint='meta length > 80 / ip protocol tcp'
-                        onToggle={() => props.setForm((p) => ({ ...p, raw_expr: p.raw_expr ? null : 'meta length > 80' }))}
-                      >
-                        <Input
-                          className='h-7'
-                          placeholder='meta length > 80 / ip protocol tcp'
-                          value={props.form.raw_expr || ''}
-                          onChange={(e) => props.setForm((p) => ({ ...p, raw_expr: e.target.value || null }))}
-                        />
-                      </ToggleLine>
-                    ) : (
-                      <ToggleLine label='raw expression' enabled={false} inactiveHint='available in raw table only' onToggle={() => {}}>
-                        <Input className='h-7' disabled placeholder='available in raw table only' />
-                      </ToggleLine>
-                    )}
-                    <div className='grid grid-cols-2 gap-2'>
-                      {props.hasSupport('nftrace') ? (
-                        <label className='flex items-center gap-2 rounded-md border p-2 text-xs'>
-                          <input
-                            type='checkbox'
-                            className='h-4 w-4'
-                            checked={!!props.form.nftrace}
-                            onChange={(e) => props.setForm((p) => ({ ...p, nftrace: e.target.checked }))}
-                          />
-                          nftrace
-                        </label>
-                      ) : (
-                        <label className='flex items-center gap-2 rounded-md border p-2 text-xs text-muted-foreground'>
-                          <input type='checkbox' disabled className='h-4 w-4' />
-                          nftrace (raw table only)
-                        </label>
-                      )}
-                      {props.hasSupport('notrack') ? (
-                        <label className='flex items-center gap-2 rounded-md border p-2 text-xs'>
-                          <input
-                            type='checkbox'
-                            className='h-4 w-4'
-                            checked={!!props.form.notrack}
-                            onChange={(e) => props.setForm((p) => ({ ...p, notrack: e.target.checked }))}
-                          />
-                          notrack (advanced mode)
-                        </label>
-                      ) : (
-                        <label className='flex items-center gap-2 rounded-md border p-2 text-xs text-muted-foreground'>
-                          <input type='checkbox' disabled className='h-4 w-4' />
-                          notrack (raw table only)
-                        </label>
-                      )}
-                    </div>
-                    <div className='rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-900'>Warning: `notrack` is usually meaningful only in raw prerouting/output contexts.</div>
-                    </> : null}
-                  </div>
-
-                  <div className='rounded-md border border-dashed px-3 py-2 text-[11px] text-muted-foreground'>
-                    Advanced fields are now grouped by purpose; backend enablement will be added block-by-block.
-                  </div>
                 </TabsContent>
   )
 }

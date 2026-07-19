@@ -1,4 +1,5 @@
-import { expect, test, type APIRequestContext } from '@playwright/test'
+import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
+import { login } from './helpers'
 
 function authHeaders() {
   const apiKey = process.env.PLAYWRIGHT_API_KEY || ''
@@ -25,6 +26,17 @@ async function deleteRule(request: APIRequestContext, id: string) {
 function getRuleLineByComment(ruleset: string, comment: string): string {
   const lines = String(ruleset || '').split('\n')
   return lines.find((line) => line.includes(`comment "${comment}"`)) || ''
+}
+
+async function openFirewall(page: Page) {
+  await page.getByRole('button', { name: 'Firewall' }).click()
+  await expect(page.getByRole('heading', { name: 'Firewall' })).toBeVisible()
+}
+
+async function enableL2Field(modal: Locator, label: string, value: string) {
+  const field = modal.locator('div.space-y-1\\.5', { hasText: label }).first()
+  await field.getByRole('button', { name: '+' }).click()
+  await field.locator('input').fill(value)
 }
 
 test('block B8: l2 fields map to runtime', async ({ request }) => {
@@ -77,4 +89,46 @@ test('block B8: invalid l2 values are rejected', async ({ request }) => {
   expect(badMac.ok()).toBeFalsy()
   expect([400, 422]).toContain(badMac.status())
   expect(await badMac.text()).toContain('ether_src')
+})
+
+test('block B8: l2 fields can be saved from Add Rule UI', async ({ page, request }) => {
+  const comment = `block-b8-ui-${Date.now()}`
+  let ruleId = ''
+
+  await login(page)
+  await openFirewall(page)
+
+  try {
+    await page.getByRole('button', { name: 'Add' }).first().click({ force: true })
+    const modal = page.locator('div.fixed.inset-0.z-40').last()
+    await expect(modal.getByText('Add Firewall Rule')).toBeVisible()
+    await modal.getByPlaceholder('Rule comment (optional)').fill(comment)
+    await modal.getByRole('tab', { name: 'Advanced match' }).click()
+    await modal.getByRole('button', { name: 'Ethernet / VLAN (L2) +' }).click()
+
+    await enableL2Field(modal, 'vlan id', '10')
+    await enableL2Field(modal, 'ether src', 'aa:bb:cc:dd:ee:ff')
+    await enableL2Field(modal, 'ether dst', '11:22:33:44:55:66')
+    await enableL2Field(modal, 'ether type', '0x0800')
+
+    await modal.getByRole('button', { name: 'Add' }).click({ force: true })
+    await expect(modal).toBeHidden({ timeout: 30_000 })
+
+    const state = await getFirewallState(request)
+    const created = (state?.item?.rules || []).find((rule: any) => rule.comment === comment)
+    expect(created).toBeTruthy()
+    expect(created.vlan_id).toBe('10')
+    expect(created.ether_src).toBe('aa:bb:cc:dd:ee:ff')
+    expect(created.ether_dst).toBe('11:22:33:44:55:66')
+    expect(created.ether_type).toBe('0x0800')
+
+    const line = getRuleLineByComment(state?.item?.ruleset || '', comment)
+    expect(line).toContain('vlan id 10')
+    expect(line).toContain('ether saddr aa:bb:cc:dd:ee:ff')
+    expect(line).toContain('ether daddr 11:22:33:44:55:66')
+    expect(line).toContain('vlan type ip')
+    ruleId = String(created.id)
+  } finally {
+    if (ruleId) await deleteRule(request, ruleId)
+  }
 })

@@ -243,9 +243,9 @@ export function usePolicyRuleEditorActions(params: Params) {
   const onSave = React.useCallback(async (event: React.FormEvent) => {
     event.preventDefault()
     params.setError(null)
+    const payload = buildSavePayload(params.form)
     params.setIsBusy(true)
     try {
-      const payload = buildSavePayload(params.form)
       if (params.editingRuleId) await updateFirewallRule(params.auth, params.editingRuleId, payload)
       else await createFirewallRule(params.auth, payload)
       params.setForm(params.defaultRule)
