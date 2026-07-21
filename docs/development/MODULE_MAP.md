@@ -17,6 +17,7 @@ This document tracks module ownership during the modular refactor and explains w
 
 - `handle_get/handle_post/handle_put/handle_delete`: route dispatch for HTTP methods.
 - `_handle_client_qr_path`: parses `/clients/<id>/qr` path shape.
+- NTP dispatch delegates `/ntp/*` requests to `backend.domains.ntp.service`.
 
 ### `backend/app/manager_facade.py`
 
@@ -310,6 +311,20 @@ This document tracks module ownership during the modular refactor and explains w
   - proposal/secret wiring: `_build_phase1_proposal_string`, `_build_phase2_proposal_string`, `_secret_encrypt`, `_secret_decrypt`
   - public service wrappers: `list_*`, `upsert_*`, `delete_*`, `list_events_service`, `list_active_peers_service`, `list_installed_sas_service`, `get_config_preview_service`, `load_peer_service`, `initiate_policy_service`, `terminate_peer_service`, `apply_config_service`
 
+### `backend/domains/ntp`
+
+- `service.py`: HTTP-neutral orchestration for desired Chrony configuration, read-only preview, pending-apply detection, and explicit apply.
+  - `get_config`, `get_config_with_apply_state`, `save_config`, `get_config_preview`, `apply_config`, `handle_get`, `handle_put`, `handle_post`
+- `validation_ops.py`: schema defaults, payload normalization, range checks, network parsing, authentication key reference checks, and line-injection protection.
+  - desired configuration contains `time`, `sources`, `server`, `access`, and `keys`; schema version is `1`; `time.rtcsync` controls the generated Chrony `rtcsync` directive
+- `store.py`: atomic JSON persistence in `${AWG_MANAGER_DATA_DIR}/ntp_config.json`.
+- `config_renderer.py`: deterministic read-only `chrony.conf` rendering from normalized desired state plus `chrony.keys` rendering for enabled authentication keys, including the default `makestep 1.0 3` directive when NTP client mode is enabled and an always-on `clientloglimit` directive for Chrony client statistics.
+- `runtime_ops.py`: validates generated config with `chronyd -p`, compares desired config and keyfile with the installed `/etc/chrony/chrony.conf` and `/etc/chrony/chrony.keys`, backs up and atomically replaces both files, masks competing time synchronizers, enables/restarts Chrony, lists host timezones through `timedatectl list-timezones`, and restores the previous config/keyfile when activation fails.
+  - owns privileged fixed-argv actions for timezone, manual time, `chronyc makestep`, restart, and reload-or-restart
+  - manual time temporarily stops Chrony, applies `timedatectl set-time`, restarts Chrony, verifies active state, and converts command failures to operator-facing errors
+- `status_ops.py`: collects `systemctl` service state, host epoch time through `date +%s`, `timedatectl show` system clock state, and parses `chronyc -n -c` tracking, activity, sources, and source statistics into a structured read-only snapshot with partial-error reporting.
+- The domain never manages firewall rules.
+
 ### `awg_core.py` (removed)
 
 - `awg_core.py` has been removed.
@@ -387,6 +402,19 @@ This document tracks module ownership during the modular refactor and explains w
 - IPsec API contract client:
   - CRUD: `getIpsecPeers`, `upsertIpsecPeer`, `deleteIpsecPeer`, `getIpsecPolicies`, `upsertIpsecPolicy`, `deleteIpsecPolicy`, `deleteIpsecIdentity`, `deleteIpsecPhase1Profile`, `deleteIpsecPhase2Proposal`
   - runtime/actions: `applyIpsec`, `getIpsecActivePeers`, `getIpsecInstalledSas`, `getIpsecConfigPreview`, `initiateIpsecPolicy`, `terminateIpsecPeer`
+
+### `webui/src/frontend/domains/ntp/api.ts`
+
+- Typed NTP/Chrony API contract client:
+  - desired state: `getNtpConfig`, `putNtpConfig`
+  - runtime/read-only support: `applyNtpConfig`, `getNtpStatus`, `getNtpTimezones`, `setNtpTimezone`, `setNtpManualTime`, `syncNtpNow`, `restartNtp`, `reloadNtp`
+
+### `webui/src/pages/ntp.tsx`
+
+- Owns the accepted Time/Sources/Access/Status UI and maps form state to NTP schema version `1`.
+- Loads desired configuration and runtime status in parallel, prevents editing before hydration, uses one real Apply operation, and refreshes live Chrony status while the Status tab is open.
+- Loads the host timezone catalog for the Time tab selector and recalculates the displayed host-backed time immediately when the selected timezone changes.
+- Owns privileged action orchestration for system timezone, manual time, sync-now, restart and reload-or-restart while keeping them visually separate from config Apply.
 
 ## Frontend: Firewall UI Ownership
 

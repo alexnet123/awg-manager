@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Download, KeyRound, LockKeyhole, LogOut, Moon, Network, RefreshCcw, Shield, Sun, Upload, Users } from 'lucide-react'
+import { Clock3, Download, KeyRound, LockKeyhole, LogOut, Moon, Network, RefreshCcw, Shield, Sun, Upload, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -20,6 +20,7 @@ import { InterfacesPage } from '@/pages/interfaces'
 import { ClientsPage } from '@/pages/clients'
 import { FirewallPage } from '@/pages/firewall'
 import { IpsecPage } from '@/pages/ipsec'
+import { NtpPage } from '@/pages/ntp'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { downloadBackup, restoreBackup } from '@/pages/api'
 
@@ -27,7 +28,7 @@ type AuthState = {
   apiKey: string
 }
 
-type RouteKey = 'interfaces' | 'clients' | 'firewall' | 'ipsec'
+type RouteKey = 'interfaces' | 'clients' | 'firewall' | 'ipsec' | 'ntp'
 
 const AUTH_STORAGE_KEY = 'awg_manager_auth_v1'
 
@@ -222,6 +223,16 @@ function DashboardView(props: { auth: AuthState; onLogout: () => void }) {
                 <span>IPsec</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                isActive={route === 'ntp'}
+                onClick={() => setRoute('ntp')}
+                className='group-data-[collapsible=icon]:mx-auto group-data-[collapsible=icon]:h-9 group-data-[collapsible=icon]:w-9 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0'
+              >
+                <Clock3 className='size-4 shrink-0 group-data-[collapsible=icon]:mx-auto' />
+                <span>NTP</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
           </SidebarMenu>
         </SidebarContent>
         <SidebarFooter>
@@ -347,6 +358,7 @@ function DashboardView(props: { auth: AuthState; onLogout: () => void }) {
             {route === 'clients' ? <ClientsPage auth={props.auth} refreshNonce={refreshNonce} /> : null}
             {route === 'firewall' ? <FirewallPage auth={props.auth} refreshNonce={refreshNonce} /> : null}
             {route === 'ipsec' ? <IpsecPage auth={props.auth} refreshNonce={refreshNonce} /> : null}
+            {route === 'ntp' ? <NtpPage auth={props.auth} refreshNonce={refreshNonce} /> : null}
           </main>
         </div>
       </SidebarInset>

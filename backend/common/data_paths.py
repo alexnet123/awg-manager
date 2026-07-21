@@ -30,6 +30,6 @@ def build_state_paths(base_dir):
         'ipsec_phase2_proposals_file': os.path.join(bd_path, 'ipsec_phase2_proposals.json'),
         'ipsec_policies_file': os.path.join(bd_path, 'ipsec_policies.json'),
         'ipsec_events_file': os.path.join(bd_path, 'ipsec_events.json'),
+        'ntp_config_file': os.path.join(bd_path, 'ntp_config.json'),
         'db_file': os.path.join(bd_path, 'clients.db'),
     }
-

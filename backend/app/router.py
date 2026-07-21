@@ -3,6 +3,7 @@ from backend.common.http_errors import send_service_error
 from backend.domains.firewall import service as firewall_service
 from backend.domains.awg import service as ic_service
 from backend.domains.ipsec import service as ipsec_service
+from backend.domains.ntp import service as ntp_service
 
 
 def _handle_client_qr_path(path_parts):
@@ -50,6 +51,12 @@ def handle_get(path_parts, query_params, send_json, send_bytes):
         ipsec_response = ipsec_service.handle_get(path_parts)
         if ipsec_response is not None:
             status, payload = ipsec_response
+            send_json(status, payload)
+            return True
+
+        ntp_response = ntp_service.handle_get(path_parts)
+        if ntp_response is not None:
+            status, payload = ntp_response
             send_json(status, payload)
             return True
 
@@ -138,6 +145,12 @@ def handle_post(path_parts, payload, send_json, _send_bytes):
             send_json(status, body)
             return True
 
+        ntp_response = ntp_service.handle_post(path_parts, payload)
+        if ntp_response is not None:
+            status, body = ntp_response
+            send_json(status, body)
+            return True
+
         if path_parts == ['backup', 'restore']:
             ic_service.restore_backup((payload or {}).get('db_base64'))
             send_json(200, {'ok': True})
@@ -168,6 +181,12 @@ def handle_put(path_parts, payload, send_json, _send_bytes):
         ipsec_response = ipsec_service.handle_put(path_parts, payload)
         if ipsec_response is not None:
             status, body = ipsec_response
+            send_json(status, body)
+            return True
+
+        ntp_response = ntp_service.handle_put(path_parts, payload)
+        if ntp_response is not None:
+            status, body = ntp_response
             send_json(status, body)
             return True
     except Exception as exc:  # pragma: no cover - exercised via contract tests
@@ -203,4 +222,3 @@ def handle_delete(path_parts, send_json, _send_bytes):
         return True
 
     return False
-

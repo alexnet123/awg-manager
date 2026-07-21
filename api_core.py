@@ -2,6 +2,7 @@
 import json
 import mimetypes
 import os
+import shutil
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -42,16 +43,29 @@ class AWGManagerAPIHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(response)
 
-    def _send_bytes(self, status_code, payload, content_type, filename=None, as_attachment=False):
+    def _send_bytes(self, status_code, payload, content_type, filename=None, as_attachment=False, extra_headers=None):
         self.send_response(status_code)
         self._send_security_headers()
         self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(payload)))
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
         if filename is not None:
             disposition = 'attachment' if as_attachment else 'inline'
             self.send_header('Content-Disposition', f'{disposition}; filename="{filename}"')
         self.end_headers()
         self.wfile.write(payload)
+
+    def _send_file(self, status_code, full_path, content_type, extra_headers=None):
+        self.send_response(status_code)
+        self._send_security_headers()
+        self.send_header('Content-Type', content_type)
+        self.send_header('Content-Length', str(os.path.getsize(full_path)))
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
+        self.end_headers()
+        with open(full_path, 'rb') as static_file:
+            shutil.copyfileobj(static_file, self.wfile, length=256 * 1024)
 
     def _send_redirect(self, location):
         self.send_response(302)
@@ -84,10 +98,19 @@ class AWGManagerAPIHandler(BaseHTTPRequestHandler):
             return False
         if not os.path.isfile(full_path):
             return False
-        with open(full_path, 'rb') as static_file:
-            payload = static_file.read()
         content_type = mimetypes.guess_type(full_path)[0] or 'application/octet-stream'
-        self._send_bytes(200, payload, content_type)
+        headers = {}
+        served_path = full_path
+        if normalized_path == 'index.html':
+            headers['Cache-Control'] = 'no-cache'
+        elif normalized_path.startswith('assets' + os.sep):
+            headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+            gzip_path = f'{full_path}.gz'
+            if 'gzip' in self.headers.get('Accept-Encoding', '') and os.path.isfile(gzip_path):
+                served_path = gzip_path
+                headers['Content-Encoding'] = 'gzip'
+                headers['Vary'] = 'Accept-Encoding'
+        self._send_file(200, served_path, content_type, headers)
         return True
 
     def _require_auth(self):

@@ -6443,3 +6443,670 @@
   - Stand Playwright API/UI smoke: `PLAYWRIGHT_BASE_URL=http://132.243.237.120:8787/ui/ PLAYWRIGHT_API_KEY=... npx playwright test tests/firewall-add-rule-block-b.spec.ts --project=chromium` — 5 passed.
 - Result summary:
   - Users can no longer choose all TCP flags at once from the normal UI. The field now guides them to one meaningful TCP flag preset while preserving backend/API compatibility.
+
+## 1.320) NTP/Chrony: desired configuration storage and preview API
+
+- Step scope:
+  - Added the first backend slice for NTP/Chrony: schema defaults, strict normalization, atomic JSON persistence and deterministic `chrony.conf` preview.
+  - Added authenticated `GET /ntp`, `PUT /ntp` and `GET /ntp/config-preview` endpoints.
+  - Explicitly kept runtime effects out of scope: no writes to `/etc/chrony/chrony.conf`, no Chrony restart/reload, no `chronyc`, no system time/timezone changes and no firewall management.
+- Ownership moved:
+  - New `backend/domains/ntp` owns desired NTP configuration validation, JSON storage and config rendering.
+  - `backend/common/data_paths.py` owns the canonical `${AWG_MANAGER_DATA_DIR}/ntp_config.json` path.
+- Old entrypoint now delegates to:
+  - `backend/app/router.py` delegates NTP HTTP requests directly to `backend.domains.ntp.service`; no legacy facade path was added.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_ntp_service.py tests/test_api_contract.py -k ntp` — 5 passed, 9 deselected.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 10 passed.
+  - `python3 -m pytest -q tests` — 346 passed.
+  - Development stand `89.125.103.24:8787`: `GET /ntp` and `GET /ntp/config-preview` returned HTTP 200; invalid `PUT /ntp` returned HTTP 400 and did not create `/etc/wg-manager/ntp_config.json`.
+- Result summary:
+  - AWG Manager can now safely store and inspect a validated desired Chrony configuration without changing the host runtime. Invalid payloads return HTTP 400 and do not overwrite the last valid JSON file.
+
+## 1.321) NTP/Chrony: rollback-safe Apply and exclusive time service
+
+- Step scope:
+  - Added explicit `POST /ntp/apply` runtime activation for the saved desired Chrony configuration.
+  - Generated configuration is validated with `chronyd -p` before replacing the live file.
+  - Apply stores `/etc/chrony/chrony.conf.awg-manager.bak`, atomically replaces `/etc/chrony/chrony.conf`, enables/restarts Chrony and restores the previous config if activation fails.
+  - Existing competing time synchronization units are stopped, disabled and masked; firewall is not touched.
+- Ownership moved:
+  - New `backend/domains/ntp/runtime_ops.py` owns Chrony syntax validation, atomic live-config replacement, competing-service shutdown and rollback.
+  - `backend/domains/ntp/service.py` owns preview-warning gating and the explicit apply orchestration.
+- Old entrypoint now delegates to:
+  - `backend/app/router.py` delegates `POST /ntp/apply` directly to `backend.domains.ntp.service.handle_post`; no manager facade or legacy path is used.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_ntp_runtime_ops.py tests/test_ntp_service.py` — 8 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 10 passed.
+  - `python3 -m pytest -q tests` — 350 passed.
+  - Development stand `89.125.103.24:8787`: installed Chrony 4.0, `PUT /ntp` and `POST /ntp/apply` returned HTTP 200, `chrony.service` is active/enabled, generated config passed activation, and `chronyc tracking` reported Stratum 3 with `Leap status: Normal`.
+- Result summary:
+  - The stand now uses Chrony as its only enabled time synchronization implementation. Apply is explicit, validated and rollback-safe; runtime status collection through the API remains a later slice.
+
+## 1.322) NTP/Chrony: structured runtime status API
+
+- Step scope:
+  - Added authenticated `GET /ntp/status` with structured Chrony service, tracking, activity, sources and source statistics data.
+  - Runtime collection uses numeric-address CSV output from `chronyc -n -c`, avoiding locale-dependent human-readable parsing.
+  - Partial `chronyc` failures are returned in `errors` while preserving available service state and successful sections.
+- Ownership moved:
+  - New `backend/domains/ntp/status_ops.py` owns `systemctl` service inspection and parsing of `chronyc tracking`, `activity`, `sources` and `sourcestats`.
+  - `backend/domains/ntp/service.py` exposes the read-only snapshot through the existing NTP route boundary.
+- Old entrypoint now delegates to:
+  - `backend/app/router.py` already delegates NTP GET requests to `backend.domains.ntp.service.handle_get`; no legacy path changed.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_ntp_status_ops.py tests/test_ntp_service.py` — 8 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 10 passed.
+  - `python3 -m pytest -q tests` — 353 passed.
+  - Development stand `89.125.103.24:8787`: `GET /ntp/status` returned HTTP 200 with active/enabled service state, Stratum 3 tracking, four online sources, parsed source statistics and an empty `errors` array.
+- Result summary:
+  - The backend now exposes the extended Chrony state needed by the existing Status UI without granting the frontend direct command access.
+
+## 1.323) NTP/Chrony UI: live desired state, Apply and Status
+
+- Step scope:
+  - Replaced the NTP design-preview data source with authenticated backend calls while preserving the accepted Time/Sources/Access/Status layout.
+  - Added one real Apply flow: validate/store desired JSON, activate Chrony, then refresh runtime status.
+  - Replaced mock Status rows with live service/tracking/source data and automatic refresh while the Status tab is visible.
+  - Added a loading boundary so late configuration hydration cannot overwrite operator input.
+- Ownership moved:
+  - New `webui/src/frontend/domains/ntp/api.ts` owns typed NTP HTTP contracts.
+  - `webui/src/pages/ntp.tsx` owns backend-to-form mapping, Apply orchestration and live status rendering.
+- Old entrypoint now delegates to:
+  - `webui/src/App.tsx` passes authenticated page context to `NtpPage`; global shell and routing remain unchanged.
+- Verification commands:
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only. Bundle: `assets/index-BtO3tHZ1.js`.
+  - Stand Playwright live flow: `npx playwright test tests/ntp-design.spec.ts -g 'loads live' --project=chromium --workers=1` — 1 passed; real Apply succeeded, Status reached `Normal`, and no console/page errors were captured.
+  - Earlier layout regression on the same live wiring — 2 passed before the final Last Rx sentinel display refinement.
+  - In-app Browser automation was attempted first but the selected tab stopped responding; repository Playwright was used as the documented fallback.
+- Result summary:
+  - The accepted NTP interface is now backed by real desired state and Chrony runtime data. Configuration editing no longer depends on hard-coded demo values.
+
+## 1.324) NTP/Chrony: system time and service actions
+
+- Step scope:
+  - Added privileged endpoints for system timezone, manual date/time, immediate Chrony synchronization, restart and reload-or-restart.
+  - Connected Time and Status controls to those endpoints without changing the accepted panel layout.
+  - Manual time is rejected while desired NTP synchronization is enabled; the UI applies an NTP-disabled configuration before sending a manual time value.
+  - All commands use fixed argv lists without shell interpolation; firewall remains out of scope.
+- Ownership moved:
+  - `backend/domains/ntp/runtime_ops.py` owns `timedatectl`, `chronyc makestep`, and Chrony service-control execution.
+  - `backend/domains/ntp/service.py` owns action routing and manual-time safety checks.
+  - `webui/src/frontend/domains/ntp/api.ts` and `webui/src/pages/ntp.tsx` own authenticated action calls and operator feedback.
+- Old entrypoint now delegates to:
+  - `backend/app/router.py` continues to delegate all NTP POST actions directly to `backend.domains.ntp.service.handle_post`; no facade/legacy path was introduced.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_ntp_runtime_ops.py tests/test_ntp_service.py` — 14 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 10 passed.
+  - `python3 -m pytest -q tests` — 358 passed.
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only. Bundle: `assets/index-BdXHCNqQ.js`.
+  - Stand Playwright live Apply/status flow — 1 passed with no console/page errors.
+  - Stand Playwright Time/Sources/Access layout and timezone UTC action flow — 1 passed.
+  - Stand API smoke: timezone UTC, sync, reload and restart returned HTTP 200; Chrony returned to Stratum 3 and `Leap status: Normal` after restart.
+- Result summary:
+  - The visible Time and Status actions are now operational. Chrony remains the sole time synchronizer and all runtime controls are exposed through authenticated backend endpoints.
+
+## 1.325) NTP/Chrony: manual time conflict handling
+
+- Step scope:
+  - Fixed manual system time setting when desired NTP client synchronization is disabled but `chrony.service` is still active.
+  - Manual time now temporarily stops Chrony before `timedatectl set-time`, then starts Chrony again and verifies active state.
+  - Raw `CalledProcessError` text no longer reaches the UI; failures are converted to concise operator-facing messages and include restart failure context when relevant.
+- Ownership moved:
+  - No ownership moved; the fix remains inside `backend/domains/ntp/runtime_ops.py`.
+- Old entrypoint now delegates to:
+  - API and UI contracts are unchanged; `POST /ntp/manual-time` continues through `backend.domains.ntp.service.handle_post`.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_ntp_runtime_ops.py tests/test_ntp_service.py` — 15 passed.
+  - `python3 -m pytest -q tests/test_api_contract.py` — 10 passed.
+  - `python3 -m pytest -q tests` — 359 passed.
+  - Stand API smoke with current time and desired `ntp_enabled=false` — HTTP 200; `chrony.service` returned to active.
+  - Stand UI smoke — `Set manually` displayed `System time changed to 2026-07-06 18:44:04.` and no raw command error.
+- Result summary:
+  - Manual time now works with Chrony as the installed synchronization implementation while preserving service availability after the operation.
+
+## 1.326) NTP/Chrony: real RTC/system clock status
+
+- Step scope:
+  - Replaced the hard-coded UI `RTC sync` value with runtime data collected from `timedatectl show`.
+  - Kept `Use local clock` as the Chrony server fallback/orphan-clock setting (`local stratum`); it is intentionally separate from RTC/system clock synchronization.
+- Ownership moved:
+  - `backend/domains/ntp/status_ops.py` now owns `timedatectl show` parsing in addition to `systemctl` and `chronyc -n -c` status collection.
+  - `webui/src/frontend/domains/ntp/api.ts` exposes the typed `system_clock` snapshot for the NTP page.
+- Old entrypoint now delegates to:
+  - `backend/domains/ntp/service.py` continues exposing the snapshot through `GET /ntp/status`; no legacy/facade path was added.
+- Verification commands:
+  - `python3 -m pytest -q tests/test_ntp_status_ops.py` — passed locally after adding `system_clock` parsing coverage.
+  - Full verification is recorded in the task handoff.
+- Result summary:
+  - The Time tab no longer shows a fake RTC value; RTC/system clock state is sourced from the host runtime.
+
+## 1.327) NTP/Chrony: desired `rtcsync` control
+
+- Step scope:
+  - Added `time.rtcsync` to desired NTP configuration with default `true` for backward-compatible normalization of existing JSON.
+  - `chrony.conf` generation now includes the `rtcsync` directive only when `time.rtcsync` is enabled.
+  - Added the `Sync hardware clock (RTC)` checkbox to the Time tab `NTP synchronization` panel.
+- Ownership moved:
+  - `backend/domains/ntp/validation_ops.py` owns normalization of `time.rtcsync`.
+  - `backend/domains/ntp/config_renderer.py` owns conditional rendering of the Chrony `rtcsync` directive.
+  - `webui/src/pages/ntp.tsx` owns the operator-facing checkbox and maps it into desired state.
+- Old entrypoint now delegates to:
+  - Existing `GET/PUT /ntp` and `POST /ntp/apply` routes continue through `backend.domains.ntp.service`; no legacy/facade path changed.
+- Verification commands:
+  - `PYTHONPYCACHEPREFIX=/tmp/awg-pycache python3 -m pytest -q tests/test_ntp_service.py tests/test_api_contract.py` — 20 passed.
+  - `PYTHONPYCACHEPREFIX=/tmp/awg-pycache python3 -m pytest -q tests` — 363 passed.
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+- Result summary:
+  - RTC hardware-clock sync is no longer an implicit always-on directive; it is visible and controlled from the Time tab desired configuration.
+
+## 1.328) NTP/Chrony: correct RTC summary semantics
+
+- Step scope:
+  - Corrected the Time summary `RTC sync` tile because it previously used `timedatectl` `NTPSynchronized`, which reports system clock NTP synchronization and does not directly indicate the Chrony `rtcsync` directive.
+  - The tile is shown again and now reflects the desired `time.rtcsync` checkbox state.
+  - Kept RTC behavior as the explicit desired configuration checkbox `Sync hardware clock (RTC)`.
+- Ownership moved:
+  - No backend ownership moved; this is a UI semantics correction in `webui/src/pages/ntp.tsx`.
+  - `webui/tests/ntp-design.spec.ts` verifies the desired RTC checkbox and summary tile.
+- Old entrypoint now delegates to:
+  - Existing NTP routes are unchanged.
+- Verification commands:
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts --project=chromium --workers=1` — passed.
+- Result summary:
+  - The Time tab summary shows RTC state from desired Chrony configuration instead of a misleading `timedatectl` runtime field.
+
+## 1.329) NTP/Chrony: faster Time status refresh
+
+- Step scope:
+  - Enabled periodic runtime status refresh on the Time tab, not only on the Status tab, so transient Chrony states such as `activating` and `waiting` update without a manual page refresh.
+  - Added a timeout to backend status commands so a slow `chronyc`, `systemctl`, or `timedatectl` command is reported as a status error instead of blocking the UI indefinitely.
+- Ownership moved:
+  - `webui/src/pages/ntp.tsx` owns Time/Status tab polling.
+  - `backend/domains/ntp/status_ops.py` owns status command execution timeout handling.
+- Old entrypoint now delegates to:
+  - Existing `GET /ntp/status` route is unchanged and continues through `backend.domains.ntp.service`.
+- Verification commands:
+  - `PYTHONPYCACHEPREFIX=/tmp/awg-pycache python3 -m pytest -q tests/test_ntp_status_ops.py tests/test_ntp_service.py tests/test_api_contract.py` — passed.
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts --project=chromium --workers=1` — passed.
+- Result summary:
+  - The Time tab updates runtime status automatically and no single status command can freeze the NTP UI.
+
+## 1.330) NTP/Chrony: transient success messages
+
+- Step scope:
+  - Added auto-dismiss for successful/info NTP page messages after 5 seconds.
+  - Kept error messages persistent until the next operator action so failures remain visible.
+  - Separated info and error banner colors on the NTP page.
+- Ownership moved:
+  - `webui/src/pages/ntp.tsx` owns NTP page message lifetime and visual tone.
+- Old entrypoint now delegates to:
+  - Existing NTP routes are unchanged.
+- Verification commands:
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts --project=chromium --workers=1` — passed.
+- Result summary:
+  - The `NTP configuration applied. Chrony is active.` banner no longer stays on screen indefinitely.
+
+## 1.331) NTP/Chrony: remove Access firewall column
+
+- Step scope:
+  - Removed the synthetic `Firewall` / `not managed` column from the NTP Access table.
+  - Kept the existing explanatory helper text that firewall rules are not managed by the NTP module.
+- Ownership moved:
+  - `webui/src/pages/ntp.tsx` owns the Access table columns.
+  - `webui/tests/ntp-design.spec.ts` verifies that the synthetic firewall column does not return.
+- Old entrypoint now delegates to:
+  - Existing NTP routes are unchanged; the removed field was UI-only.
+- Verification commands:
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts --project=chromium --workers=1` — passed.
+- Result summary:
+  - Access rules now show only Chrony access data: action, network, and comment.
+
+## 1.332) NTP/Chrony: firewall-style comments in tables
+
+- Step scope:
+  - Removed `Comment` as a standalone column from the NTP Sources and Access tables.
+  - Rendered row comments in the Firewall style: `# comment` above the first visible data cell.
+  - Kept comment editing in the add/edit dialogs.
+- Ownership moved:
+  - `webui/src/pages/ntp.tsx` owns the NTP table comment presentation.
+  - `webui/tests/ntp-design.spec.ts` verifies that comments are no longer standalone table columns.
+- Old entrypoint now delegates to:
+  - Existing NTP routes are unchanged; comment storage/API shape did not change.
+- Verification commands:
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts --project=chromium --workers=1` — passed.
+- Result summary:
+  - NTP table comments now visually match the Firewall/IPsec compact table pattern.
+
+## 1.333) NTP/Chrony: pending apply state for desired/runtime mismatch
+
+- Step scope:
+  - Added `applied_current` to `GET /ntp`; it compares the rendered desired `chrony.conf` with the installed `/etc/chrony/chrony.conf`.
+  - Added a persistent NTP UI warning when saved desired configuration differs from the running Chrony config.
+  - The Time tab `NTP sync` tile now shows `pending apply` instead of reporting runtime `synchronized` as the final state while desired changes are not applied.
+- Ownership moved:
+  - `backend/domains/ntp/service.py` owns the desired/runtime apply-state composition.
+  - `backend/domains/ntp/runtime_ops.py` owns the installed config comparison helper.
+  - `webui/src/pages/ntp.tsx` owns the pending apply presentation.
+- Old entrypoint now delegates to:
+  - Existing `/ntp` dispatch still delegates through `backend.domains.ntp.service`; the response item has an additive `applied_current` field.
+- Verification commands:
+  - `PYTHONPYCACHEPREFIX=/tmp/awg-pycache python3 -m pytest -q tests/test_ntp_service.py tests/test_ntp_runtime_ops.py tests/test_api_contract.py` — passed (`27 passed`).
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts --project=chromium --workers=1` — passed (`6 passed`).
+  - Stand smoke on `89.125.103.24:8787`: `/health` returned `ok`, `/ntp` returned `applied_current=false` for the intentionally saved-but-not-applied disabled source state.
+- Result summary:
+  - Operators can see when disabled/enabled Sources are saved in desired JSON but Chrony is still running the previously applied configuration.
+
+## 1.334) NTP/Chrony: explicit applied-runtime wording on Status
+
+- Step scope:
+  - Clarified the Status tab when desired NTP configuration has pending changes.
+  - Added an `Applied config` status tile and an inline warning explaining that Status rows show the currently applied Chrony runtime until Apply runs.
+  - Renamed Status summary labels to `Runtime service`, `Runtime sync`, `Runtime reference`, and `Runtime sources`.
+- Ownership moved:
+  - `webui/src/pages/ntp.tsx` owns the Status tab pending/apply wording.
+  - `webui/tests/ntp-design.spec.ts` verifies the pending Status wording.
+- Old entrypoint now delegates to:
+  - Existing NTP API routes are unchanged.
+- Verification commands:
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts --project=chromium --workers=1` — passed (`6 passed`).
+  - Stand smoke on `89.125.103.24:8787`: served bundle `assets/index-zOQL7VFJ.js`.
+- Result summary:
+  - A disabled source saved in desired JSON can no longer be visually confused with the still-active runtime Chrony source list.
+
+## 1.335) NTP/Chrony: immediate apply for Sources actions
+
+- Step scope:
+  - Changed Sources tab add/edit/delete/enable/disable actions from storage-only desired changes to immediate Chrony apply.
+  - Source actions now save the changed Sources list, call `POST /ntp/apply`, refresh runtime status and clear pending apply state.
+  - The source action path applies Sources on top of the last saved config to avoid accidentally activating unsaved Time/Server form edits.
+- Ownership moved:
+  - `webui/src/pages/ntp.tsx` owns the Sources auto-apply orchestration.
+  - `webui/tests/ntp-design.spec.ts` verifies that Sources actions do not leave `pending apply`.
+- Old entrypoint now delegates to:
+  - Existing `PUT /ntp` and `POST /ntp/apply` routes are reused; backend API is unchanged.
+- Verification commands:
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts --project=chromium --workers=1` — passed (`6 passed`).
+  - Stand cleanup/apply on `89.125.103.24:8787`: removed invalid demo source `127.127.1.0 local`, restored `2.debian.pool.ntp.org`, and verified `applied_current=True`.
+- Result summary:
+  - Disabling a source removes it from generated Chrony config immediately and restarts Chrony through the existing apply path instead of leaving runtime status on the previous applied source.
+
+## 1.336) NTP/Chrony: live ticking time display
+
+- Step scope:
+  - The Time tab system time summary and Manual time input now tick every second using the selected timezone.
+  - Auto-ticking pauses after the operator edits manual date/time so typed values are not overwritten before Apply.
+- Ownership moved:
+  - `webui/src/pages/ntp.tsx` owns the local display clock tick.
+  - `webui/tests/ntp-design.spec.ts` verifies that both visible time values advance.
+- Old entrypoint now delegates to:
+  - Existing NTP API routes are unchanged.
+- Verification commands:
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts --project=chromium --workers=1` — passed (`7 passed`).
+  - Stand smoke on `89.125.103.24:8787`: served bundle `assets/index-DUnjzsv7.js`.
+- Result summary:
+  - Time values no longer look frozen after opening the NTP page.
+
+## 1.337) NTP/Chrony: default makestep for large initial offsets
+
+- Step scope:
+  - Diagnosed a real stand offset of about 856,000 seconds: `chronyc tracking` reported `System time ... seconds fast of NTP time`.
+  - Corrected the stand clock through the existing authenticated `POST /ntp/sync` action.
+  - Added `makestep 1.0 3` to generated `chrony.conf` whenever NTP client mode is enabled, so large startup offsets can be stepped automatically.
+- Ownership moved:
+  - `backend/domains/ntp/config_renderer.py` owns the default Chrony `makestep` directive.
+  - `tests/test_ntp_service.py` covers the generated directive.
+- Old entrypoint now delegates to:
+  - Existing `/ntp/config-preview` and `/ntp/apply` routes are unchanged; they consume the updated renderer output.
+- Verification commands:
+  - `PYTHONPYCACHEPREFIX=/tmp/awg-pycache python3 -m pytest -q tests/test_ntp_service.py tests/test_ntp_runtime_ops.py tests/test_api_contract.py` — passed (`27 passed`).
+  - `cd webui && npm run build` — passed.
+  - Stand `89.125.103.24`: `POST /ntp/apply` succeeded, `/etc/chrony/chrony.conf` contains `makestep 1.0 3`.
+  - Stand `89.125.103.24`: `chronyc tracking` after apply reported `System time : 0.000000120 seconds slow of NTP time`, `Stratum 3`.
+- Result summary:
+  - Large time drift after boot/restart is no longer left for slow slewing when Chrony can safely step during initial synchronization.
+
+## 1.338) NTP/Chrony: Time Apply semantics and manual-time live test
+
+- Step scope:
+  - Made unsaved Time tab changes visually explicit: toggling `Enable NTP client` now shows `pending apply` until the main Time `Apply` is pressed.
+  - Kept activation semantics unchanged and backend-first: the checkbox only changes desired form state; `PUT /ntp` and `POST /ntp/apply` run from the main Apply action.
+  - Updated the live NTP Playwright scenario to verify manual time: disable NTP client, set manual date/time with Apply, enable NTP client again with Apply, and wait for Chrony synchronization to recover.
+- Ownership moved:
+  - `webui/src/pages/ntp.tsx` owns form-vs-applied dirty detection for the Time tab and Status warning.
+  - `webui/tests/ntp-design.spec.ts` verifies the `pending apply` badge after changing the NTP client checkbox.
+  - `webui/tests/ntp-live-actions.spec.ts` verifies the manual-time recovery flow on the stand.
+- Old entrypoint now delegates to:
+  - Existing NTP API routes are unchanged.
+- Verification commands:
+  - `PYTHONPYCACHEPREFIX=/tmp/awg-pycache python3 -m pytest -q tests/test_ntp_service.py tests/test_ntp_runtime_ops.py tests/test_api_contract.py` — passed (`27 passed`).
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts -g 'NTP design follows|Time values tick|loads live' --project=chromium --workers=1` — passed (`3 passed`).
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-live-actions.spec.ts --project=chromium --workers=1` — passed (`1 passed`).
+  - Stand `89.125.103.24`: after the live test, `/ntp` returned `ntp_enabled=True`, `applied_current=True`; `/ntp/status` returned `Leap status=Normal`, `System time=0.000029608s`, `chrony.service active`.
+- Result summary:
+  - The Time tab no longer implies that NTP client enable/disable is already active before Apply. Manual time was tested end-to-end and Chrony returned to normal synchronization after re-enabling the client.
+
+## 1.339) NTP/Chrony: host-backed Time display after manual time
+
+- Step scope:
+  - Fixed the Time tab after manual date/time changes: the UI no longer uses the browser clock as the source of truth for `System time` and Manual time fields.
+  - Added `current_time` to the read-only `/ntp/status` payload using fixed `date +%s`, then the frontend ticks locally from that host-time anchor.
+  - Time Apply now sends `POST /ntp/timezone` on every apply so manual time is interpreted in the desired timezone, even if the host timezone drifted from saved JSON.
+- Ownership moved:
+  - `backend/domains/ntp/status_ops.py` owns host epoch collection for the runtime status snapshot.
+  - `webui/src/frontend/domains/ntp/api.ts` owns the additive `current_time` status field.
+  - `webui/src/pages/ntp.tsx` owns host-backed display ticking for the Time tab.
+- Old entrypoint now delegates to:
+  - Existing `/ntp/status`, `/ntp/timezone`, `/ntp/manual-time`, and `/ntp/apply` routes are reused; no route was renamed or removed.
+- Verification commands:
+  - `PYTHONPYCACHEPREFIX=/tmp/awg-pycache python3 -m pytest -q tests/test_ntp_status_ops.py tests/test_ntp_service.py tests/test_ntp_runtime_ops.py tests/test_api_contract.py` — passed (`31 passed`).
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - Temporary stand Playwright check on `89.125.103.24:8787`: Time panel `System time` contained `2026-07-30` after the user-set manual date; passed (`1 passed`).
+  - Stand API smoke on `89.125.103.24`: `/ntp/status` returned `current_time=1785435197.0`, which is `2026-07-30T18:13:17+00:00`.
+- Result summary:
+  - The user-set manual date is now visible after save/reload because the Time panel follows the host runtime clock instead of the browser clock.
+
+## 1.340) NTP/Chrony: checkbox changes stay form-only until Apply
+
+- Step scope:
+  - Removed the UI event-like `pending apply` reaction from Time form checkbox changes.
+  - `Enable NTP client` and `Sync hardware clock (RTC)` now change only the local form; Time/Status runtime badges continue to represent the last applied Chrony configuration until the main `Apply` runs.
+  - Kept the real runtime side effect only behind the main Time `Apply` button.
+- Ownership moved:
+  - `webui/src/pages/ntp.tsx` owns the split between local form state and applied runtime status presentation.
+  - `webui/tests/ntp-design.spec.ts` verifies that toggling the NTP client checkbox does not show `pending apply`.
+  - `webui/tests/ntp-live-actions.spec.ts` verifies that manual-time and NTP client state changes take effect only through `Apply`.
+- Old entrypoint now delegates to:
+  - Existing NTP API routes are unchanged.
+- Verification commands:
+  - `PYTHONPYCACHEPREFIX=/tmp/awg-pycache python3 -m pytest -q tests/test_ntp_status_ops.py tests/test_ntp_service.py tests/test_ntp_runtime_ops.py tests/test_api_contract.py` — passed (`31 passed`).
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts -g 'NTP design follows|loads live' --project=chromium --workers=1` — passed (`2 passed`).
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-live-actions.spec.ts --project=chromium --workers=1` — passed (`1 passed`).
+- Result summary:
+  - Checkbox toggles are now quiet form edits; the operator sees the runtime/apply event only after pressing `Apply`.
+
+## 1.341) NTP/Chrony: full host timezone catalog in Time tab
+
+- Step scope:
+  - Added authenticated read-only `GET /ntp/timezones` for the host timezone catalog from `timedatectl list-timezones`.
+  - Replaced the static “Popular timezone” selector with a compact searchable timezone input backed by the host catalog and a safe fallback list.
+  - Kept timezone changes as form edits: selecting a timezone immediately recalculates the displayed host-backed time, while system timezone/runtime changes still happen only through the main Time `Apply`.
+- Ownership moved:
+  - `backend/domains/ntp/runtime_ops.py` owns fixed-argv timezone catalog collection.
+  - `backend/domains/ntp/service.py` exposes the read-only timezone list through the NTP domain service.
+  - `webui/src/frontend/domains/ntp/api.ts` owns the typed `getNtpTimezones` API client.
+  - `webui/src/pages/ntp.tsx` owns the searchable Time tab timezone input and display-time recalculation.
+- Old entrypoint now delegates to:
+  - `backend/app/router.py` continues delegating `/ntp/*` GET requests directly to `backend.domains.ntp.service.handle_get`; no facade/legacy path was added.
+- Verification commands:
+  - `PYTHONPYCACHEPREFIX=/tmp/awg-pycache python3 -m pytest -q tests/test_ntp_service.py tests/test_ntp_runtime_ops.py tests/test_ntp_status_ops.py tests/test_api_contract.py` — passed (`33 passed`).
+  - `PYTHONPYCACHEPREFIX=/tmp/awg-pycache python3 -m pytest -q tests` — passed (`367 passed`).
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts --project=chromium --workers=1` — passed (`8 passed`).
+  - Stand `89.125.103.24`: `GET /ntp/timezones` returned `313` zones and included `UTC`, `Europe/Moscow`, and `Asia/Tokyo`.
+- Result summary:
+  - Timezone selection is no longer limited to a hand-picked list, and the Time tab immediately shows the corrected host time for the selected timezone before Apply.
+
+## 1.342) NTP/Chrony: compact timezone picker and UTC offset display
+
+- Step scope:
+  - Replaced the native browser timezone datalist with a compact page-local searchable dropdown that scrolls inside the Timezone card instead of expanding over the page.
+  - Replaced the technical `Host timezones loaded` counter with the selected timezone UTC offset, e.g. `UTC+09:00`.
+  - Kept timezone selection as a local form/display edit; runtime system timezone still changes only after the main Time `Apply`.
+- Ownership moved:
+  - `webui/src/pages/ntp.tsx` owns the compact timezone picker, filtering and UTC offset calculation.
+  - `webui/tests/ntp-design.spec.ts` covers the scroll-limited picker and offset display.
+- Old entrypoint now delegates to:
+  - Existing NTP API routes are unchanged.
+- Verification commands:
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts -g 'Timezone selector|NTP design follows' --project=chromium --workers=1` — passed (`2 passed`).
+- Result summary:
+  - The Timezone card now shows operator-relevant offset information and no longer relies on the browser's oversized native timezone suggestion list.
+
+## 1.343) NTP/Chrony: timezone picker opens around current value
+
+- Step scope:
+  - Changed timezone picker focus behavior: opening the field now shows a scrollable list starting from the current timezone instead of filtering to a single exact match.
+  - Kept typed search behavior unchanged: once the operator edits the text, the list filters by the typed substring.
+- Ownership moved:
+  - `webui/src/pages/ntp.tsx` owns timezone picker focus-vs-search behavior.
+  - `webui/tests/ntp-design.spec.ts` verifies that opening the picker shows more than the current exact value.
+- Old entrypoint now delegates to:
+  - Existing NTP API routes are unchanged.
+- Verification commands:
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts -g 'Timezone selector' --project=chromium --workers=1` — passed (`1 passed`).
+- Result summary:
+  - The timezone picker remains compact, but the operator can now browse from the currently selected timezone immediately after focusing the field.
+
+## 1.344) NTP/Chrony: compact server panel and always-on client logging
+
+- Step scope:
+  - Removed the extra NTP Server hint cards from the Time tab to return the server settings block to a compact one-page layout.
+  - Removed `Client stats` and `Log limit` controls from the Time tab; Chrony client logging is no longer user-toggleable in the UI.
+  - `clientloglimit` is always rendered into generated `chrony.conf`, even when the NTP server listener is disabled.
+- Ownership moved:
+  - `backend/domains/ntp/config_renderer.py` owns unconditional `clientloglimit` rendering.
+  - `backend/domains/ntp/validation_ops.py` normalizes `collect_client_statistics` to `true` for compatibility with existing stored JSON/API payloads.
+  - `webui/src/pages/ntp.tsx` keeps the hidden desired-state fields backend-compatible while no longer exposing them as operator controls.
+  - `tests/test_ntp_service.py` and `webui/tests/ntp-design.spec.ts` cover the always-on backend directive and removed UI fields.
+- Old entrypoint now delegates to:
+  - Existing NTP API routes are unchanged.
+- Verification commands:
+  - `PYTHONPYCACHEPREFIX=/tmp/awg-pycache python3 -m pytest -q tests/test_ntp_service.py tests/test_ntp_runtime_ops.py tests/test_ntp_status_ops.py tests/test_api_contract.py` — passed (`34 passed`).
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts -g 'NTP server settings|NTP design follows' --project=chromium --workers=1` — passed (`2 passed`).
+  - Stand `89.125.103.24`: read-only `/ntp/config-preview` smoke returned `clientloglimit 2097152`.
+- Result summary:
+  - The server settings panel is less noisy, and Chrony client logging is now a stable generated-config behavior instead of an exposed operator toggle.
+
+## 1.345) NTP/Chrony: state-aware list toolbar actions
+
+- Step scope:
+  - Updated Sources and Access toolbars so `Disable` is enabled only for selected enabled rows, and `Enable` is enabled only for selected disabled rows.
+  - Kept `Add` always available and `Del` dependent on an actual selected row.
+- Ownership moved:
+  - `webui/src/pages/ntp.tsx` owns selected-row action availability for NTP list tabs.
+  - `webui/tests/ntp-design.spec.ts` covers Sources and Access button states while enabling/disabling rows.
+- Old entrypoint now delegates to:
+  - Existing NTP API routes are unchanged.
+- Verification commands:
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts -g 'NTP design follows' --project=chromium --workers=1` — passed (`1 passed`).
+- Result summary:
+  - Operators no longer see both enable and disable as active actions for a row that already has one of those states.
+
+## 1.346) NTP/Chrony: safer list delete action
+
+- Step scope:
+  - Updated Sources and Access toolbars so `Del` is enabled for any selected row.
+  - Deleting an enabled source/rule is a single operator action; the applied Chrony config is rewritten without that entry.
+  - Preserved the selected source after enable/disable roundtrip so the next valid action remains visible immediately.
+- Ownership moved:
+  - `webui/src/pages/ntp.tsx` owns delete-action availability for NTP list tabs.
+  - `webui/tests/ntp-design.spec.ts` covers disabled/enabled row delete-button states for Sources and Access.
+- Old entrypoint now delegates to:
+  - Existing NTP API routes are unchanged.
+- Verification commands:
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts -g 'NTP design follows' --project=chromium --workers=1` — passed (`1 passed`).
+- Result summary:
+  - Operators can delete selected NTP sources/access rules directly; Enable/Disable still reflect the selected row state.
+
+## 1.347) NTP/Chrony: unified delete button behavior
+
+- Step scope:
+  - Removed the Sources-only guard that kept `Del` disabled when only one source remained.
+  - Aligned Sources with Access: selecting any row enables `Del`, and deletion rewrites the desired/applied Chrony configuration without that row.
+- Ownership moved:
+  - `webui/src/pages/ntp.tsx` owns consistent toolbar delete availability across NTP list tabs.
+  - `webui/tests/ntp-design.spec.ts` verifies active rows expose `Del` in Sources and Access.
+- Old entrypoint now delegates to:
+  - Existing NTP API routes are unchanged.
+- Verification commands:
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts -g 'NTP design follows' --project=chromium --workers=1` — passed (`1 passed`).
+- Result summary:
+  - The Sources and Access action panels now behave consistently for selected rows.
+
+## 1.348) NTP/Chrony: lightweight auto-refresh
+
+- Step scope:
+  - Added lightweight desired-configuration polling for the NTP page so changes made in another browser/session are reflected without manual Refresh.
+  - Kept polling safe: it is skipped while the user has unsaved local form changes, an editor dialog is open, or save/apply/service actions are running.
+  - Reduced runtime status polling from 3 seconds to 15 seconds; displayed time continues ticking locally every second from the last Chrony status anchor.
+- Ownership moved:
+  - `webui/src/pages/ntp.tsx` owns NTP page auto-refresh and polling cadence.
+  - `webui/tests/ntp-design.spec.ts` covers external desired-config refresh into the Time tab.
+- Old entrypoint now delegates to:
+  - Existing NTP API routes are unchanged.
+- Verification commands:
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts -g 'auto-refreshes desired' --project=chromium --workers=1` — passed (`1 passed`).
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts -g 'NTP design follows' --project=chromium --workers=1` — passed (`1 passed`).
+- Result summary:
+  - NTP UI now picks up configuration changes from other sessions automatically while avoiding the previous heavy status polling pattern.
+
+## 1.349) NTP/Chrony: optional Bind address control
+
+- Step scope:
+  - Changed the Time tab server `Bind address` field to the same compact optional-field pattern used in the Firewall rule editor.
+  - Empty bind address now shows a dashed `0.0.0.0 / all interfaces` hint with a `+` button; pressing `+` inserts `0.0.0.0`, and `-` clears the field back to all interfaces.
+- Ownership moved:
+  - `webui/src/pages/ntp.tsx` owns the NTP server optional bind-address UI.
+  - `webui/tests/ntp-design.spec.ts` covers the new `+` reveal behavior and submitted bind-address payload.
+- Old entrypoint now delegates to:
+  - Existing NTP API routes are unchanged.
+- Verification commands:
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts -g 'NTP server settings' --project=chromium --workers=1` — passed (`1 passed`).
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts -g 'NTP design follows' --project=chromium --workers=1` — passed (`1 passed`).
+- Result summary:
+  - Bind address is visually aligned with the Firewall optional-field `+` pattern while keeping the generated Chrony API/config contract unchanged.
+
+## 1.350) NTP/Chrony: rollback extra optional server controls
+
+- Step scope:
+  - Reverted the extra compact `+` reveal pattern for Time tab server controls after product-owner feedback.
+  - `Bind interface`, server `Auth key`, `Use local clock`, `Local stratum`, `Orphan mode`, `Rate limit`, `Rate interval`, and `Rate burst` are back to the previous always-visible compact server grid.
+  - Kept the earlier accepted optional `Bind address` behavior from section 1.349.
+- Ownership moved:
+  - `webui/src/pages/ntp.tsx` owns the restored NTP server grid controls.
+  - `webui/tests/ntp-design.spec.ts` covers the restored disabled states and submitted server payload.
+- Old entrypoint now delegates to:
+  - Existing NTP API routes are unchanged.
+- Verification commands:
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `scp -r webui/dist/* root@89.125.103.24:/opt/awg_manager/webui/dist/ && ssh root@89.125.103.24 "grep -o 'assets/index-[^\" ]*' /opt/awg_manager/webui/dist/index.html | head -5"` — deployed `assets/index-Cv8LaWqz.js` and `assets/index-Bze3wAhC.css`.
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts -g 'NTP server settings|NTP design follows' --project=chromium --workers=1` — passed (`2 passed`).
+- Result summary:
+  - The NTP server panel returns to the simpler compact grid the product owner preferred.
+
+## 1.351) NTP/Chrony: optional Listen port and Bind interface controls
+
+- Step scope:
+  - Added compact `+` reveal controls only for the Time tab server `Listen port` and `Bind interface` fields.
+  - `Listen port` now stays collapsed as `123 / default` when the saved value is the Chrony/NTP default port; `+` reveals the numeric input, and `-` restores `123`.
+  - `Bind interface` now stays collapsed as `all interfaces` when empty; `+` reveals an `eth0`-prefilled editable input, and `-` clears it.
+- Ownership moved:
+  - `webui/src/pages/ntp.tsx` owns the new optional server-field UI state and default-port fallback before payload generation.
+  - `webui/tests/ntp-design.spec.ts` covers collapsed disabled states, reveal interactions, and submitted server payload.
+- Old entrypoint now delegates to:
+  - Existing NTP API routes are unchanged.
+- Verification commands:
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `scp -r webui/dist/* root@89.125.103.24:/opt/awg_manager/webui/dist/ && ssh root@89.125.103.24 "grep -o 'assets/index-[^\" ]*' /opt/awg_manager/webui/dist/index.html | head -5"` — deployed `assets/index-JqRA0dXc.js` and `assets/index-7283jWs3.css`.
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts -g 'NTP server settings|NTP design follows' --project=chromium --workers=1` — passed (`2 passed`).
+- Result summary:
+  - Rare server binding details are visually compact again without reintroducing the broader optional-block experiment that was rolled back in 1.350.
+
+## 1.352) NTP/Chrony: compact Auth key selector draft
+
+- Step scope:
+  - Changed the Time tab server `Auth key` field to a compact optional control: default `none / no authentication` is collapsed, `+` reveals the key selector, and `-` restores `none`.
+  - Added a small `Manage NTP keys` draft dialog next to the field to evaluate the future key-management flow without changing the backend key contract.
+  - Background desired-config refresh pauses while the key dialog is open to avoid replacing visible operator context.
+- Ownership moved:
+  - `webui/src/pages/ntp.tsx` owns the Auth key optional UI and draft keys dialog.
+  - `webui/tests/ntp-design.spec.ts` covers the collapsed Auth key state, key dialog visibility, and submitted server auth key payload.
+- Old entrypoint now delegates to:
+  - Existing NTP API routes are unchanged.
+- Verification commands:
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `scp -r webui/dist/* root@89.125.103.24:/opt/awg_manager/webui/dist/ && ssh root@89.125.103.24 "grep -o 'assets/index-[^\" ]*' /opt/awg_manager/webui/dist/index.html | head -5"` — deployed `assets/index-J5QA_00E.js` and `assets/index-DrDgO2Qg.css`.
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts -g 'NTP server settings|NTP design follows' --project=chromium --workers=1` — passed (`2 passed`).
+- Result summary:
+  - The server panel keeps authentication out of the default path while still giving an obvious entry point for future Chrony key management.
+
+## 1.353) NTP/Chrony: стандартная таблица и кнопки в Manage NTP keys
+
+- Step scope:
+  - Привёл draft-окно `Manage NTP keys` к тому же list-паттерну, который используется в NTP Sources/Access и похожих IPsec/Firewall таблицах.
+  - Добавил стандартную панель `Add / Del / Disable / Enable`, sortable-style заголовки и выбранную строку с тем же подсвечиванием, что у основных NTP таблиц.
+  - Сохранил текущий статус окна как UI draft: backend-контракт ключей Chrony не менялся.
+- Ownership moved:
+  - `webui/src/pages/ntp.tsx` owns the key manager draft table/buttons styling.
+  - `webui/tests/ntp-design.spec.ts` covers the key manager table headers, toolbar buttons, and selected row style.
+- Old entrypoint now delegates to:
+  - Existing NTP API routes are unchanged.
+- Verification commands:
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `scp -r webui/dist/* root@89.125.103.24:/opt/awg_manager/webui/dist/ && ssh root@89.125.103.24 "grep -o 'assets/index-[^\" ]*' /opt/awg_manager/webui/dist/index.html | head -5"` — deployed `assets/index-C2ndHoBJ.js` and `assets/index-BJYH_3c2.css`.
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts -g 'NTP server settings|NTP design follows' --project=chromium --workers=1` — passed (`2 passed`).
+- Result summary:
+  - The key manager dialog now visually matches the accepted compact admin-table style before backend key management is implemented.
+
+## 1.354) NTP/Chrony: реальные authentication keys и chrony.keys
+
+- Step scope:
+  - Перевёл `Manage NTP keys` из UI draft в реальную часть desired JSON конфигурации.
+  - Добавил валидацию Chrony key id, алгоритма, секрета, дублей и ссылок из Sources/Server.
+  - Добавил генерацию `keyfile` в `chrony.conf` и отдельную запись `/etc/chrony/chrony.keys`.
+  - Добавил UI для Add/Edit/Delete/Disable/Enable ключей; секреты маскируются в таблице, а edit может оставить secret пустым для сохранения текущего значения.
+- Ownership moved:
+  - `backend/domains/ntp/validation_ops.py` owns key schema and reference validation.
+  - `backend/domains/ntp/config_renderer.py` owns `keyfile` and `chrony.keys` rendering.
+  - `backend/domains/ntp/runtime_ops.py` owns atomic keyfile write, compare and rollback with `chrony.conf`.
+  - `backend/domains/ntp/service.py` owns apply-state composition for desired config plus keyfile text.
+  - `webui/src/pages/ntp.tsx` and `webui/src/frontend/domains/ntp/api.ts` own the key manager UI and typed frontend contract.
+- Old entrypoint now delegates to:
+  - Existing `/ntp` routes remain unchanged and still delegate through `backend.domains.ntp.service`.
+- Verification commands:
+  - `PYTHONPYCACHEPREFIX=/tmp/awg-pycache python3 -m pytest -q tests/test_ntp_service.py tests/test_ntp_runtime_ops.py tests/test_api_contract.py` — passed (`32 passed`).
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts --project=chromium --workers=1` — passed (`12 passed`).
+  - `scp -r backend/domains/ntp root@89.125.103.24:/opt/awg_manager/backend/domains/ && scp -r webui/dist/* root@89.125.103.24:/opt/awg_manager/webui/dist/ && ssh root@89.125.103.24 'systemctl restart awg-manager-api.service && systemctl is-active awg-manager-api.service && grep -o "assets/index-[^\" ]*" /opt/awg_manager/webui/dist/index.html | head -5'` — deployed; service `active`, assets `index-DlKsyyVE.js` and `index-CbmRr78D.css`.
+  - `curl -fsS -H 'X-API-Key: ...' http://89.125.103.24:8787/ntp` + `/ntp/status` smoke — passed; config `schema 1`, `applied True`, status service `active`, `errors 0`.
+- Result summary:
+  - Chrony authentication keys are now stored, validated, rendered and applied as first-class NTP module configuration instead of being a visual-only draft.
+
+## 1.355) NTP/Chrony: генератор и просмотр secret для ключей
+
+- Step scope:
+  - Добавил в форму Add/Edit NTP key генератор `Secret`, зависящий от выбранного алгоритма: MD5/SHA1/SHA256/SHA384/SHA512 получают hex-секрет подходящей длины.
+  - Добавил IPsec-like `eye` control для просмотра/скрытия секрета; после генерации значение раскрывается, чтобы оператор мог сразу проверить результат.
+  - Сохранил маскирование секретов в таблице ключей и возможность при edit оставить secret пустым, чтобы не менять существующее значение.
+- Ownership moved:
+  - `webui/src/pages/ntp.tsx` owns the key secret generator and visibility state.
+  - `webui/tests/ntp-design.spec.ts` covers generated secret length and show/hide behavior in the NTP key dialog.
+- Old entrypoint now delegates to:
+  - Existing NTP API routes are unchanged.
+- Verification commands:
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `scp -r webui/dist/* root@89.125.103.24:/opt/awg_manager/webui/dist/ && ssh root@89.125.103.24 'systemctl restart awg-manager-api.service && systemctl is-active awg-manager-api.service && grep -o "assets/index-[^\" ]*" /opt/awg_manager/webui/dist/index.html | head -5'` — deployed; service `active`, assets `index-CyZ7B27M.js` and `index-CbmRr78D.css`.
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts -g 'NTP design follows' --project=chromium --workers=1` — passed (`1 passed`).
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts --project=chromium --workers=1` — passed (`12 passed`).
+- Result summary:
+  - The NTP key editor now has the same practical secret workflow as IPsec identity: generate, inspect with eye, hide again, then save.

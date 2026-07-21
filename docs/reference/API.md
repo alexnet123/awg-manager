@@ -8,6 +8,7 @@
 - clients
 - client config download
 - client QR code preview and download
+- desired NTP/Chrony configuration and read-only config preview
 - the built-in Web UI assets at `/ui/` and `/static/...`
 
 The API uses the same core logic as the CLI and works on the same SQLite database and runtime commands.
@@ -562,3 +563,25 @@ Security notes:
 - Frontend never talks to VICI directly.
 - PSK is not returned back after save; API returns `has_psk` marker.
 - Runtime mutations are done only via explicit `Apply` or action endpoints.
+
+### NTP / Chrony
+
+All endpoints require `X-API-Key`.
+
+- `GET /ntp` — returns normalized desired configuration plus `applied_current`, which is `true` only when the rendered desired `chrony.conf` and `chrony.keys` match the currently installed `/etc/chrony/chrony.conf` and `/etc/chrony/chrony.keys`. If no JSON file exists, schema defaults are returned without creating a file.
+- `PUT /ntp` — validates, normalizes, and atomically stores desired configuration in `${AWG_MANAGER_DATA_DIR}/ntp_config.json`.
+- `GET /ntp/config-preview` — returns a deterministic read-only `chrony.conf` preview as `{ "ok": true, "item": { "content": "...", "warnings": [] } }`.
+- `GET /ntp/status` — returns Chrony service state, current host epoch time as `current_time`, `timedatectl show` system clock state, structured `tracking`, `activity`, `sources`, `source_stats`, and partial `errors` collected through fixed `systemctl`, `date`, `timedatectl`, and `chronyc -n -c` commands.
+- `GET /ntp/timezones` — returns the host timezone catalog from `timedatectl list-timezones` as `{ "ok": true, "item": { "items": ["UTC", "..."] } }` for the Time tab selector; it is read-only and does not modify system time.
+- `POST /ntp/apply` — validates the saved desired configuration with `chronyd -p`, atomically installs `/etc/chrony/chrony.conf` and `/etc/chrony/chrony.keys` when keys are configured, masks competing time synchronization services, and enables/restarts `chrony.service`.
+- `POST /ntp/timezone` with `{ "timezone": "Europe/Moscow" }` — validates and applies the system timezone through `timedatectl set-timezone`.
+- `POST /ntp/manual-time` with `{ "date": "YYYY-MM-DD", "time": "HH:MM:SS" }` — while desired NTP synchronization is disabled, temporarily stops Chrony, sets system time through `timedatectl`, restarts Chrony and verifies it is active.
+- `POST /ntp/sync` — executes `chronyc makestep`.
+- `POST /ntp/restart` — restarts Chrony and verifies it is active.
+- `POST /ntp/reload` — executes `systemctl reload-or-restart chrony.service` and verifies it is active.
+
+Schema version is `1`; top-level sections are `time`, `sources`, `server`, `access`, and `keys`. The `time` section contains `timezone`, `ntp_enabled`, and `rtcsync`; `rtcsync` controls whether generated `chrony.conf` includes the Chrony `rtcsync` directive. `keys` contains Chrony authentication keys with numeric `id`, `algorithm` (`MD5`, `SHA1`, `SHA256`, `SHA384`, `SHA512`), `secret`, `enabled`, and optional `comment`; source and server `auth_key` fields must reference an enabled key id or `none`. When NTP client mode is enabled, generated `chrony.conf` includes `makestep 1.0 3` so Chrony can step large offsets during initial synchronization. Invalid values return HTTP `400` and do not overwrite the last valid JSON configuration.
+
+Apply keeps `/etc/chrony/chrony.conf.awg-manager.bak` and `/etc/chrony/chrony.keys.awg-manager.bak` and restores them if Chrony activation fails. The endpoint does not execute `chronyc`, directly set system time/timezone, or manage firewall rules.
+
+Competing units are stopped, disabled, and masked when present: `systemd-timesyncd.service`, `ntp.service`, `ntpsec.service`, and `openntpd.service`. Chrony remains the only enabled time synchronization service.

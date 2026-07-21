@@ -17,6 +17,7 @@
 
 - `handle_get/handle_post/handle_put/handle_delete`: диспетчеризация HTTP-маршрутов.
 - `_handle_client_qr_path`: разбор пути `/clients/<id>/qr`.
+- NTP-dispatch делегирует запросы `/ntp/*` в `backend.domains.ntp.service`.
 
 ### `backend/app/manager_facade.py`
 
@@ -310,6 +311,20 @@
   - wiring proposal/secret: `_build_phase1_proposal_string`, `_build_phase2_proposal_string`, `_secret_encrypt`, `_secret_decrypt`
   - публичные service-обертки: `list_*`, `upsert_*`, `delete_*`, `list_events_service`, `list_active_peers_service`, `list_installed_sas_service`, `get_config_preview_service`, `load_peer_service`, `initiate_policy_service`, `terminate_peer_service`, `apply_config_service`
 
+### `backend/domains/ntp`
+
+- `service.py`: HTTP-neutral оркестрация желаемой конфигурации Chrony, read-only preview, определения неприменённых изменений и явного apply.
+  - `get_config`, `get_config_with_apply_state`, `save_config`, `get_config_preview`, `apply_config`, `handle_get`, `handle_put`, `handle_post`
+- `validation_ops.py`: дефолты схемы, нормализация payload, проверки диапазонов, разбор сетей, проверка ссылок на authentication keys и защита от внедрения новых строк.
+  - желаемая конфигурация содержит `time`, `sources`, `server`, `access` и `keys`; версия схемы — `1`; `time.rtcsync` управляет генерацией директивы Chrony `rtcsync`
+- `store.py`: атомарное JSON-хранилище `${AWG_MANAGER_DATA_DIR}/ntp_config.json`.
+- `config_renderer.py`: детерминированная read-only генерация `chrony.conf` из нормализованного desired state и генерация `chrony.keys` для включённых authentication keys, включая дефолтную директиву `makestep 1.0 3`, когда включён NTP client mode, и всегда включённую директиву `clientloglimit` для клиентской статистики Chrony.
+- `runtime_ops.py`: проверяет сгенерированный конфиг через `chronyd -p`, сравнивает desired config/keyfile с установленными `/etc/chrony/chrony.conf` и `/etc/chrony/chrony.keys`, сохраняет backup и атомарно заменяет оба файла, маскирует конкурирующие синхронизаторы времени, включает/перезапускает Chrony, получает каталог таймзон хоста через `timedatectl list-timezones` и восстанавливает предыдущий конфиг/keyfile при ошибке активации.
+  - владеет privileged fixed-argv действиями для timezone, ручного времени, `chronyc makestep`, restart и reload-or-restart
+  - manual time временно останавливает Chrony, выполняет `timedatectl set-time`, снова запускает Chrony, проверяет active state и преобразует command failures в понятные оператору ошибки
+- `status_ops.py`: собирает состояние сервиса через `systemctl`, epoch-время хоста через `date +%s`, состояние системных часов через `timedatectl show` и преобразует CSV-вывод `chronyc -n -c` для tracking, activity, sources и source statistics в структурированный read-only snapshot с частичными ошибками.
+- Домен никогда не управляет firewall.
+
 ### `awg_core.py` (удален)
 
 - `awg_core.py` удален.
@@ -387,6 +402,19 @@
 - Клиент контрактов IPsec API:
   - CRUD: `getIpsecPeers`, `upsertIpsecPeer`, `deleteIpsecPeer`, `getIpsecPolicies`, `upsertIpsecPolicy`, `deleteIpsecPolicy`, `deleteIpsecIdentity`, `deleteIpsecPhase1Profile`, `deleteIpsecPhase2Proposal`
   - runtime/actions: `applyIpsec`, `getIpsecActivePeers`, `getIpsecInstalledSas`, `getIpsecConfigPreview`, `initiateIpsecPolicy`, `terminateIpsecPeer`
+
+### `webui/src/frontend/domains/ntp/api.ts`
+
+- Типизированный клиент контрактов NTP/Chrony API:
+  - desired state: `getNtpConfig`, `putNtpConfig`
+  - runtime/read-only support: `applyNtpConfig`, `getNtpStatus`, `getNtpTimezones`, `setNtpTimezone`, `setNtpManualTime`, `syncNtpNow`, `restartNtp`, `reloadNtp`
+
+### `webui/src/pages/ntp.tsx`
+
+- Владеет утверждённым UI Time/Sources/Access/Status и преобразует состояние форм в NTP schema version `1`.
+- Параллельно загружает desired config и runtime status, запрещает редактирование до hydration, использует одну реальную операцию Apply и обновляет Chrony status, пока открыта вкладка Status.
+- Загружает каталог таймзон хоста для селектора Time tab и сразу пересчитывает отображаемое host-backed время при смене выбранной timezone.
+- Владеет privileged action-оркестрацией для system timezone, ручного времени, sync-now, restart и reload-or-restart, сохраняя их визуально отделёнными от config Apply.
 
 ## Frontend: владение Firewall UI
 

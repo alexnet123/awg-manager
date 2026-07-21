@@ -5,9 +5,11 @@ import os
 import pathlib
 import socket
 import sys
+import tempfile
 import threading
 import types
 import unittest
+from unittest import mock
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -472,6 +474,123 @@ class APITestCase(unittest.TestCase):
         status, data = self._request("GET", "/health", api_key=self._auth_key())
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
+
+    def test_ntp_desired_config_and_preview_contract(self):
+        with tempfile.TemporaryDirectory() as data_dir, mock.patch.dict(
+            os.environ, {"AWG_MANAGER_DATA_DIR": data_dir}
+        ):
+            status, data = self._request("GET", "/ntp", api_key=self._auth_key())
+            self.assertEqual(status, 200)
+            self.assertEqual(data["item"]["schema_version"], 1)
+
+            status, data = self._request(
+                "PUT",
+                "/ntp",
+                body={
+                    "time": {"timezone": "Europe/Moscow", "ntp_enabled": True, "rtcsync": False},
+                    "sources": [{"address": "192.0.2.20", "iburst": True}],
+                    "server": {"enabled": False},
+                    "access": [],
+                },
+                api_key=self._auth_key(),
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(data["item"]["sources"][0]["address"], "192.0.2.20")
+            self.assertFalse(data["item"]["time"]["rtcsync"])
+
+            status, data = self._request("GET", "/ntp/config-preview", api_key=self._auth_key())
+            self.assertEqual(status, 200)
+            self.assertIn("server 192.0.2.20", data["item"]["content"])
+            self.assertNotIn("rtcsync", data["item"]["content"])
+
+            status, data = self._request(
+                "PUT",
+                "/ntp",
+                body={"server": {"enabled": True, "local_stratum": 99}},
+                api_key=self._auth_key(),
+            )
+            self.assertEqual(status, 400)
+            self.assertFalse(data["ok"])
+
+            with mock.patch(
+                "backend.domains.ntp.service.runtime_ops.apply_config",
+                return_value={"applied": True, "service": "active", "disabled_services": []},
+            ):
+                status, data = self._request(
+                    "POST", "/ntp/apply", body={}, api_key=self._auth_key()
+                )
+            self.assertEqual(status, 200)
+            self.assertTrue(data["item"]["applied"])
+
+            with mock.patch(
+                "backend.domains.ntp.service.status_ops.collect_status",
+                return_value={
+                    "service": {"active": True, "enabled": True, "state": "active"},
+                    "tracking": {"stratum": 3},
+                    "activity": {"sources_online": 4},
+                    "sources": [],
+                    "source_stats": [],
+                    "errors": [],
+                },
+            ):
+                status, data = self._request(
+                    "GET", "/ntp/status", api_key=self._auth_key()
+                )
+            self.assertEqual(status, 200)
+            self.assertEqual(data["item"]["tracking"]["stratum"], 3)
+
+            with mock.patch(
+                "backend.domains.ntp.service.runtime_ops.list_timezones",
+                return_value={"items": ["UTC", "Europe/Moscow"]},
+            ):
+                status, data = self._request(
+                    "GET", "/ntp/timezones", api_key=self._auth_key()
+                )
+            self.assertEqual(status, 200)
+            self.assertEqual(data["item"]["items"], ["UTC", "Europe/Moscow"])
+
+            with mock.patch(
+                "backend.domains.ntp.service.runtime_ops.set_timezone",
+                return_value={"timezone": "Europe/Moscow"},
+            ), mock.patch(
+                "backend.domains.ntp.service.runtime_ops.sync_now",
+                return_value={"synchronized": True},
+            ), mock.patch(
+                "backend.domains.ntp.service.runtime_ops.restart_service",
+                return_value={"action": "restart", "service": "active"},
+            ), mock.patch(
+                "backend.domains.ntp.service.runtime_ops.reload_service",
+                return_value={"action": "reload-or-restart", "service": "active"},
+            ):
+                for path, body in (
+                    ("/ntp/timezone", {"timezone": "Europe/Moscow"}),
+                    ("/ntp/sync", {}),
+                    ("/ntp/restart", {}),
+                    ("/ntp/reload", {}),
+                ):
+                    status, data = self._request("POST", path, body=body, api_key=self._auth_key())
+                    self.assertEqual(status, 200)
+                    self.assertTrue(data["ok"])
+
+            status, _ = self._request(
+                "PUT",
+                "/ntp",
+                body={"time": {"timezone": "UTC", "ntp_enabled": False}},
+                api_key=self._auth_key(),
+            )
+            self.assertEqual(status, 200)
+            with mock.patch(
+                "backend.domains.ntp.service.runtime_ops.set_manual_time",
+                return_value={"datetime": "2026-07-06 12:34:56"},
+            ):
+                status, data = self._request(
+                    "POST",
+                    "/ntp/manual-time",
+                    body={"date": "2026-07-06", "time": "12:34:56"},
+                    api_key=self._auth_key(),
+                )
+            self.assertEqual(status, 200)
+            self.assertEqual(data["item"]["datetime"], "2026-07-06 12:34:56")
 
     def test_rotate_api_key(self):
         status, data = self._request("POST", "/api-key/rotate", body={}, api_key="test-api-key")
