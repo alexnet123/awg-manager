@@ -7110,3 +7110,20 @@
   - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts --project=chromium --workers=1` — passed (`12 passed`).
 - Result summary:
   - The NTP key editor now has the same practical secret workflow as IPsec identity: generate, inspect with eye, hide again, then save.
+
+## 1.356) NTP/Chrony: упрощение Status runtime tiles
+
+- Step scope:
+  - Убрал карточку `Applied config` из вкладки Status как дублирующую верхний `pending apply` warning.
+  - Оставил на Status только поля, которые показывают фактический Chrony runtime: service, sync, stratum, reference, offset и sources.
+- Ownership moved:
+  - `webui/src/pages/ntp.tsx` owns the simplified Status tile set.
+  - `webui/tests/ntp-design.spec.ts` verifies that `Applied config` is no longer rendered.
+- Old entrypoint now delegates to:
+  - Existing NTP API routes are unchanged.
+- Verification commands:
+  - `cd webui && npm run build` — passed; Vite emitted the existing large-chunk warning only.
+  - `scp -r webui/dist/* root@89.125.103.24:/opt/awg_manager/webui/dist/ && ssh root@89.125.103.24 'systemctl restart awg-manager-api.service && systemctl is-active awg-manager-api.service && grep -o "assets/index-[^\" ]*" /opt/awg_manager/webui/dist/index.html | head -5'` — deployed; service `active`, assets `index-DTtNIkYI.js` and `index-DvvasTAE.css`.
+  - `cd webui && PLAYWRIGHT_BASE_URL=http://89.125.103.24:8787/ui/ PLAYWRIGHT_API_KEY=... ./node_modules/.bin/playwright test tests/ntp-design.spec.ts -g 'NTP UI loads|NTP design follows' --project=chromium --workers=1` — passed (`2 passed`).
+- Result summary:
+  - The Status tab now focuses on runtime signals only; desired-vs-applied state remains communicated through the existing pending-apply banner.

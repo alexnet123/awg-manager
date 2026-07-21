@@ -18,7 +18,7 @@ test('NTP UI loads live configuration and Chrony status', async ({ page }) => {
   await expect(page.locator('tbody tr')).not.toHaveCount(0)
 
   await page.getByRole('tab', { name: 'Status' }).click()
-  await expect(page.getByText('Applied config', { exact: true })).toBeVisible()
+  await expect(page.getByText('Applied config', { exact: true })).toHaveCount(0)
   await expect(page.getByText('Runtime service', { exact: true })).toBeVisible()
   await expect(page.getByText('Runtime sync', { exact: true })).toBeVisible()
   await expect(page.getByRole('columnheader', { name: 'Reach' })).toBeVisible()
@@ -530,8 +530,7 @@ test('NTP design follows IPsec-like tabs and configuration flow', async ({ page 
   await page.getByRole('tab', { name: 'Time' }).click()
   await expect(page.getByText('pending apply', { exact: true })).toHaveCount(0)
   await page.getByRole('tab', { name: 'Status' }).click()
-  await expect(page.getByText('Applied config', { exact: true })).toBeVisible()
-  await expect(page.getByText('current', { exact: true })).toBeVisible()
+  await expect(page.getByText('Applied config', { exact: true })).toHaveCount(0)
   await page.reload()
   await page.getByRole('button', { name: 'NTP' }).click()
   await expect(page.getByText('Desired NTP configuration has pending changes.')).toHaveCount(0)

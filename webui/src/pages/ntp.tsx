@@ -1545,8 +1545,7 @@ export function NtpPage(props: { auth: AuthState; refreshNonce: number }) {
             Status below is the currently applied Chrony runtime. Time form changes are not active until Apply runs on Time.
           </div>
         ) : null}
-        <div className='grid gap-2 md:grid-cols-3 xl:grid-cols-7'>
-          <StatusTile label='Applied config' value={statusBadge(hasPendingApply ? 'pending apply' : 'current')} />
+        <div className='grid gap-2 md:grid-cols-3 xl:grid-cols-6'>
           <StatusTile label='Runtime service' value={statusBadge(runtimeStatus?.service.active ? 'active' : runtimeStatus?.service.state)} />
           <StatusTile label='Runtime sync' value={statusBadge(tracking?.leap_status || 'unknown')} />
           <StatusTile label='Stratum' value={tracking ? `Stratum ${tracking.stratum}` : '-'} mono />
