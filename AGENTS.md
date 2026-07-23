@@ -1,108 +1,152 @@
-# AGENTS: Development Rules (RU/EN)
+# AGENTS: Правила разработки
 
-This repository is under active modular refactoring. These rules are mandatory for all contributors and agents.
+Репозиторий активно развивается модульно. Этот файл — короткий обязательный
+набор правил для агентов и разработчиков. Подробности живут в канонических
+документах из раздела чтения ниже.
 
-## 0) Mandatory Read Order
+## 0) Что читать перед работой
 
-Before changing code or documentation, read only the relevant mandatory context:
+Перед изменением кода или документации читайте только релевантный контекст:
 
 1. `AGENTS.md`
 2. `docs/development/START_HERE.md`
-3. `docs/development/START_HERE.ru.md` when Russian development context is needed
+3. `docs/development/START_HERE.ru.md`, если нужен русский контекст
 4. `docs/development/MODULE_MAP.md`
 5. `docs/development/MODULE_MAP.ru.md`
-6. `docs/agents/PRODUCT_UI.ru.md`
-7. `docs/agents/MODULE_WORKFLOW.ru.md`
-8. `docs/agents/DOCUMENTATION_POLICY.ru.md`
-9. The current task, issue, or user request
+6. `docs/agents/PRODUCT_UI.ru.md`, если меняется UI
+7. `docs/agents/MODULE_WORKFLOW.ru.md`, если добавляется/меняется модуль
+8. `docs/agents/DOCUMENTATION_POLICY.ru.md`, если меняется документация
+9. `agents/README.md`, если задача касается agent materials или skills
+10. текущий запрос пользователя, issue или задача
 
-Do not read all of `docs/` by default. Open large references only when they are relevant to the current task.
+Не открывайте весь `docs/` по умолчанию. Большие справочники читайте только по
+необходимости.
 
-## 1) Working Mode
+## 1) Рабочий режим
 
-- Work in the current isolated workspace and current branch.
-- Do not create extra topic branches unless explicitly requested.
-- One task should have one responsible agent and one assigned workspace/worktree.
-- Do not change a neighboring module "while you are there".
-- Keep external behavior stable: no wire/API breaking changes unless explicitly approved.
-- Repository intent: parallel development is the default mode (`firewall` and `ipsec` streams may evolve independently in isolated workspaces/branches, then converge via integration flow).
-- Before coding, find the closest implemented analogue and list the expected changed files in the response or PR. Do not create a separate plan file unless explicitly requested.
+- Работайте в текущем workspace и текущей ветке.
+- Не создавайте новые ветки, worktree, plan/report/notes-файлы без явного запроса.
+- Не коммитьте, не пушьте и не деплойте, если пользователь этого не попросил.
+- Перед изменениями проверяйте `git status --short`, чтобы не затереть чужие или
+  уже накопленные локальные изменения.
+- Меняйте минимально нужный набор файлов и не правьте соседний модуль «заодно».
+- Сохраняйте внешний контракт: никаких ломающих wire/API изменений без явного
+  согласования.
+- Перед кодом найдите ближайший реализованный аналог и работайте по текущему
+  паттерну проекта, а не по новому собственному стилю.
+- Для сложных задач используйте внешний Codex plugin `@superpowers` как рабочий
+  процесс: discovery/design до реализации, планирование, systematic debugging,
+  code review или verification перед завершением. В task-файлах указывайте
+  `@superpowers` явно, если задача требует такого процесса.
+- Репозиторные материалы для агентов живут в `agents/`. Это переносимые
+  копии/регламенты, а не автоподключаемый `~/.codex`.
+- Если задача касается UI-style, skills или правил для агентов, один раз в сутки
+  при первом таком изменении синхронизируйте локальный skill
+  `~/.codex/skills/awg-manager-ui-style/SKILL.md` в
+  `agents/skills/awg-manager-ui-style/SKILL.md` и проверьте diff.
+- Не копируйте личные, экспериментальные или не относящиеся к AWG Manager skills
+  без явного решения владельца проекта.
 
-## 2) Backend Boundaries
+## 2) Актуальные домены и границы backend
 
-- `backend/app/*` is the only HTTP routing/error boundary.
-- `backend/app/manager_facade.py` is a compatibility facade and must stay backend-first.
-- Domain modules (`backend/domains/firewall`, `backend/domains/ipsec`, `backend/domains/awg`) must be HTTP-neutral.
-- Domain-to-domain imports are forbidden. Domains may import only `backend/common` and their own package.
-- `awg_core.py` is removed. Legacy runtime compatibility is provided by `backend/app/legacy_manager_compat.py`.
-- For refactor steps touching `backend/app/legacy_manager_compat.py` or `manager_facade.py`, prefer direct domain wiring over local wrapper helpers when signatures stay stable.
-- Private helper bridging from facade to removed `awg_core` paths is not allowed for new code paths; use domain modules first, keep fallback only via public service wrappers.
-- Naming decision completed: canonical backend domain name is `backend/domains/awg` (former transitional name `backend/domains/interfaces_clients` is retired).
-- Rename stability rule: do not reintroduce `backend/domains/interfaces_clients`; all new code/imports must use `backend/domains/awg`.
+- `backend/app/*` — единственная граница HTTP-роутинга, auth и HTTP-ошибок.
+- `backend/app/manager_facade.py` — compatibility facade; новая бизнес-логика
+  туда не добавляется.
+- Домены backend: `backend/domains/awg`, `backend/domains/firewall`,
+  `backend/domains/ipsec`, `backend/domains/ntp`.
+- Доменные модули должны быть HTTP-neutral.
+- Импорты между доменами запрещены. Домен может импортировать только
+  `backend/common` и собственный пакет.
+- Общие helper'ы переносите в `backend/common` только после реального повторного
+  использования.
+- `backend/domains/interfaces_clients` не возвращать. Канонический домен
+  interfaces/clients — `backend/domains/awg`.
+- `awg_core.py` удалён; legacy fallback допустим только через публичные compat
+  слои `backend/app/legacy_manager_compat.py` и `backend/app/legacy_manager_bridge.py`.
 
-## 3) Frontend Boundaries
+## 3) Frontend-границы
 
-- Use domain API clients in `webui/src/frontend/domains/*/api.ts`.
-- Put pages under `webui/src/pages`; decompose complex pages under `webui/src/pages/<domain>/` when needed.
-- Reuse components from `webui/src/components/ui`.
-- Do not introduce a second UI library or a new base component if the existing component set solves the task.
-- Keep UI/UX and existing routes stable during refactoring.
-- Structural decomposition is allowed; behavioral changes require explicit approval.
-- Do not rework `App.tsx`, the sidebar, theme, or global layout for one module unless explicitly approved.
-- After frontend changes, run a production build and update committed `webui/dist`.
+- Доменные API-клиенты живут в `webui/src/frontend/domains/*/api.ts`.
+- Страницы живут в `webui/src/pages`; сложные экраны можно декомпозировать в
+  `webui/src/pages/<domain>/`.
+- Переиспользуйте `webui/src/components/ui` и существующие экранные паттерны.
+- Не добавляйте вторую UI-библиотеку и не меняйте глобальную тему/layout/sidebar
+  ради одного модуля без явного согласования.
+- Для AWG Manager UI используйте доступный skill/гайд `awg-manager-ui-style`
+  как источник текущего компактного operator-стиля; если локальный skill
+  недоступен, используйте repo snapshot
+  `agents/skills/awg-manager-ui-style/SKILL.md` и ближайшие экраны
+  Firewall/IPsec/NTP.
+- После frontend-изменений запускайте production build и обновляйте `webui/dist`,
+  если пользователь не попросил временно работать только с исходниками.
 
 ## 4) Product UI
 
-- The primary user is a network administrator.
-- Screens must be predictable, compact, readable, and consistent with the closest existing screen.
-- A new screen should have one obvious primary operation.
-- Rare or dangerous parameters belong in `Advanced` unless hiding them would hide critical state.
-- `Save`, `Apply`, `Start`, `Stop`, `Restore`, and similar actions must describe their real effect. Do not call a storage-only write "Apply".
-- Show errors near the action context and keep entered data when it is safe.
-- Dangerous deletes and resets require explicit confirmation.
-- Before handoff, the agent checks spacing, labels, disabled/loading/error/success states, and consistency with the accepted UI pattern.
-- Product owner QA should focus on subjective product direction, not basic correctness. Final handoff may include up to three subjective questions in `What the product owner should evaluate`.
+- Основной пользователь — сетевой администратор.
+- UI должен быть компактным, предсказуемым и похожим на ближайший существующий
+  экран: Firewall, IPsec, Interfaces, Clients или NTP/Chrony.
+- У экрана должна быть одна очевидная primary-операция.
+- `Save`, `Apply`, `Start`, `Stop`, `Restart`, `Reload`, `Restore` должны
+  описывать реальный эффект. Не называйте storage-only действие словом `Apply`.
+- Runtime-состояние и сохранённая желаемая конфигурация должны быть визуально
+  различимы, если они могут расходиться.
+- Ошибки показывайте рядом с контекстом действия и не очищайте введённые данные,
+  если это безопасно.
+- Опасные удаления, reset и destructive runtime-действия требуют подтверждения.
+- Перед передачей UI проверьте spacing, labels, loading/error/success/disabled
+  состояния, адаптивность и browser console.
 
-Details: `docs/agents/PRODUCT_UI.ru.md`.
+Подробнее: `docs/agents/PRODUCT_UI.ru.md`.
 
-## 5) New Feature / Module Standard
+## 5) Стандарт новой функции или модуля
 
-Before implementation, define:
+Перед реализацией определите:
 
-1. the closest existing backend and frontend analogue;
-2. scope and out-of-scope;
-3. stored desired configuration versus runtime side effects;
-4. API contract;
-5. expected changed files;
-6. automated checks;
-7. which canonical document will be updated.
+1. ближайший backend/frontend-аналог;
+2. scope и out-of-scope;
+3. что хранится как desired config;
+4. какие runtime side effects есть при Apply/Start/Stop/etc.;
+5. API-контракт;
+6. ожидаемые изменяемые файлы;
+7. проверки;
+8. какой канонический документ будет обновлён.
 
-During implementation:
+Во время реализации:
 
-- change the minimum necessary file set;
-- do not add capabilities outside the accepted scope;
-- do not create temporary architecture, plan, progress, report, or notes `.md` files;
-- when a product decision is ambiguous, choose the conservative option or ask the owner no more than two options with a recommendation.
+- не добавляйте возможности вне согласованного scope;
+- разделяйте storage, preview/status и runtime side effects;
+- не создавайте временные постоянные `.md`-файлы;
+- если продуктовая развилка неоднозначна, выбирайте консервативный вариант или
+  спросите владельца максимум о двух вариантах с рекомендацией.
 
-Details: `docs/agents/MODULE_WORKFLOW.ru.md`.
+Подробнее: `docs/agents/MODULE_WORKFLOW.ru.md`.
 
-## 6) Documentation Policy (Bilingual)
+## 6) Где искать описание модулей
 
-When moving responsibilities between files/modules, update documentation in the same change:
+- Правила создания и изменения модулей: `docs/agents/MODULE_WORKFLOW.ru.md`.
+- Владение backend/frontend и текущая структура: `docs/development/MODULE_MAP.md`
+  и `docs/development/MODULE_MAP.ru.md`.
+- Публичный wire/API-контракт: `docs/reference/API.md`.
+- Пользовательский смысл экранов и полей: `docs/user/`, если для модуля есть
+  релевантный guide.
+- Детали конкретного модуля не дублируйте в `AGENTS.md`; обновляйте
+  канонические документы и ближайший кодовый аналог.
 
-- English map: `docs/development/MODULE_MAP.md`
-- Russian map: `docs/development/MODULE_MAP.ru.md`
-- Refactor progress log: `docs/development/REFRACTOR_PROGRESS.ru.md`
+## 7) Документация
 
-Minimum update requirement per refactor step:
+При переносе ответственности между файлами/модулями обновляйте в том же change:
 
-1. New module/function ownership (what moved where).
-2. Which old entrypoint delegates to the new module.
-3. Verification commands and result summary.
+- `docs/development/MODULE_MAP.md`
+- `docs/development/MODULE_MAP.ru.md`
+- `docs/development/REFRACTOR_PROGRESS.ru.md`, если это именно шаг рефакторинга
 
-Agents must not create new permanent Markdown files without need. Update the existing canonical document first.
+Документация в `docs/development/` поддерживается парами RU/EN; смысл обеих
+версий должен совпадать.
 
-Forbidden without explicit request or a clear canonical need:
+Не создавайте постоянные Markdown-файлы без необходимости. Сначала обновляйте
+существующий канонический документ.
+
+Запрещено без явного запроса или очевидной канонической необходимости:
 
 - `*_PLAN.md`
 - `*_REPORT.md`
@@ -114,66 +158,55 @@ Forbidden without explicit request or a clear canonical need:
 - `*_UPDATED.md`
 - `*_V2.md`
 
-Task plans, temporary notes, and one-off test results belong in the issue/PR/chat or ignored `tasks/active`, not permanent docs.
+Новый постоянный документ должен быть связан из `docs/README.md`.
 
-New permanent docs must be linked from `docs/README.md`.
+Подробнее: `docs/agents/DOCUMENTATION_POLICY.ru.md`.
 
-Details: `docs/agents/DOCUMENTATION_POLICY.ru.md`.
+## 8) Проверки
 
-## 7) Test Gate
+Выбирайте минимальные релевантные проверки, но не утверждайте, что всё прошло,
+без точной команды и результата.
 
-For backend refactor steps, run at least:
+Backend:
 
-1. `python3 -m pytest -q tests/test_firewall_rule_ops.py` (or relevant targeted test)
-2. `python3 -m pytest -q tests/test_api_contract.py`
-3. `python3 -m pytest -q tests`
-4. If `backend/app/legacy_manager_compat.py` or `backend/app/manager_facade.py` is changed: `python3 -m pytest -q tests/test_manager_access_facade.py`
+- targeted unit/API tests для изменённого домена;
+- `python3 -m pytest -q tests/test_api_contract.py`;
+- полный `python3 -m pytest -q tests`, когда изменение затрагивает общие слои,
+  app/facade или несколько доменов;
+- если изменены `backend/app/legacy_manager_compat.py` или
+  `backend/app/manager_facade.py`: `python3 -m pytest -q tests/test_manager_access_facade.py`.
 
-For frontend changes, run at least:
+Frontend:
 
-1. `cd webui && npm run build`
-2. the relevant Playwright test
-3. broader `npm run test:e2e` when the change touches global layout, routing, auth, or shared API clients
+- `cd webui && npm run build`;
+- релевантный Playwright-тест;
+- `npm run test:e2e`, если изменение затрагивает глобальный layout, routing,
+  auth или shared API clients.
 
-If any test is skipped, explicitly document why.
+Если проверка пропущена, явно укажите причину в финальном ответе.
 
-Never claim tests passed without the exact command and factual result.
+## 9) Стенды и deploy
 
-## 8) Language Rule
+- Стенды используются для проверки, но финальный acceptance target — один стенд.
+- Деплой на стенд делайте только по явному запросу пользователя.
+- Для финальной выкладки после согласования используйте код из `main`, если
+  пользователь не просит временный локальный snapshot.
+- Не чистите runtime/data/services на стенде без отдельного подтверждения.
+- После deploy укажите адрес стенда и какие проверки были выполнены.
 
-- Development documentation under `docs/development/` must be maintained in two files: RU and EN.
-- Keep both versions semantically aligned.
+## 10) Передача результата
 
-## 9) Rename Completion Note (`interfaces_clients` -> `awg`)
+Финальный ответ или PR description должны включать:
 
-Rename has been completed as a dedicated structural changeset.
+1. что изменилось;
+2. ключевые файлы;
+3. добавленные/изменённые endpoints или `API не менялся`;
+4. команды проверок и фактический результат;
+5. адрес стенда, если был deploy;
+6. известные ограничения;
+7. `Что должен оценить владелец продукта` — 0–3 субъективных пункта, если они
+   действительно нужны.
 
-1. All backend imports must use `backend.domains.awg`.
-2. Legacy references to `interfaces_clients` are allowed only in historical progress text.
-3. Any residual alias/back-compat shim for the old path requires explicit approval.
+Не создавайте отдельный report-файл для handoff.
 
-## 10) Result Handoff
-
-Final response or PR description must include:
-
-1. what changed;
-2. key changed files;
-3. added or changed endpoints, or `API не менялся`;
-4. test commands and factual results;
-5. stand address/profile if deployed;
-6. known limitations;
-7. `What the product owner should evaluate` / `Что должен оценить владелец продукта` with zero to three subjective points.
-
-Do not commit a separate report file for this handoff.
-
-Template: `tasks/RESULT_TEMPLATE.md`.
-
-## 11) Stand Strategy And Final Deployment
-
-- During development/refactor, temporary multi-instance validation setups are allowed.
-- Final acceptance target is a single stand.
-- After all changes are pushed and approved for release:
-  1. Clean the stand state (services/runtime/data as agreed for release procedure).
-  2. Deploy code from `main` only (no ad-hoc local snapshot).
-  3. Run release verification on that single stand.
-- Dual-port smoke (`:8787` + `:8788`) is not a mandatory release gate; it is optional diagnostic tooling.
+Шаблон: `tasks/RESULT_TEMPLATE.md`.
