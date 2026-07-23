@@ -17,10 +17,14 @@ test('NTP UI loads live configuration and Chrony status', async ({ page }) => {
   await expect(page.getByRole('columnheader', { name: 'Address' })).toBeVisible()
   await expect(page.locator('tbody tr')).not.toHaveCount(0)
 
-  await page.getByRole('tab', { name: 'Status' }).click()
+  await page.getByRole('tab', { name: 'Client status' }).click()
+  await expect(page.getByRole('button', { name: 'Refresh client status' })).toBeVisible()
+  await expect(page.getByRole('columnheader', { name: 'Address' })).toBeVisible()
+
+  await page.getByRole('tab', { name: 'Source status' }).click()
   await expect(page.getByText('Applied config', { exact: true })).toHaveCount(0)
-  await expect(page.getByText('Runtime service', { exact: true })).toBeVisible()
-  await expect(page.getByText('Runtime sync', { exact: true })).toBeVisible()
+  await expect(page.getByText('Runtime service', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('Source sync', { exact: true })).toBeVisible()
   await expect(page.getByRole('columnheader', { name: 'Reach' })).toBeVisible()
   expect(browserErrors).toEqual([])
 })
@@ -105,6 +109,52 @@ test('Access table follows IPsec-like list styling', async ({ page }) => {
   await expect(page.getByText('not managed', { exact: true })).toHaveCount(0)
 })
 
+test('NTP clients tab shows chronyc clients runtime table', async ({ page }) => {
+  await login(page)
+  await page.route('**/ntp/status', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        item: {
+          service: { active: true, enabled: true, state: 'active' },
+          current_time: Math.floor(Date.now() / 1000),
+          system_clock: { timezone: 'UTC', local_rtc: false, ntp_synchronized: true, ntp_service: true },
+          tracking: null,
+          activity: { sources_online: 1, sources_offline: 0, sources_burst_online: 0, sources_burst_offline: 0, sources_unresolved: 0 },
+          sources: [],
+          source_stats: [],
+          clients: [
+            {
+              address: '192.0.2.10',
+              ntp_packets: 12,
+              ntp_drops: 1,
+              ntp_interval: 6,
+              ntp_interval_last: null,
+              ntp_last: 8,
+              command_packets: 2,
+              command_drops: 0,
+              command_interval: null,
+              command_last: 4,
+            },
+          ],
+          errors: [],
+        },
+      }),
+    })
+  })
+
+  await page.getByRole('button', { name: 'NTP' }).click()
+  await page.getByRole('tab', { name: 'Client status' }).click()
+
+  await expect(page.getByRole('columnheader', { name: 'NTP packets' })).toBeVisible()
+  await expect(page.getByRole('columnheader', { name: 'Command packets' })).toBeVisible()
+  await expect(page.getByText('192.0.2.10')).toBeVisible()
+  await expect(page.getByText('12')).toBeVisible()
+  await expect(page.getByText('No Chrony clients seen yet.')).toHaveCount(0)
+})
+
 test('NTP source copy reuses settings with empty address', async ({ page }) => {
   await login(page)
 
@@ -166,6 +216,7 @@ test('NTP page renders configuration before slow Chrony status completes', async
           activity: null,
           sources: [],
           source_stats: [],
+          clients: [],
           errors: [],
         },
       }),
@@ -174,7 +225,7 @@ test('NTP page renders configuration before slow Chrony status completes', async
 
   await page.getByRole('button', { name: 'NTP' }).click()
   await expect(page.getByText('Loading NTP configuration…')).toHaveCount(0, { timeout: 1_500 })
-  await expect(page.getByRole('tab', { name: 'Time' })).toBeVisible({ timeout: 1_500 })
+  await expect(page.getByRole('tab', { name: 'Time', exact: true })).toBeVisible({ timeout: 1_500 })
   await expect(page.getByText('Manual time')).toBeVisible({ timeout: 1_500 })
   await expect(page.getByText('checking', { exact: true }).first()).toBeVisible()
 })
@@ -193,7 +244,7 @@ test('NTP page shell renders before slow saved configuration completes', async (
 
   await page.getByRole('button', { name: 'NTP' }).click()
   await expect(page.getByText('Loading NTP configuration…')).toHaveCount(0, { timeout: 500 })
-  await expect(page.getByRole('tab', { name: 'Time' })).toBeVisible({ timeout: 500 })
+  await expect(page.getByRole('tab', { name: 'Time', exact: true })).toBeVisible({ timeout: 500 })
   await expect(page.getByText('Manual time')).toBeVisible({ timeout: 500 })
   await expect(page.getByRole('button', { name: 'Apply', exact: true })).toBeDisabled()
 })
@@ -235,6 +286,7 @@ test('NTP page auto-refreshes desired configuration changed elsewhere', async ({
       activity: { sources_online: 1, sources_offline: 0, sources_burst_online: 0, sources_burst_offline: 0, sources_unresolved: 0 },
       sources: [],
       source_stats: [],
+      clients: [],
       errors: [],
     },
   }
@@ -256,7 +308,7 @@ test('NTP page auto-refreshes desired configuration changed elsewhere', async ({
   })
 
   await page.getByRole('button', { name: 'NTP' }).click()
-  await page.getByRole('tab', { name: 'Time' }).click()
+  await page.getByRole('tab', { name: 'Time', exact: true }).click()
   await expect(page.getByLabel('Enable NTP server')).not.toBeChecked()
   await expect(page.getByLabel('Enable NTP server')).toBeChecked({ timeout: 7_000 })
 })
@@ -298,6 +350,7 @@ test('NTP server settings expose help, dependencies and submit full payload', as
       activity: { sources_online: 0, sources_offline: 0, sources_burst_online: 0, sources_burst_offline: 0, sources_unresolved: 0 },
       sources: [],
       source_stats: [],
+      clients: [],
       errors: [],
     },
   }
@@ -330,7 +383,7 @@ test('NTP server settings expose help, dependencies and submit full payload', as
   })
 
   await page.getByRole('button', { name: 'NTP' }).click()
-  await page.getByRole('tab', { name: 'Time' }).click()
+  await page.getByRole('tab', { name: 'Time', exact: true }).click()
   await expect(page.getByText('NTP server', { exact: true })).toBeVisible()
   await expect(page.getByText('writes chrony.conf and restarts Chrony.')).toHaveCount(0)
   await expect(page.getByText('controls who may query this server.')).toHaveCount(0)
@@ -410,14 +463,16 @@ test('NTP design follows IPsec-like tabs and configuration flow', async ({ page 
 
   await page.getByRole('button', { name: 'NTP' }).click()
   await expect(page.getByRole('heading', { name: 'NTP / Chrony' })).toBeVisible()
-  await expect(page.getByRole('tab', { name: 'Time' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'Time', exact: true })).toBeVisible()
   await expect(page.getByRole('tab', { name: 'Sources' })).toBeVisible()
   await expect(page.getByRole('tab', { name: 'Server' })).toHaveCount(0)
   await expect(page.getByRole('tab', { name: 'Access' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'Client status' })).toBeVisible()
   await expect(page.getByRole('tab', { name: 'Advanced' })).toHaveCount(0)
-  await expect(page.getByRole('tab', { name: 'Status' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'Status', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('tab', { name: 'Source status' })).toBeVisible()
 
-  await page.getByRole('tab', { name: 'Time' }).click()
+  await page.getByRole('tab', { name: 'Time', exact: true }).click()
   await expect(page.locator('[role="tabpanel"][data-state="active"]')).toHaveCSS('overflow-y', 'auto')
   await expect(page.getByText('System time', { exact: true })).toBeVisible()
   await expect(page.getByText('Manual time')).toBeVisible()
@@ -527,9 +582,9 @@ test('NTP design follows IPsec-like tabs and configuration flow', async ({ page 
   await expect(sourceEnableButton).toBeEnabled()
   await expect(page.getByText('NTP source changes applied. Chrony is active.')).toBeVisible()
   await expect(page.getByText('Desired NTP configuration has pending changes.')).toHaveCount(0)
-  await page.getByRole('tab', { name: 'Time' }).click()
+  await page.getByRole('tab', { name: 'Time', exact: true }).click()
   await expect(page.getByText('pending apply', { exact: true })).toHaveCount(0)
-  await page.getByRole('tab', { name: 'Status' }).click()
+  await page.getByRole('tab', { name: 'Source status' }).click()
   await expect(page.getByText('Applied config', { exact: true })).toHaveCount(0)
   await page.reload()
   await page.getByRole('button', { name: 'NTP' }).click()

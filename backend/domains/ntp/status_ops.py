@@ -15,6 +15,7 @@ STATUS_COMMANDS = {
     'activity': ['chronyc', '-n', '-c', 'activity'],
     'sources': ['chronyc', '-n', '-c', 'sources'],
     'source_stats': ['chronyc', '-n', '-c', 'sourcestats'],
+    'clients': ['chronyc', '-n', '-c', 'clients'],
 }
 
 
@@ -28,6 +29,7 @@ def collect_status(command_runner=subprocess.run):
     activity = _parse_chronyc_result('activity', _parse_activity, results['activity'], errors, None)
     sources = _parse_chronyc_result('sources', _parse_sources, results['sources'], errors, [])
     source_stats = _parse_chronyc_result('sourcestats', _parse_source_stats, results['source_stats'], errors, [])
+    clients = _parse_chronyc_result('clients', _parse_clients, results['clients'], errors, [])
     return {
         'service': service_state,
         'current_time': current_time,
@@ -36,6 +38,7 @@ def collect_status(command_runner=subprocess.run):
         'activity': activity,
         'sources': sources,
         'source_stats': source_stats,
+        'clients': clients,
         'errors': errors,
     }
 
@@ -171,6 +174,26 @@ def _parse_source_stats(output):
     return items
 
 
+def _parse_clients(output):
+    items = []
+    for row in _rows(output):
+        if len(row) < 10:
+            raise ValueError('clients returned an incomplete row')
+        items.append({
+            'address': row[0],
+            'ntp_packets': _integer(row[1]),
+            'ntp_drops': _integer(row[2]),
+            'ntp_interval': _optional_integer(row[3]),
+            'ntp_interval_last': _optional_integer(row[4]),
+            'ntp_last': _optional_integer(row[5]),
+            'command_packets': _integer(row[6]),
+            'command_drops': _integer(row[7]),
+            'command_interval': _optional_integer(row[8]),
+            'command_last': _optional_integer(row[9]),
+        })
+    return items
+
+
 def _single_row(output, command, minimum_fields):
     rows = _rows(output)
     if not rows or len(rows[0]) < minimum_fields:
@@ -184,6 +207,12 @@ def _rows(output):
 
 def _integer(value):
     return int(value)
+
+
+def _optional_integer(value):
+    if value == '-':
+        return None
+    return _integer(value)
 
 
 def _number(value):

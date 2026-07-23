@@ -25,7 +25,7 @@ import {
 } from '@/frontend/domains/ntp/api'
 import { useDraggableWindow } from './firewall/useDraggableWindow'
 
-type NtpTab = 'time' | 'sources' | 'access' | 'status'
+type NtpTab = 'time' | 'sources' | 'access' | 'clients' | 'status'
 type EditorMode = 'add' | 'edit'
 type SourceType = 'server' | 'pool'
 type AccessAction = 'allow' | 'deny'
@@ -33,6 +33,8 @@ type KeyAlgorithm = NtpKey['algorithm']
 type SortDirection = 'asc' | 'desc'
 type SourceColumnKey = 'type' | 'address' | 'min_poll' | 'max_poll' | 'iburst' | 'auth_key' | 'options'
 type AccessColumnKey = 'action' | 'network'
+type ClientStatusColumnKey = 'address' | 'ntp_packets' | 'ntp_drops' | 'ntp_interval' | 'ntp_last' | 'command_packets' | 'command_drops' | 'command_last'
+type SourceStatusColumnKey = 'state' | 'address' | 'stratum' | 'poll' | 'reach' | 'last_rx' | 'adjusted_offset' | 'estimated_error'
 type SortState<K extends string> = { key: K | null; dir: SortDirection }
 
 type SourceRow = {
@@ -288,6 +290,28 @@ const accessColumnLabels: Record<AccessColumnKey, string> = {
   action: 'Action',
   network: 'Network',
 }
+const clientStatusColumnOrder: ClientStatusColumnKey[] = ['address', 'ntp_packets', 'ntp_drops', 'ntp_interval', 'ntp_last', 'command_packets', 'command_drops', 'command_last']
+const clientStatusColumnLabels: Record<ClientStatusColumnKey, string> = {
+  address: 'Address',
+  ntp_packets: 'NTP packets',
+  ntp_drops: 'NTP dropped',
+  ntp_interval: 'NTP interval',
+  ntp_last: 'Last NTP',
+  command_packets: 'Command packets',
+  command_drops: 'Command dropped',
+  command_last: 'Last command',
+}
+const sourceStatusColumnOrder: SourceStatusColumnKey[] = ['state', 'address', 'stratum', 'poll', 'reach', 'last_rx', 'adjusted_offset', 'estimated_error']
+const sourceStatusColumnLabels: Record<SourceStatusColumnKey, string> = {
+  state: 'State',
+  address: 'Address',
+  stratum: 'Stratum',
+  poll: 'Poll',
+  reach: 'Reach',
+  last_rx: 'Last Rx',
+  adjusted_offset: 'Offset',
+  estimated_error: 'Error',
+}
 
 function getZonedTime(timezone: string, epochSeconds?: number) {
   try {
@@ -432,6 +456,11 @@ function configSignature(config: NtpConfig | null) {
 function formatSeconds(value?: number) {
   if (typeof value !== 'number') return '-'
   return `${value >= 0 ? '+' : ''}${value.toFixed(6)}s`
+}
+
+function formatOptionalSeconds(value?: number | null) {
+  if (typeof value !== 'number') return '-'
+  return `${value}s`
 }
 
 function formatReferenceTime(value: number | undefined, timezone: string) {
@@ -647,6 +676,8 @@ export function NtpPage(props: { auth: AuthState; refreshNonce: number }) {
   const [selectedIds, setSelectedIds] = React.useState<string[]>(['src-1'])
   const [sourceSort, setSourceSort] = React.useState<SortState<SourceColumnKey>>(emptySort<SourceColumnKey>())
   const [accessSort, setAccessSort] = React.useState<SortState<AccessColumnKey>>(emptySort<AccessColumnKey>())
+  const [clientStatusSort, setClientStatusSort] = React.useState<SortState<ClientStatusColumnKey>>(emptySort<ClientStatusColumnKey>())
+  const [sourceStatusSort, setSourceStatusSort] = React.useState<SortState<SourceStatusColumnKey>>(emptySort<SourceStatusColumnKey>())
   const [editorOpen, setEditorOpen] = React.useState(false)
   const [editorTab, setEditorTab] = React.useState<NtpTab>('sources')
   const [editorMode, setEditorMode] = React.useState<EditorMode>('edit')
@@ -1180,10 +1211,17 @@ export function NtpPage(props: { auth: AuthState; refreshNonce: number }) {
 
   function renderToolbar() {
     if (activeTab === 'time') return null
+    if (activeTab === 'clients') {
+      return (
+        <div className='flex flex-wrap gap-2'>
+          <Button size='sm' variant='outline' disabled={statusLoading} onClick={refreshStatus}>{statusLoading ? <Loader2 className='animate-spin' /> : <RotateCcw />}Refresh client status</Button>
+        </div>
+      )
+    }
     if (activeTab === 'status') {
       return (
         <div className='flex flex-wrap gap-2'>
-          <Button size='sm' variant='outline' disabled={statusLoading} onClick={refreshStatus}>{statusLoading ? <Loader2 className='animate-spin' /> : <RotateCcw />}Refresh status</Button>
+          <Button size='sm' variant='outline' disabled={statusLoading} onClick={refreshStatus}>{statusLoading ? <Loader2 className='animate-spin' /> : <RotateCcw />}Refresh source status</Button>
           <Button size='sm' variant='outline' disabled={systemAction !== null} onClick={() => controlService('restart')}>{systemAction === 'restart' ? <Loader2 className='animate-spin' /> : null}Restart</Button>
           <Button size='sm' variant='outline' disabled={systemAction !== null} onClick={() => controlService('reload')}>{systemAction === 'reload' ? <Loader2 className='animate-spin' /> : null}Reload</Button>
         </div>
@@ -1536,8 +1574,43 @@ export function NtpPage(props: { auth: AuthState; refreshNonce: number }) {
     )
   }
 
+  function renderClientsTable() {
+    const clients = runtimeStatus?.clients || []
+    const sortedClients = sortRows(clients, clientStatusSort, (row, key) => row[key])
+
+    return (
+      <TableShell>
+        <Table className='w-max min-w-full'>
+          <TableHeader>
+            <TableRow>
+              {clientStatusColumnOrder.map((key) => (
+                <SortableHead key={key} sortKey={key} label={clientStatusColumnLabels[key]} sort={clientStatusSort} onSort={(next) => setClientStatusSort((prev) => nextSortState(prev, next))} />
+              ))}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {sortedClients.map((client) => (
+              <TableRow key={`${client.address}:${client.ntp_packets}:${client.command_packets}`} className='h-8 cursor-default select-none hover:bg-blue-100/80 dark:hover:bg-blue-900/35'>
+                <TableCell className='font-mono text-[11px]'>{client.address}</TableCell>
+                <TableCell>{client.ntp_packets}</TableCell>
+                <TableCell>{client.ntp_drops}</TableCell>
+                <TableCell>{formatOptionalSeconds(client.ntp_interval)}</TableCell>
+                <TableCell>{formatOptionalSeconds(client.ntp_last)}</TableCell>
+                <TableCell>{client.command_packets}</TableCell>
+                <TableCell>{client.command_drops}</TableCell>
+                <TableCell>{formatOptionalSeconds(client.command_last)}</TableCell>
+              </TableRow>
+            ))}
+            {!clients.length ? <EmptyRow colSpan={8} text={statusLoading ? 'Loading Chrony clients…' : 'No Chrony clients seen yet.'} /> : null}
+          </TableBody>
+        </Table>
+      </TableShell>
+    )
+  }
+
   function renderStatusTable() {
     const tracking = runtimeStatus?.tracking
+    const sortedSources = sortRows(runtimeStatus?.sources || [], sourceStatusSort, (row, key) => row[key])
     return (
       <div className='flex min-h-0 flex-1 flex-col gap-2'>
         {hasPendingApply ? (
@@ -1545,13 +1618,12 @@ export function NtpPage(props: { auth: AuthState; refreshNonce: number }) {
             Status below is the currently applied Chrony runtime. Time form changes are not active until Apply runs on Time.
           </div>
         ) : null}
-        <div className='grid gap-2 md:grid-cols-3 xl:grid-cols-6'>
-          <StatusTile label='Runtime service' value={statusBadge(runtimeStatus?.service.active ? 'active' : runtimeStatus?.service.state)} />
-          <StatusTile label='Runtime sync' value={statusBadge(tracking?.leap_status || 'unknown')} />
+        <div className='grid gap-2 md:grid-cols-3 xl:grid-cols-5'>
+          <StatusTile label='Source sync' value={statusBadge(tracking?.leap_status || 'unknown')} />
           <StatusTile label='Stratum' value={tracking ? `Stratum ${tracking.stratum}` : '-'} mono />
-          <StatusTile label='Runtime reference' value={tracking?.reference_address || '-'} mono />
+          <StatusTile label='Reference' value={tracking?.reference_address || '-'} mono />
           <StatusTile label='System offset' value={formatSeconds(tracking?.system_time)} mono />
-          <StatusTile label='Runtime sources' value={runtimeStatus?.activity?.sources_online ?? '-'} mono />
+          <StatusTile label='Sources online' value={runtimeStatus?.activity?.sources_online ?? '-'} mono />
         </div>
         {runtimeStatus?.errors.length ? (
           <div className='rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive'>
@@ -1562,19 +1634,14 @@ export function NtpPage(props: { auth: AuthState; refreshNonce: number }) {
           <Table className='w-max min-w-full'>
             <TableHeader>
               <TableRow>
-                <TableHead>State</TableHead>
-                <TableHead>Address</TableHead>
-                <TableHead>Stratum</TableHead>
-                <TableHead>Poll</TableHead>
-                <TableHead>Reach</TableHead>
-                <TableHead>Last Rx</TableHead>
-                <TableHead>Offset</TableHead>
-                <TableHead>Error</TableHead>
+                {sourceStatusColumnOrder.map((key) => (
+                  <SortableHead key={key} sortKey={key} label={sourceStatusColumnLabels[key]} sort={sourceStatusSort} onSort={(next) => setSourceStatusSort((prev) => nextSortState(prev, next))} />
+                ))}
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(runtimeStatus?.sources || []).map((source) => (
-                <TableRow key={`${source.mode}:${source.address}`} className='h-8'>
+              {sortedSources.map((source) => (
+                <TableRow key={`${source.mode}:${source.address}`} className='h-8 cursor-default select-none hover:bg-blue-100/80 dark:hover:bg-blue-900/35'>
                   <TableCell>{statusBadge(source.state === '*' ? 'selected' : source.state)}</TableCell>
                   <TableCell className='font-mono text-[11px]'>{source.address}</TableCell>
                   <TableCell>{source.stratum}</TableCell>
@@ -1717,7 +1784,7 @@ export function NtpPage(props: { auth: AuthState; refreshNonce: number }) {
 
       {!loading && hasPendingApply ? (
         <div className='rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-sm text-amber-700 dark:text-amber-300'>
-          Desired NTP configuration has pending changes. Runtime status still shows the currently applied Chrony config until you press Apply on Time.
+          Desired NTP configuration has pending changes. Source status still shows the currently applied Chrony config until you press Apply on Time.
         </div>
       ) : null}
 
@@ -1729,7 +1796,8 @@ export function NtpPage(props: { auth: AuthState; refreshNonce: number }) {
                 <TabsTrigger className='px-4 text-sm' value='time'>Time</TabsTrigger>
                 <TabsTrigger className='px-4 text-sm' value='sources'>Sources</TabsTrigger>
                 <TabsTrigger className='px-4 text-sm' value='access'>Access</TabsTrigger>
-                <TabsTrigger className='px-4 text-sm' value='status'>Status</TabsTrigger>
+                <TabsTrigger className='px-4 text-sm' value='clients'>Client status</TabsTrigger>
+                <TabsTrigger className='px-4 text-sm' value='status'>Source status</TabsTrigger>
               </TabsList>
             </Tabs>
           </div>
@@ -1741,6 +1809,7 @@ export function NtpPage(props: { auth: AuthState; refreshNonce: number }) {
               <TabsContent value='time' className='mt-0 flex min-h-0 flex-1 flex-col overflow-y-auto'>{renderTimePanel()}</TabsContent>
               <TabsContent value='sources' className='mt-0 flex min-h-0 flex-1 flex-col'>{renderSourcesTable()}</TabsContent>
               <TabsContent value='access' className='mt-0 flex min-h-0 flex-1 flex-col'>{renderAccessTable()}</TabsContent>
+              <TabsContent value='clients' className='mt-0 flex min-h-0 flex-1 flex-col'>{renderClientsTable()}</TabsContent>
               <TabsContent value='status' className='mt-0 flex min-h-0 flex-1 flex-col'>{renderStatusTable()}</TabsContent>
             </div>
           </Tabs>

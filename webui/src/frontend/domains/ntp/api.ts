@@ -105,6 +105,18 @@ export type NtpStatus = {
     offset: number
     standard_deviation: number
   }>
+  clients: Array<{
+    address: string
+    ntp_packets: number
+    ntp_drops: number
+    ntp_interval: number | null
+    ntp_interval_last: number | null
+    ntp_last: number | null
+    command_packets: number
+    command_drops: number
+    command_interval: number | null
+    command_last: number | null
+  }>
   errors: Array<{ command: string; error: string }>
 }
 

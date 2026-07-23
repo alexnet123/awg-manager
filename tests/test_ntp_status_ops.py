@@ -47,6 +47,7 @@ class NTPStatusOpsTestCase(unittest.TestCase):
             ('chronyc', '-n', '-c', 'activity'): subprocess.CompletedProcess([], 0, stdout='4,0,0,0,0\n', stderr=''),
             ('chronyc', '-n', '-c', 'sources'): subprocess.CompletedProcess([], 0, stdout='^,*,82.146.53.58,2,6,37,56,-0.0000003,-0.0000115,0.0021\n', stderr=''),
             ('chronyc', '-n', '-c', 'sourcestats'): subprocess.CompletedProcess([], 0, stdout='82.146.53.58,5,3,71,0.652,12.438,0.000038,0.000069\n', stderr=''),
+            ('chronyc', '-n', '-c', 'clients'): subprocess.CompletedProcess([], 0, stdout='192.0.2.10,12,1,6,-,8,0,0,-,-\n', stderr=''),
         })
 
         status = status_ops.collect_status(command_runner=runner)
@@ -60,6 +61,13 @@ class NTPStatusOpsTestCase(unittest.TestCase):
         self.assertEqual(status['sources'][0]['state'], '*')
         self.assertAlmostEqual(status['sources'][0]['estimated_error'], 0.0021)
         self.assertEqual(status['source_stats'][0]['samples'], 5)
+        self.assertEqual(status['clients'][0]['address'], '192.0.2.10')
+        self.assertEqual(status['clients'][0]['ntp_packets'], 12)
+        self.assertEqual(status['clients'][0]['ntp_drops'], 1)
+        self.assertEqual(status['clients'][0]['ntp_interval'], 6)
+        self.assertEqual(status['clients'][0]['ntp_interval_last'], None)
+        self.assertEqual(status['clients'][0]['ntp_last'], 8)
+        self.assertEqual(status['clients'][0]['command_packets'], 0)
         self.assertEqual(status['errors'], [])
 
     def test_collect_status_keeps_service_state_when_chronyc_fails(self):
@@ -78,7 +86,8 @@ class NTPStatusOpsTestCase(unittest.TestCase):
         self.assertIsNone(status['system_clock'])
         self.assertIsNone(status['tracking'])
         self.assertEqual(status['sources'], [])
-        self.assertEqual(len(status['errors']), 5)
+        self.assertEqual(status['clients'], [])
+        self.assertEqual(len(status['errors']), 6)
 
     def test_collect_status_runs_independent_commands_concurrently(self):
         runner = _ConcurrentRunner({

@@ -530,6 +530,7 @@ class APITestCase(unittest.TestCase):
                     "activity": {"sources_online": 4},
                     "sources": [],
                     "source_stats": [],
+                    "clients": [{"address": "192.0.2.10", "ntp_packets": 2}],
                     "errors": [],
                 },
             ):
@@ -538,6 +539,7 @@ class APITestCase(unittest.TestCase):
                 )
             self.assertEqual(status, 200)
             self.assertEqual(data["item"]["tracking"]["stratum"], 3)
+            self.assertEqual(data["item"]["clients"][0]["address"], "192.0.2.10")
 
             with mock.patch(
                 "backend.domains.ntp.service.runtime_ops.list_timezones",

@@ -48,9 +48,8 @@ test('NTP client toggle applies only through main Apply and manual time recovers
   await expect(page.getByLabel('Enable NTP client')).toBeChecked()
   await expect(page.getByText('synchronized', { exact: true })).toBeVisible({ timeout: 90_000 })
 
-  await page.getByRole('tab', { name: 'Status' }).click()
-  await page.getByRole('button', { name: 'Refresh status' }).click()
+  await page.getByRole('tab', { name: 'Source status' }).click()
+  await page.getByRole('button', { name: 'Refresh source status' }).click()
   await expect(page.getByText('Normal', { exact: true })).toBeVisible({ timeout: 45_000 })
-  await expect(page.getByText('current', { exact: true })).toBeVisible()
   expect(browserErrors).toEqual([])
 })
