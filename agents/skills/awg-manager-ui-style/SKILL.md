@@ -1,6 +1,6 @@
 ---
 name: awg-manager-ui-style
-description: Use when Codex creates, edits, reviews, or tests AWG Manager frontend UI, especially Firewall, IPsec, NTP/Chrony screens, add/edit dialogs, admin tables, status panels, advanced network fields, collections/objects UI, or any task asking to keep the compact AWG Manager operator style.
+description: Use when Codex creates, edits, reviews, or tests AWG Manager frontend UI, especially AmneziaWG/AWG interfaces and peers, Firewall, IPsec, NTP/Chrony screens, add/edit dialogs, admin tables, status panels, advanced network fields, collections/objects UI, or any task asking to keep the compact AWG Manager operator style.
 ---
 
 # AWG Manager UI Style
@@ -88,6 +88,23 @@ Use the same table grammar across Firewall, IPsec, Sources, Access, and Keys.
 - Avoid a separate `Enabled` column when enabled/disabled is already represented by row state and toolbar actions.
 - Keep columns compact and useful. Remove diagnostic columns that add no action or decision value.
 - Copy actions should duplicate the selected entry but clear the identity field (`address`, `network`, or similar) so the user can create a nearby rule/source safely.
+
+## AmneziaWG Patterns
+
+AmneziaWG must follow the IPsec table and toolbar style closely.
+
+- Treat `AmneziaWG` as one domain page, not separate sidebar sections for interfaces and clients. Use compact tabs: `Interfaces` and `Peers`.
+- Call clients `peers` in user-facing AWG labels, empty states, and technical descriptions when practical; keep backend/API names as `clients` where that is the existing contract.
+- Do not show page subtitles or marketing helper copy under the `AmneziaWG` heading unless explicitly requested.
+- Put `Add` in the tab toolbar and route it to the active tab: create interface on `Interfaces`, create peer on `Peers`.
+- Use the standard IPsec-style toolbar on each tab: `Add`, `Del`, `Disable`, `Enable`. Do not add a local `Refresh`; use the global header refresh only.
+- Do not add local search or pagination to AWG tables unless the user explicitly requests it or there is a proven data-volume problem.
+- Use IPsec-like flat, sortable tables, not nested cards-with-table sections. Avoid extra panel titles such as `Click a row to view details and actions`.
+- Keep long keys/config-like values compact in tables with middle truncation and full value in `title`; do not let public keys stretch the table.
+- Rows select on click and open the same Add/Edit dialog on double-click, like IPsec. Do not use right-side details drawers for AWG.
+- Move interface/client details into the Add/Edit dialog. Keep interface public key/config preview and peer public key/config/QR access available there.
+- AWG Add/Edit windows must use the Firewall/IPsec draggable floating-window shell: muted drag header, compact body sections, fixed footer actions. Open them horizontally centered in the `main` workspace and vertically near the top of the workspace by default, then let users drag them. Do not use centered non-draggable Radix modal.
+- If backend data disappears on a live stand, check API state before changing UI. Do not run destructive e2e setup against a live stand.
 
 ## Dialogs And Drawers
 

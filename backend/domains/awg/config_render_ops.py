@@ -21,6 +21,7 @@ def serialize_interface_row(
         "srv_ip": row[8],
         "srv_dns": row[9],
         "awg_params": get_filtered_awg_params_fn(awg_version, awg_params),
+        "enabled": bool(row[26]) if len(row) > 26 and row[26] is not None else True,
     }
 
 
@@ -45,6 +46,7 @@ def serialize_client_row(
         "ip": row[4],
         "wg_interface": row[5],
         "allowed_ips": allowed_ips,
+        "enabled": bool(row[6]) if len(row) > 6 and row[6] is not None else True,
     }
     if include_private_key:
         client_data["privkey"] = decrypt_private_key_fn(row[3])

@@ -11,6 +11,7 @@ export type InterfaceItem = {
   srv_ip: string
   srv_dns: string
   awg_params: Record<string, string | number | null>
+  enabled: boolean
 }
 
 export type ClientItem = {
@@ -20,6 +21,7 @@ export type ClientItem = {
   ip: string
   wg_interface: string
   allowed_ips: string
+  enabled: boolean
   privkey?: string
 }
 
@@ -82,6 +84,14 @@ export async function updateInterface(auth: AuthState, id: number, body: any): P
   return payload.item
 }
 
+export async function setInterfaceEnabled(auth: AuthState, id: number, enabled: boolean): Promise<InterfaceItem> {
+  const action = enabled ? 'enable' : 'disable'
+  const res = await fetch(`/interfaces/${id}/${action}`, { method: 'POST', headers: headers(auth) })
+  if (!res.ok) throw new Error(await parseError(res))
+  const payload = await res.json()
+  return payload.item
+}
+
 export async function createClient(auth: AuthState, body: any): Promise<ClientItem> {
   const res = await fetch('/clients', {
     method: 'POST',
@@ -104,6 +114,14 @@ export async function updateClient(auth: AuthState, id: number, body: any): Prom
     headers: headers(auth, { 'Content-Type': 'application/json' }),
     body: JSON.stringify(body),
   })
+  if (!res.ok) throw new Error(await parseError(res))
+  const payload = await res.json()
+  return payload.item
+}
+
+export async function setClientEnabled(auth: AuthState, id: number, enabled: boolean): Promise<ClientItem> {
+  const action = enabled ? 'enable' : 'disable'
+  const res = await fetch(`/clients/${id}/${action}`, { method: 'POST', headers: headers(auth) })
   if (!res.ok) throw new Error(await parseError(res))
   const payload = await res.json()
   return payload.item

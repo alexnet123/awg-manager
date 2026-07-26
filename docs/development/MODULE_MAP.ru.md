@@ -403,6 +403,20 @@
   - CRUD: `getIpsecPeers`, `upsertIpsecPeer`, `deleteIpsecPeer`, `getIpsecPolicies`, `upsertIpsecPolicy`, `deleteIpsecPolicy`, `deleteIpsecIdentity`, `deleteIpsecPhase1Profile`, `deleteIpsecPhase2Proposal`
   - runtime/actions: `applyIpsec`, `getIpsecActivePeers`, `getIpsecInstalledSas`, `getIpsecConfigPreview`, `initiateIpsecPolicy`, `terminateIpsecPeer`
 
+### `webui/src/pages/awg.tsx`
+
+- Владеет объединенной рабочей областью AmneziaWG:
+  - пункт навигации sidebar `AmneziaWG`
+  - компактные вкладки `Interfaces` / `Peers`
+  - действие `Add` в контексте активной вкладки, открывающее создание interface или peer
+
+### `webui/src/pages/interfaces.tsx` и `webui/src/pages/clients.tsx`
+
+- Владеют содержимым вкладок AmneziaWG:
+  - компактные таблицы, поиск, пагинация, выбор строки и details drawers
+  - создание/редактирование interface, генерация AWG params, preview interface config
+  - создание/редактирование peer, preview client config, QR preview и downloads
+
 ### `webui/src/frontend/domains/ntp/api.ts`
 
 - Типизированный клиент контрактов NTP/Chrony API:

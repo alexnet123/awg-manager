@@ -10,7 +10,12 @@ export async function login(page: Page) {
   await expect(page.getByText('Sign in')).toBeVisible()
   await page.locator('input[type="password"]').first().fill(apiKey)
   await page.getByRole('button', { name: 'Enter' }).click()
-  await expect(page.getByRole('button', { name: 'Interfaces' })).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByRole('button', { name: 'AmneziaWG' })).toBeVisible({ timeout: 30_000 })
+}
+
+export async function openAwgTab(page: Page, tab: 'Interfaces' | 'Peers') {
+  await page.getByRole('button', { name: 'AmneziaWG' }).click()
+  await page.getByRole('tab', { name: tab }).click()
 }
 
 export async function createInterfaceViaUi(page: Page, opts: {
@@ -21,6 +26,8 @@ export async function createInterfaceViaUi(page: Page, opts: {
   serverIp?: string
   dns?: string
 }) {
+  await openAwgTab(page, 'Interfaces')
+  await page.getByRole('button', { name: 'Add' }).click()
   await page.getByPlaceholder('awg0').fill(opts.name)
   if (opts.port) {
     await page.locator('input[type="number"]').first().fill(String(opts.port))
@@ -31,5 +38,5 @@ export async function createInterfaceViaUi(page: Page, opts: {
   }
   await page.getByPlaceholder('203.0.113.10').fill(opts.serverIp ?? '132.243.237.120')
   await page.getByPlaceholder('1.1.1.1').fill(opts.dns ?? '1.1.1.1')
-  await page.getByRole('button', { name: 'Create' }).click()
+  await page.getByRole('button', { name: 'Add Interface' }).click()
 }

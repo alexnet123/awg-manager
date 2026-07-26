@@ -196,6 +196,43 @@ def update_interface_service(
     )
 
 
+def set_interface_enabled_service(
+    interface_id,
+    enabled,
+    *,
+    cursor,
+    conn,
+    wg_interface_columns,
+    build_awg_params_from_row_fn,
+    remove_interface_runtime_fn,
+    apply_interface_runtime_fn,
+    run_command_fn,
+):
+    return interface_service_ops.set_interface_enabled_service(
+        interface_id,
+        enabled,
+        fetch_interface_row_fn=lambda target_id: cursor.execute(
+            f"SELECT {wg_interface_columns} FROM wg_interfaces WHERE id = ?",
+            (target_id,),
+        ).fetchone(),
+        build_awg_params_from_row_fn=build_awg_params_from_row_fn,
+        remove_interface_runtime_fn=remove_interface_runtime_fn,
+        apply_interface_runtime_fn=apply_interface_runtime_fn,
+        fetch_enabled_peer_rows_fn=lambda wg_iface: cursor.execute(
+            "SELECT pubkey, ip FROM clients WHERE wg_interface = ? AND COALESCE(enabled, 1) = 1 ORDER BY id ASC",
+            (wg_iface,),
+        ).fetchall(),
+        runtime_add_peer_fn=lambda wg_iface, pub, ip: run_command_fn(
+            ["awg", "set", wg_iface, "peer", pub, "allowed-ips", ip + "/32"]
+        ),
+        update_interface_enabled_fn=lambda target_id, next_enabled: cursor.execute(
+            "UPDATE wg_interfaces SET enabled = ? WHERE id = ?",
+            (next_enabled, target_id),
+        ),
+        commit_fn=conn.commit,
+    )
+
+
 def create_client_service(
     payload,
     *,
@@ -306,6 +343,28 @@ def update_client_service(
         runtime_add_peer_fn=lambda wg_iface, pub, ip: run_command_fn(
             ["awg", "set", wg_iface, "peer", pub, "allowed-ips", ip + "/32"]
         ),
+    )
+
+
+def set_client_enabled_service(client_id, enabled, *, cursor, conn, run_command_fn):
+    return client_service_ops.set_client_enabled_service(
+        client_id,
+        enabled,
+        fetch_client_row_fn=lambda target_id: cursor.execute(
+            "SELECT * FROM clients WHERE id = ?",
+            (target_id,),
+        ).fetchone(),
+        update_client_enabled_fn=lambda target_id, next_enabled: cursor.execute(
+            "UPDATE clients SET enabled = ? WHERE id = ?",
+            (next_enabled, target_id),
+        ),
+        runtime_remove_peer_fn=lambda wg_iface, pub: run_command_fn(
+            ["awg", "set", wg_iface, "peer", pub, "remove"]
+        ),
+        runtime_add_peer_fn=lambda wg_iface, pub, ip: run_command_fn(
+            ["awg", "set", wg_iface, "peer", pub, "allowed-ips", ip + "/32"]
+        ),
+        commit_fn=conn.commit,
     )
 
 

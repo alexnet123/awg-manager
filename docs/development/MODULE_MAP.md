@@ -403,6 +403,20 @@ This document tracks module ownership during the modular refactor and explains w
   - CRUD: `getIpsecPeers`, `upsertIpsecPeer`, `deleteIpsecPeer`, `getIpsecPolicies`, `upsertIpsecPolicy`, `deleteIpsecPolicy`, `deleteIpsecIdentity`, `deleteIpsecPhase1Profile`, `deleteIpsecPhase2Proposal`
   - runtime/actions: `applyIpsec`, `getIpsecActivePeers`, `getIpsecInstalledSas`, `getIpsecConfigPreview`, `initiateIpsecPolicy`, `terminateIpsecPeer`
 
+### `webui/src/pages/awg.tsx`
+
+- Owns the combined AmneziaWG workspace shell:
+  - sidebar navigation target `AmneziaWG`
+  - compact `Interfaces` / `Peers` tabs
+  - tab-scoped `Add` action that opens interface or peer creation dialogs
+
+### `webui/src/pages/interfaces.tsx` and `webui/src/pages/clients.tsx`
+
+- Own the AmneziaWG tab content:
+  - compact tables, search, pagination, row selection and details drawers
+  - interface creation/editing, AWG params generation, interface config preview
+  - peer creation/editing, client config preview, QR preview and downloads
+
 ### `webui/src/frontend/domains/ntp/api.ts`
 
 - Typed NTP/Chrony API contract client:

@@ -181,6 +181,156 @@ class InterfacesClientsInterfaceServiceOpsTest(unittest.TestCase):
         self.assertIn(("apply-runtime", "awg1", 51821), calls)
         self.assertIn(("commit",), calls)
 
+    def test_update_interface_service_keeps_disabled_interface_down(self):
+        calls = []
+        rows = {
+            7: (
+                7,
+                "awg0",
+                "2",
+                51820,
+                "10.10.0.1",
+                24,
+                "priv",
+                "pub",
+                "198.51.100.10",
+                "1.1.1.1",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                0,
+            ),
+        }
+
+        def _fetch(interface_id):
+            return rows.get(interface_id)
+
+        def _update(interface_id, wg_interface, awg_version, wg_ip_addr, wg_ip_cidr, port_number, private_key, public_key, srv_ip, srv_dns, awg_params):
+            rows[interface_id] = (*rows[interface_id][:1], wg_interface, awg_version, port_number, wg_ip_addr, wg_ip_cidr, private_key, public_key, srv_ip, srv_dns, *rows[interface_id][10:])
+
+        row = interface_service_ops.update_interface_service(
+            7,
+            {"srv_dns": "9.9.9.9"},
+            fetch_interface_row_fn=_fetch,
+            build_awg_params_from_row_fn=lambda _row: {"Jc": "1"},
+            detect_awg_version_fn=lambda version, _params: version,
+            normalize_config_value_fn=lambda value: value,
+            validate_interface_name_fn=lambda _name: None,
+            parse_and_validate_port_fn=lambda port: int(port),
+            parse_and_validate_interface_network_fn=lambda ip, cidr: (int(cidr), f"{ip}/{cidr}"),
+            validate_ip_literal_fn=lambda _ip, _field: None,
+            prepare_awg_params_for_version_fn=lambda _version: {"Jc": None},
+            validate_awg_params_fn=lambda _version, _params: None,
+            begin_tx_fn=lambda: calls.append(("begin",)),
+            assert_interface_uniqueness_fn=lambda iface, port, cidr, exclude_id=None: calls.append(("unique", iface, port, cidr, exclude_id)),
+            remove_interface_runtime_fn=lambda iface: calls.append(("remove-runtime", iface)),
+            update_interface_row_fn=_update,
+            update_clients_interface_fn=lambda *_args: None,
+            apply_interface_runtime_fn=lambda iface, port, *_args: calls.append(("apply-runtime", iface, port)),
+            commit_fn=lambda: calls.append(("commit",)),
+            rollback_fn=lambda: calls.append(("rollback",)),
+        )
+
+        self.assertEqual(row[1], "awg0")
+        self.assertNotIn(("remove-runtime", "awg0"), calls)
+        self.assertNotIn(("apply-runtime", "awg0", 51820), calls)
+        self.assertIn(("commit",), calls)
+
+    def test_set_interface_enabled_service_toggles_runtime_and_enabled_peers(self):
+        calls = []
+        rows = {
+            7: (
+                7,
+                "awg0",
+                "2",
+                51820,
+                "10.10.0.1",
+                24,
+                "priv",
+                "pub",
+                "198.51.100.10",
+                "1.1.1.1",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                1,
+            ),
+        }
+
+        def _fetch(interface_id):
+            return rows.get(interface_id)
+
+        def _update_enabled(interface_id, enabled):
+            calls.append(("enabled", interface_id, enabled))
+            rows[interface_id] = (*rows[interface_id][:26], enabled)
+
+        disabled = interface_service_ops.set_interface_enabled_service(
+            7,
+            False,
+            fetch_interface_row_fn=_fetch,
+            build_awg_params_from_row_fn=lambda _row: {"Jc": "1"},
+            remove_interface_runtime_fn=lambda iface: calls.append(("remove-runtime", iface)),
+            apply_interface_runtime_fn=lambda iface, port, ip, cidr, private, version, params: calls.append(("apply-runtime", iface, port, ip, cidr, private, version, dict(params))),
+            fetch_enabled_peer_rows_fn=lambda iface: calls.append(("fetch-peers", iface)) or [("peer-pub", "10.10.0.2")],
+            runtime_add_peer_fn=lambda iface, pub, ip: calls.append(("add-peer", iface, pub, ip)),
+            update_interface_enabled_fn=_update_enabled,
+            commit_fn=lambda: calls.append(("commit",)),
+        )
+        enabled = interface_service_ops.set_interface_enabled_service(
+            7,
+            True,
+            fetch_interface_row_fn=_fetch,
+            build_awg_params_from_row_fn=lambda _row: {"Jc": "1"},
+            remove_interface_runtime_fn=lambda iface: calls.append(("remove-runtime", iface)),
+            apply_interface_runtime_fn=lambda iface, port, ip, cidr, private, version, params: calls.append(("apply-runtime", iface, port, ip, cidr, private, version, dict(params))),
+            fetch_enabled_peer_rows_fn=lambda iface: calls.append(("fetch-peers", iface)) or [("peer-pub", "10.10.0.2")],
+            runtime_add_peer_fn=lambda iface, pub, ip: calls.append(("add-peer", iface, pub, ip)),
+            update_interface_enabled_fn=_update_enabled,
+            commit_fn=lambda: calls.append(("commit",)),
+        )
+
+        self.assertEqual(disabled[26], 0)
+        self.assertEqual(enabled[26], 1)
+        self.assertEqual(
+            calls,
+            [
+                ("remove-runtime", "awg0"),
+                ("enabled", 7, 0),
+                ("commit",),
+                ("apply-runtime", "awg0", 51820, "10.10.0.1", 24, "priv", "2", {"Jc": "1"}),
+                ("fetch-peers", "awg0"),
+                ("add-peer", "awg0", "peer-pub", "10.10.0.2"),
+                ("enabled", 7, 1),
+                ("commit",),
+            ],
+        )
+
     def test_update_interface_service_failure_rolls_back(self):
         calls = []
         row = (7, "awg0", "2", 51820, "10.10.0.1", 24, "priv", "pub", "198.51.100.10", "1.1.1.1")

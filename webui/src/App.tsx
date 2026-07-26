@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Clock3, Download, KeyRound, LockKeyhole, LogOut, Moon, Network, RefreshCcw, Shield, Sun, Upload, Users } from 'lucide-react'
+import { Clock3, Cpu, KeyRound, LockKeyhole, LogOut, MemoryStick, Moon, Network, Shield, Sun, TimerReset } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -16,19 +16,39 @@ import {
   SidebarTrigger,
 } from '@/components/ui/sidebar'
 import { Separator } from '@/components/ui/separator'
-import { InterfacesPage } from '@/pages/interfaces'
-import { ClientsPage } from '@/pages/clients'
+import { AwgPage } from '@/pages/awg'
 import { FirewallPage } from '@/pages/firewall'
 import { IpsecPage } from '@/pages/ipsec'
 import { NtpPage } from '@/pages/ntp'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { downloadBackup, restoreBackup } from '@/pages/api'
 
 type AuthState = {
   apiKey: string
 }
 
-type RouteKey = 'interfaces' | 'clients' | 'firewall' | 'ipsec' | 'ntp'
+type RouteKey = 'awg' | 'firewall' | 'ipsec' | 'ntp'
+
+type SystemMetric = {
+  percent: number | null
+}
+
+type SystemHealth = {
+  cpu?: SystemMetric & {
+    load_average_1m?: number | null
+    cores?: number
+  }
+  uptime_seconds?: number | null
+  memory?: SystemMetric & {
+    used_bytes?: number
+    available_bytes?: number
+    total_bytes?: number
+  } | null
+}
+
+type HealthPayload = {
+  ok: boolean
+  system?: SystemHealth
+}
 
 const AUTH_STORAGE_KEY = 'awg_manager_auth_v1'
 
@@ -49,7 +69,7 @@ function saveAuth(next: AuthState) {
   sessionStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(next))
 }
 
-async function healthCheck(auth: AuthState) {
+async function fetchHealth(auth: AuthState): Promise<HealthPayload> {
   const res = await fetch('/health', {
     headers: {
       'X-API-Key': auth.apiKey,
@@ -65,6 +85,98 @@ async function healthCheck(auth: AuthState) {
     }
     throw new Error(message)
   }
+  return await res.json()
+}
+
+async function healthCheck(auth: AuthState) {
+  await fetchHealth(auth)
+}
+
+function formatPercent(value: number | null | undefined) {
+  return typeof value === 'number' && Number.isFinite(value) ? `${Math.round(value)}%` : '—'
+}
+
+function formatMemory(memory: SystemHealth['memory']) {
+  const total = memory?.total_bytes
+  const used = memory?.used_bytes
+  if (!total || !used) return null
+  const usedGb = used / 1024 / 1024 / 1024
+  const totalGb = total / 1024 / 1024 / 1024
+  return `${usedGb.toFixed(1)} / ${totalGb.toFixed(1)} GB`
+}
+
+function formatUptime(seconds: number | null | undefined) {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) return '—'
+  const days = Math.floor(seconds / 86400)
+  const hours = Math.floor((seconds % 86400) / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  if (days > 0) return `${days}d ${hours}h`
+  if (hours > 0) return `${hours}h ${minutes}m`
+  return `${minutes}m`
+}
+
+function metricTone(value: number | null | undefined) {
+  if (typeof value !== 'number') return 'bg-slate-300 dark:bg-slate-700'
+  if (value >= 85) return 'bg-red-500'
+  if (value >= 70) return 'bg-amber-500'
+  return 'bg-emerald-500'
+}
+
+function SystemInfoPill(props: {
+  label: string
+  value: string
+  hint?: string | null
+  icon: React.ReactNode
+}) {
+  return (
+    <div className='flex h-9 min-w-[112px] items-center gap-2 rounded-md border bg-card/80 px-2.5 shadow-sm'>
+      <div className='text-muted-foreground'>{props.icon}</div>
+      <div className='min-w-0 flex-1'>
+        <div className='flex items-center justify-between gap-2 text-[11px] leading-3'>
+          <span className='font-medium text-muted-foreground'>{props.label}</span>
+          <span className='font-semibold tabular-nums'>{props.value}</span>
+        </div>
+        {props.hint ? <div className='mt-1 truncate text-[10px] leading-3 text-muted-foreground'>{props.hint}</div> : null}
+      </div>
+    </div>
+  )
+}
+
+function SystemMetricPill(props: {
+  label: string
+  value: number | null | undefined
+  hint?: string | null
+  icon: React.ReactNode
+}) {
+  const percent = typeof props.value === 'number' && Number.isFinite(props.value) ? Math.max(0, Math.min(100, props.value)) : 0
+  return (
+    <div className='flex h-9 min-w-[112px] items-center gap-2 rounded-md border bg-card/80 px-2.5 shadow-sm'>
+      <div className='text-muted-foreground'>{props.icon}</div>
+      <div className='min-w-0 flex-1'>
+        <div className='flex items-center justify-between gap-2 text-[11px] leading-3'>
+          <span className='font-medium text-muted-foreground'>{props.label}</span>
+          <span className='font-semibold tabular-nums'>{formatPercent(props.value)}</span>
+        </div>
+        <div className='mt-1 h-1.5 overflow-hidden rounded-full bg-muted'>
+          <div className={`h-full rounded-full ${metricTone(props.value)}`} style={{ width: `${percent}%` }} />
+        </div>
+        {props.hint ? <div className='mt-0.5 truncate text-[10px] leading-3 text-muted-foreground'>{props.hint}</div> : null}
+      </div>
+    </div>
+  )
+}
+
+function SystemLoadWidget(props: { system?: SystemHealth | null }) {
+  const cpuHint = props.system?.cpu?.load_average_1m != null
+    ? `load ${props.system.cpu.load_average_1m}${props.system.cpu.cores ? ` / ${props.system.cpu.cores}c` : ''}`
+    : null
+  return (
+    <div className='hidden items-center gap-2 lg:flex'>
+      <SystemMetricPill label='CPU' value={props.system?.cpu?.percent} hint={cpuHint} icon={<Cpu className='size-4' />} />
+      <SystemMetricPill label='RAM' value={props.system?.memory?.percent} hint={formatMemory(props.system?.memory)} icon={<MemoryStick className='size-4' />} />
+      <SystemInfoPill label='Uptime' value={formatUptime(props.system?.uptime_seconds)} hint='since boot' icon={<TimerReset className='size-4' />} />
+    </div>
+  )
 }
 
 function LoginView(props: { onAuthed: (auth: AuthState) => void }) {
@@ -97,7 +209,7 @@ function LoginView(props: { onAuthed: (auth: AuthState) => void }) {
       <div className='mx-auto flex min-h-svh w-full max-w-xl flex-col justify-center px-6 py-10'>
         <div className='rounded-2xl border bg-card p-8 shadow-sm'>
           <div className='space-y-2'>
-            <p className='text-sm font-medium text-muted-foreground'>AWG Manager</p>
+            <p className='text-sm font-medium text-muted-foreground'>Net manager</p>
             <h1 className='text-2xl font-semibold tracking-tight'>Sign in</h1>
             <p className='text-sm text-muted-foreground'>
               Enter the API token. Value is stored only in sessionStorage.
@@ -124,12 +236,10 @@ function LoginView(props: { onAuthed: (auth: AuthState) => void }) {
 }
 
 function DashboardView(props: { auth: AuthState; onLogout: () => void }) {
-  const [route, setRoute] = React.useState<RouteKey>('interfaces')
+  const [route, setRoute] = React.useState<RouteKey>('awg')
   const [isRotating, setIsRotating] = React.useState(false)
-  const [refreshNonce, setRefreshNonce] = React.useState(0)
-  const [isRefreshing, setIsRefreshing] = React.useState(false)
-  const [isRestoringBackup, setIsRestoringBackup] = React.useState(false)
-  const backupInputRef = React.useRef<HTMLInputElement | null>(null)
+  const refreshNonce = 0
+  const [systemHealth, setSystemHealth] = React.useState<SystemHealth | null>(null)
   const [theme, setTheme] = React.useState<'light' | 'dark'>(() => {
     const stored = localStorage.getItem('awg_manager_theme')
     if (stored === 'light' || stored === 'dark') return stored
@@ -140,6 +250,21 @@ function DashboardView(props: { auth: AuthState; onLogout: () => void }) {
     document.documentElement.classList.toggle('dark', theme === 'dark')
     localStorage.setItem('awg_manager_theme', theme)
   }, [theme])
+
+  const refreshSystemHealth = React.useCallback(async () => {
+    try {
+      const payload = await fetchHealth(props.auth)
+      setSystemHealth(payload.system ?? null)
+    } catch {
+      setSystemHealth(null)
+    }
+  }, [props.auth])
+
+  React.useEffect(() => {
+    void refreshSystemHealth()
+    const intervalId = window.setInterval(() => { void refreshSystemHealth() }, 5_000)
+    return () => window.clearInterval(intervalId)
+  }, [refreshSystemHealth])
 
   async function rotateApiKey() {
     if (!confirm('Rotate API key? The old key will stop working immediately.')) return
@@ -177,7 +302,7 @@ function DashboardView(props: { auth: AuthState; onLogout: () => void }) {
         <SidebarHeader>
           <div className='flex items-center justify-between px-2 py-1'>
             <div className='min-w-0 text-sm font-semibold leading-tight group-data-[collapsible=icon]:hidden'>
-              AWG Manager
+              Net manager
             </div>
           </div>
         </SidebarHeader>
@@ -185,22 +310,12 @@ function DashboardView(props: { auth: AuthState; onLogout: () => void }) {
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton
-                isActive={route === 'interfaces'}
-                onClick={() => setRoute('interfaces')}
+                isActive={route === 'awg'}
+                onClick={() => setRoute('awg')}
                 className='group-data-[collapsible=icon]:mx-auto group-data-[collapsible=icon]:h-9 group-data-[collapsible=icon]:w-9 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0'
               >
                 <Network className='size-4 shrink-0 group-data-[collapsible=icon]:mx-auto' />
-                <span>Interfaces</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                isActive={route === 'clients'}
-                onClick={() => setRoute('clients')}
-                className='group-data-[collapsible=icon]:mx-auto group-data-[collapsible=icon]:h-9 group-data-[collapsible=icon]:w-9 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0'
-              >
-                <Users className='size-4 shrink-0 group-data-[collapsible=icon]:mx-auto' />
-                <span>Clients</span>
+                <span>AmneziaWG</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
@@ -296,56 +411,11 @@ function DashboardView(props: { auth: AuthState; onLogout: () => void }) {
             <SidebarTrigger />
             <Separator orientation='vertical' className='h-6' />
             <div className='ml-auto flex flex-wrap items-center gap-2'>
-              <Button variant='outline' size='sm' onClick={() => void downloadBackup(props.auth)}>
-                <Download />
-                Download backup
-              </Button>
+              <SystemLoadWidget system={systemHealth} />
               <Button
                 variant='outline'
                 size='sm'
-                disabled={isRestoringBackup}
-                onClick={() => backupInputRef.current?.click()}
-              >
-                <Upload />
-                {isRestoringBackup ? 'Restoring...' : 'Restore backup'}
-              </Button>
-              <input
-                ref={backupInputRef}
-                type='file'
-                accept='.db,application/octet-stream'
-                className='hidden'
-                onChange={async (e) => {
-                  const file = e.target.files?.[0]
-                  e.currentTarget.value = ''
-                  if (!file) return
-                  if (!confirm('Restore backup now? Current DB data will be replaced.')) return
-                  setIsRestoringBackup(true)
-                  try {
-                    await restoreBackup(props.auth, file)
-                    setRefreshNonce((v) => v + 1)
-                  } catch (exc) {
-                    alert(exc instanceof Error ? exc.message : String(exc))
-                  } finally {
-                    setIsRestoringBackup(false)
-                  }
-                }}
-              />
-              <Button
-                variant='default'
-                size='sm'
-                className={`relative z-10 text-white ${isRefreshing ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-violet-600 hover:bg-violet-700'}`}
-                onClick={() => {
-                  setIsRefreshing(true)
-                  setRefreshNonce((v) => v + 1)
-                  setTimeout(() => setIsRefreshing(false), 700)
-                }}
-              >
-                <RefreshCcw />
-                Refresh
-              </Button>
-              <Button
-                variant='outline'
-                size='sm'
+                className='h-9 min-w-[112px] justify-start gap-2 rounded-md bg-card/80 px-2.5 shadow-sm'
                 onClick={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
               >
                 {theme === 'dark' ? <Sun /> : <Moon />}
@@ -354,8 +424,7 @@ function DashboardView(props: { auth: AuthState; onLogout: () => void }) {
             </div>
           </header>
           <main className='flex min-h-0 flex-1 overflow-hidden p-3 md:p-4'>
-            {route === 'interfaces' ? <InterfacesPage auth={props.auth} refreshNonce={refreshNonce} /> : null}
-            {route === 'clients' ? <ClientsPage auth={props.auth} refreshNonce={refreshNonce} /> : null}
+            {route === 'awg' ? <AwgPage auth={props.auth} refreshNonce={refreshNonce} /> : null}
             {route === 'firewall' ? <FirewallPage auth={props.auth} refreshNonce={refreshNonce} /> : null}
             {route === 'ipsec' ? <IpsecPage auth={props.auth} refreshNonce={refreshNonce} /> : null}
             {route === 'ntp' ? <NtpPage auth={props.auth} refreshNonce={refreshNonce} /> : null}

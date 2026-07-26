@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 from backend.common.http_errors import send_service_error
+from backend.common.system_metrics import collect_system_metrics
 from backend.domains.firewall import service as firewall_service
 from backend.domains.awg import service as ic_service
 from backend.domains.ipsec import service as ipsec_service
@@ -23,6 +24,7 @@ def handle_get(path_parts, query_params, send_json, send_bytes):
                 'ok': True,
                 'service': 'awg_manager',
                 'auth': 'api_key',
+                'system': collect_system_metrics(),
             })
             return True
 
@@ -129,8 +131,22 @@ def handle_post(path_parts, payload, send_json, _send_bytes):
             send_json(201, {'ok': True, 'item': ic_service.create_interface(payload)})
             return True
 
+        if len(path_parts) == 3 and path_parts[0] == 'interfaces' and path_parts[2] in ('enable', 'disable'):
+            send_json(200, {
+                'ok': True,
+                'item': ic_service.set_interface_enabled(path_parts[1], path_parts[2] == 'enable'),
+            })
+            return True
+
         if path_parts == ['clients']:
             send_json(201, {'ok': True, 'item': ic_service.create_client(payload)})
+            return True
+
+        if len(path_parts) == 3 and path_parts[0] == 'clients' and path_parts[2] in ('enable', 'disable'):
+            send_json(200, {
+                'ok': True,
+                'item': ic_service.set_client_enabled(path_parts[1], path_parts[2] == 'enable'),
+            })
             return True
 
         firewall_response = firewall_service.handle_post(path_parts, payload)

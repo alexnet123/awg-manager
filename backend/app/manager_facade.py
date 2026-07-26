@@ -162,7 +162,23 @@ def _wg_interface_columns():
 def _open_db():
     conn = sqlite3.connect(_state_paths()["db_file"])
     cursor = conn.cursor()
+    _ensure_awg_sqlite_schema(conn)
     return conn, cursor
+
+
+def _ignore_schema_warning(_message):
+    return None
+
+
+def _ensure_awg_sqlite_schema(conn):
+    cursor = conn.cursor()
+    interfaces_schema.ensure_wg_interfaces_schema(
+        cursor,
+        print_fn=_ignore_schema_warning,
+        integrity_error_type=sqlite3.IntegrityError,
+    )
+    interfaces_schema.ensure_clients_schema(cursor)
+    conn.commit()
 
 
 def _query_rows_with_manager_fallback(query, params=(), *, manager=None):
@@ -170,6 +186,8 @@ def _query_rows_with_manager_fallback(query, params=(), *, manager=None):
         return manager.c.execute(query, params).fetchall()
     try:
         with sqlite3.connect(_state_paths()["db_file"]) as conn:
+            if "wg_interfaces" in query.lower() or "clients" in query.lower():
+                _ensure_awg_sqlite_schema(conn)
             return conn.execute(query, params).fetchall()
     except Exception:
         if not _fallback_enabled():
@@ -185,6 +203,8 @@ def _query_row_with_manager_fallback(query, params=(), *, manager=None):
         return manager.c.execute(query, params).fetchone()
     try:
         with sqlite3.connect(_state_paths()["db_file"]) as conn:
+            if "wg_interfaces" in query.lower() or "clients" in query.lower():
+                _ensure_awg_sqlite_schema(conn)
             return conn.execute(query, params).fetchone()
     except Exception:
         if not _fallback_enabled():
@@ -260,6 +280,16 @@ def delete_interface_row(interface_id):
     )
 
 
+def set_interface_enabled_row(interface_id, enabled):
+    return _backend_partial_call(
+        "set_interface_enabled_service",
+        _set_interface_enabled_row_backend,
+        interface_id,
+        enabled,
+        fallback_args=(interface_id, enabled),
+    )
+
+
 def create_client_row(payload):
     return _backend_partial_call(
         "create_client_service",
@@ -285,6 +315,16 @@ def delete_client_row(client_id):
         _delete_client_row_backend,
         client_id,
         fallback_args=(client_id,),
+    )
+
+
+def set_client_enabled_row(client_id, enabled):
+    return _backend_partial_call(
+        "set_client_enabled_service",
+        _set_client_enabled_row_backend,
+        client_id,
+        enabled,
+        fallback_args=(client_id, enabled),
     )
 
 
@@ -570,6 +610,24 @@ def _delete_interface_row_backend(interface_id):
         conn.close()
 
 
+def _set_interface_enabled_row_backend(interface_id, enabled):
+    conn, cursor = _open_db()
+    try:
+        return interfaces_service_ops.set_interface_enabled_service(
+            interface_id,
+            enabled,
+            cursor=cursor,
+            conn=conn,
+            wg_interface_columns=_wg_interface_columns(),
+            build_awg_params_from_row_fn=interfaces_awg_params_ops.build_awg_params_from_row,
+            remove_interface_runtime_fn=_remove_interface_runtime,
+            apply_interface_runtime_fn=_apply_interface_runtime,
+            run_command_fn=_run_command_checked,
+        )
+    finally:
+        conn.close()
+
+
 def _update_client_row_backend(client_id, payload):
     conn, cursor = _open_db()
     try:
@@ -593,6 +651,20 @@ def _delete_client_row_backend(client_id):
     try:
         return interfaces_service_ops.delete_client_service(
             client_id,
+            cursor=cursor,
+            conn=conn,
+            run_command_fn=_run_command_checked,
+        )
+    finally:
+        conn.close()
+
+
+def _set_client_enabled_row_backend(client_id, enabled):
+    conn, cursor = _open_db()
+    try:
+        return interfaces_service_ops.set_client_enabled_service(
+            client_id,
+            enabled,
             cursor=cursor,
             conn=conn,
             run_command_fn=_run_command_checked,
@@ -626,7 +698,7 @@ def _fetch_client_allowed_ips_row(client_id):
 
 
 def _fetch_interface_peer_rows(wg_interface):
-    query = "SELECT pubkey, ip FROM clients WHERE wg_interface = ?"
+    query = "SELECT pubkey, ip FROM clients WHERE wg_interface = ? AND COALESCE(enabled, 1) = 1"
     return _query_rows_with_manager_fallback(
         query,
         (wg_interface,),

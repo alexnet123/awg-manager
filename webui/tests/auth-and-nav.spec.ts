@@ -1,10 +1,30 @@
 import { expect, test } from '@playwright/test'
 import { login } from './helpers'
 
-test('login and navigate to clients', async ({ page }) => {
+test('login and navigate to peers', async ({ page }) => {
   await login(page)
 
-  await page.getByRole('button', { name: 'Clients' }).click()
-  await expect(page.getByRole('heading', { name: 'Clients' })).toBeVisible()
-  await expect(page.getByText('Manage peers, configs, and QR codes.')).toBeVisible()
+  const main = page.locator('main')
+  await expect(page.getByRole('heading', { name: 'AmneziaWG' })).toBeVisible()
+  await expect(page.getByText('Net manager')).toBeVisible()
+  await expect(page.getByText('CPU', { exact: true })).toBeVisible()
+  await expect(page.getByText('RAM', { exact: true })).toBeVisible()
+  await expect(page.getByText('Uptime', { exact: true })).toBeVisible()
+  const themeBox = await page.getByRole('button', { name: /Night|Day/ }).boundingBox()
+  expect(themeBox?.width).toBeGreaterThanOrEqual(110)
+  await expect(page.getByRole('button', { name: 'Download backup' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Restore backup' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Refresh', exact: true })).toHaveCount(0)
+  await expect(page.getByText('Manage interfaces and peers from one operator workspace.')).toHaveCount(0)
+  await expect(page.getByRole('tab', { name: 'Interfaces' })).toBeVisible()
+  await expect(main.getByPlaceholder('Search interface (name, ip, port, server, dns, version)')).toHaveCount(0)
+  await expect(main.getByRole('button', { name: 'Refresh', exact: true })).toHaveCount(0)
+  await expect(main.getByRole('button', { name: 'Add', exact: true })).toBeVisible()
+  await expect(main.getByRole('button', { name: 'Del', exact: true })).toBeVisible()
+  await expect(main.getByRole('button', { name: 'Disable', exact: true })).toBeVisible()
+  await expect(main.getByRole('button', { name: 'Enable', exact: true })).toBeVisible()
+  await page.getByRole('tab', { name: 'Peers' }).click()
+  await expect(main.getByPlaceholder('Search peer (name, IP, interface, pubkey)')).toHaveCount(0)
+  await expect(main.getByRole('button', { name: 'Refresh', exact: true })).toHaveCount(0)
+  await expect(page.getByText('Manage peers, configs, and QR codes.')).toHaveCount(0)
 })

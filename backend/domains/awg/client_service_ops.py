@@ -1,6 +1,10 @@
 #!/usr/bin/python3
 
 
+def client_row_enabled(row):
+    return len(row) < 7 or row[6] is None or bool(row[6])
+
+
 def create_client_service(
     payload,
     *,
@@ -100,11 +104,41 @@ def update_client_service(
 
     encrypted_private_key = current_row[3] if private_key is None else encrypt_private_key_fn(private_key)
 
+    current_enabled = client_row_enabled(current_row)
     runtime_remove_peer_fn(current_row[5], current_row[2])
     update_client_fn(client_id, name, public_key, encrypted_private_key, ip_address, wg_interface)
     if allowed_ips is not None:
         upsert_client_settings_fn(client_id, allowed_ips)
     commit_fn()
-    runtime_add_peer_fn(wg_interface, public_key, ip_address)
+    if current_enabled:
+        runtime_add_peer_fn(wg_interface, public_key, ip_address)
 
+    return fetch_client_row_fn(client_id)
+
+
+def set_client_enabled_service(
+    client_id,
+    enabled,
+    *,
+    fetch_client_row_fn,
+    update_client_enabled_fn,
+    runtime_remove_peer_fn,
+    runtime_add_peer_fn,
+    commit_fn,
+):
+    row = fetch_client_row_fn(client_id)
+    if not row:
+        raise LookupError("Client not found")
+
+    next_enabled = bool(enabled)
+    if client_row_enabled(row) == next_enabled:
+        return row
+
+    if next_enabled:
+        runtime_add_peer_fn(row[5], row[2], row[4])
+    else:
+        runtime_remove_peer_fn(row[5], row[2])
+
+    update_client_enabled_fn(client_id, 1 if next_enabled else 0)
+    commit_fn()
     return fetch_client_row_fn(client_id)

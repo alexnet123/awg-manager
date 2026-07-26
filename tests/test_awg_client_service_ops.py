@@ -142,6 +142,85 @@ class InterfacesClientsClientServiceOpsTest(unittest.TestCase):
         self.assertIn(("validate", "10.0.0.9", "awg0", 3), calls)
         self.assertIn(("settings", 3, "10.0.0.0/24"), calls)
 
+    def test_update_client_service_keeps_disabled_peer_removed(self):
+        calls = []
+        rows = {
+            3: (3, "alice", "old-pub", "enc-old", "10.0.0.3", "awg0", 0),
+        }
+
+        def _fetch(client_id):
+            return rows.get(client_id)
+
+        def _update(client_id, name, pub, encrypted_priv, ip, wg_iface):
+            rows[client_id] = (client_id, name, pub, encrypted_priv, ip, wg_iface, rows[client_id][6])
+
+        row = client_service_ops.update_client_service(
+            3,
+            {"name": "alice2"},
+            normalize_config_value_fn=lambda value: value,
+            fetch_client_row_fn=_fetch,
+            interface_exists_fn=lambda iface: iface == "awg0",
+            get_next_available_ip_fn=lambda iface, exclude_client_id=None: "10.0.0.200",
+            validate_client_ip_for_interface_fn=lambda *_args, **_kwargs: None,
+            encrypt_private_key_fn=lambda priv: f"enc:{priv}",
+            runtime_remove_peer_fn=lambda iface, pub: calls.append(("remove-peer", iface, pub)),
+            update_client_fn=_update,
+            upsert_client_settings_fn=lambda *_args: None,
+            commit_fn=lambda: calls.append(("commit",)),
+            runtime_add_peer_fn=lambda iface, pub, ip: calls.append(("add-peer", iface, pub, ip)),
+        )
+
+        self.assertEqual(row[1], "alice2")
+        self.assertIn(("remove-peer", "awg0", "old-pub"), calls)
+        self.assertNotIn(("add-peer", "awg0", "old-pub", "10.0.0.3"), calls)
+
+    def test_set_client_enabled_service_toggles_runtime_peer(self):
+        calls = []
+        rows = {
+            3: (3, "alice", "pub-a", "enc-a", "10.0.0.3", "awg0", 1),
+        }
+
+        def _fetch(client_id):
+            return rows.get(client_id)
+
+        def _update_enabled(client_id, enabled):
+            calls.append(("enabled", client_id, enabled))
+            current = rows[client_id]
+            rows[client_id] = (*current[:6], enabled)
+
+        disabled = client_service_ops.set_client_enabled_service(
+            3,
+            False,
+            fetch_client_row_fn=_fetch,
+            update_client_enabled_fn=_update_enabled,
+            runtime_remove_peer_fn=lambda iface, pub: calls.append(("remove-peer", iface, pub)),
+            runtime_add_peer_fn=lambda iface, pub, ip: calls.append(("add-peer", iface, pub, ip)),
+            commit_fn=lambda: calls.append(("commit",)),
+        )
+        enabled = client_service_ops.set_client_enabled_service(
+            3,
+            True,
+            fetch_client_row_fn=_fetch,
+            update_client_enabled_fn=_update_enabled,
+            runtime_remove_peer_fn=lambda iface, pub: calls.append(("remove-peer", iface, pub)),
+            runtime_add_peer_fn=lambda iface, pub, ip: calls.append(("add-peer", iface, pub, ip)),
+            commit_fn=lambda: calls.append(("commit",)),
+        )
+
+        self.assertEqual(disabled[6], 0)
+        self.assertEqual(enabled[6], 1)
+        self.assertEqual(
+            calls,
+            [
+                ("remove-peer", "awg0", "pub-a"),
+                ("enabled", 3, 0),
+                ("commit",),
+                ("add-peer", "awg0", "pub-a", "10.0.0.3"),
+                ("enabled", 3, 1),
+                ("commit",),
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

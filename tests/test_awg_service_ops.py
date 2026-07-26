@@ -6,7 +6,7 @@ from backend.domains.awg import service_ops
 
 WG_INTERFACE_COLUMNS = (
     "id, wg_interface, awg_version, port_number, wg_ip_addr, wg_ip_cidr, private_key, pubkey, "
-    "srv_ip, srv_dns, Jc, Jmin, Jmax, S1, S2, S3, S4, H1, H2, H3, H4, I1, I2, I3, I4, I5"
+    "srv_ip, srv_dns, Jc, Jmin, Jmax, S1, S2, S3, S4, H1, H2, H3, H4, I1, I2, I3, I4, I5, enabled"
 )
 
 
@@ -50,7 +50,8 @@ class InterfacesClientsServiceOpsTest(unittest.TestCase):
                 Jc INTEGER, Jmin INTEGER, Jmax INTEGER,
                 S1 INTEGER, S2 INTEGER, S3 INTEGER, S4 INTEGER,
                 H1 TEXT, H2 TEXT, H3 TEXT, H4 TEXT,
-                I1 TEXT, I2 TEXT, I3 TEXT, I4 TEXT, I5 TEXT
+                I1 TEXT, I2 TEXT, I3 TEXT, I4 TEXT, I5 TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1
             )"""
         )
         self.cursor.execute(
@@ -60,7 +61,8 @@ class InterfacesClientsServiceOpsTest(unittest.TestCase):
                 pubkey TEXT,
                 privkey TEXT,
                 ip TEXT,
-                wg_interface TEXT
+                wg_interface TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1
             )"""
         )
         self.cursor.execute(
@@ -205,6 +207,82 @@ class InterfacesClientsServiceOpsTest(unittest.TestCase):
             run_command_fn=lambda cmd: commands.append(list(cmd)),
         )
         self.assertEqual(deleted[0], created[0])
+
+    def test_set_interface_enabled_service_replays_enabled_peers(self):
+        self.cursor.execute(
+            """INSERT INTO wg_interfaces (
+                wg_interface, awg_version, port_number, wg_ip_addr, wg_ip_cidr, private_key, pubkey, srv_ip, srv_dns,
+                Jc, Jmin, Jmax, S1, S2, S3, S4, H1, H2, H3, H4, I1, I2, I3, I4, I5
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                "awg0",
+                "2",
+                51820,
+                "10.8.0.1",
+                24,
+                "priv",
+                "pub",
+                "198.51.100.10",
+                "1.1.1.1",
+                3,
+                10,
+                20,
+                30,
+                40,
+                50,
+                60,
+                "1:2",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+        )
+        interface_id = self.cursor.lastrowid
+        self.cursor.execute(
+            "INSERT INTO clients (name, pubkey, privkey, ip, wg_interface, enabled) VALUES (?, ?, ?, ?, ?, ?)",
+            ("alice", "pub-a", "enc-a", "10.8.0.2", "awg0", 1),
+        )
+        self.cursor.execute(
+            "INSERT INTO clients (name, pubkey, privkey, ip, wg_interface, enabled) VALUES (?, ?, ?, ?, ?, ?)",
+            ("bob", "pub-b", "enc-b", "10.8.0.3", "awg0", 0),
+        )
+        self.conn.commit()
+        commands = []
+
+        disabled = service_ops.set_interface_enabled_service(
+            interface_id,
+            False,
+            cursor=self.cursor,
+            conn=self.conn,
+            wg_interface_columns=WG_INTERFACE_COLUMNS,
+            build_awg_params_from_row_fn=lambda _row: _default_awg_params(),
+            remove_interface_runtime_fn=lambda iface: commands.append(["remove", iface]),
+            apply_interface_runtime_fn=lambda iface, port, *_args: commands.append(["apply", iface, port]),
+            run_command_fn=lambda cmd: commands.append(list(cmd)),
+        )
+        enabled = service_ops.set_interface_enabled_service(
+            interface_id,
+            True,
+            cursor=self.cursor,
+            conn=self.conn,
+            wg_interface_columns=WG_INTERFACE_COLUMNS,
+            build_awg_params_from_row_fn=lambda _row: _default_awg_params(),
+            remove_interface_runtime_fn=lambda iface: commands.append(["remove", iface]),
+            apply_interface_runtime_fn=lambda iface, port, *_args: commands.append(["apply", iface, port]),
+            run_command_fn=lambda cmd: commands.append(list(cmd)),
+        )
+
+        self.assertEqual(disabled[-1], 0)
+        self.assertEqual(enabled[-1], 1)
+        self.assertIn(["remove", "awg0"], commands)
+        self.assertIn(["apply", "awg0", 51820], commands)
+        self.assertIn(["awg", "set", "awg0", "peer", "pub-a", "allowed-ips", "10.8.0.2/32"], commands)
+        self.assertNotIn(["awg", "set", "awg0", "peer", "pub-b", "allowed-ips", "10.8.0.3/32"], commands)
 
     def test_ip_alloc_wrappers(self):
         self.cursor.execute(

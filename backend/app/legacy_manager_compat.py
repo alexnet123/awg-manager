@@ -95,7 +95,8 @@ c.execute('''CREATE TABLE IF NOT EXISTS clients (
                 pubkey TEXT NOT NULL,
                 privkey TEXT NOT NULL,
                 ip TEXT NOT NULL,
-                wg_interface TEXT NOT NULL
+                wg_interface TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1
             )''')
 
 # Дополнительные per-client параметры конфигурации без изменения схемы clients
@@ -131,7 +132,8 @@ c.execute('''CREATE TABLE IF NOT EXISTS wg_interfaces (
                 I2 TEXT,
                 I3 TEXT,
                 I4 TEXT,
-                I5 TEXT
+                I5 TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1
             )''')
 
 
@@ -142,6 +144,7 @@ ensure_wg_interfaces_schema = functools.partial(
     integrity_error_type=sqlite3.IntegrityError,
 )
 ensure_wg_interfaces_schema()
+interfaces_schema.ensure_clients_schema(c)
 
 # Сохраняем изменения и закрываем подключение
 conn.commit()
@@ -780,6 +783,18 @@ update_interface_service = functools.partial(
 )
 
 
+set_interface_enabled_service = functools.partial(
+    interfaces_compat_entry_ops.set_interface_enabled_service,
+    cursor=c,
+    conn=conn,
+    wg_interface_columns=WG_INTERFACE_COLUMNS,
+    build_awg_params_from_row_fn=build_awg_params_from_row,
+    remove_interface_runtime_fn=remove_interface_runtime,
+    apply_interface_runtime_fn=apply_interface_runtime,
+    run_command_fn=_run_command_checked,
+)
+
+
 create_client_service = functools.partial(
     interfaces_compat_entry_ops.create_client_service,
     cursor=c,
@@ -808,6 +823,14 @@ update_client_service = functools.partial(
     get_next_available_ip_fn=get_next_available_ip,
     validate_client_ip_for_interface_fn=validate_client_ip_for_interface,
     encrypt_private_key_fn=encrypt_private_key,
+    run_command_fn=_run_command_checked,
+)
+
+
+set_client_enabled_service = functools.partial(
+    interfaces_compat_entry_ops.set_client_enabled_service,
+    cursor=c,
+    conn=conn,
     run_command_fn=_run_command_checked,
 )
 

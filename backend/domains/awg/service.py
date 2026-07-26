@@ -28,6 +28,10 @@ def delete_interface(interface_id):
     return repository.delete_interface(interface_id)
 
 
+def set_interface_enabled(interface_id, enabled):
+    return repository.set_interface_enabled(interface_id, enabled)
+
+
 def list_clients():
     return repository.list_clients()
 
@@ -47,6 +51,10 @@ def update_client(client_id, payload):
 
 def delete_client(client_id):
     return repository.delete_client(client_id)
+
+
+def set_client_enabled(client_id, enabled):
+    return repository.set_client_enabled(client_id, enabled)
 
 
 def get_client_config(client_id):

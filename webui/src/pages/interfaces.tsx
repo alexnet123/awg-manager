@@ -1,15 +1,13 @@
 import * as React from 'react'
-import { Plus, Sparkles, Trash2 } from 'lucide-react'
+import { Plus, Sparkles } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Textarea } from '@/components/ui/textarea'
-import { Badge } from '@/components/ui/badge'
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { AwgEditorWindow } from './awgEditorWindow'
 import type { AuthState, InterfaceItem } from './api'
-import { createInterface, deleteInterface, generateAwgParams, getInterfaceConfig, getInterfaces, updateInterface } from './api'
+import { createInterface, deleteInterface, generateAwgParams, getInterfaceConfig, getInterfaces, setInterfaceEnabled, updateInterface } from './api'
 
 const I1_PRESETS: Record<string, string> = {
   quic: '<b 0xc30000000108><rc 8><t><r 40>',
@@ -17,75 +15,239 @@ const I1_PRESETS: Record<string, string> = {
   sip: '<b 0x4f5054494f4e53207369703a><rc 10><b 0x205349502f322e300d0a><t><r 18>',
 }
 
+type Preset = 'none' | 'quic' | 'dns' | 'sip'
+type InterfaceColumnKey = 'wg_interface' | 'awg_version' | 'address' | 'port_number' | 'srv_ip'
+type SortDirection = 'asc' | 'desc'
+type SortState<K extends string> = { key: K | null; dir: SortDirection }
+type InterfaceForm = {
+  wg_interface: string
+  awg_version: '1' | '2'
+  port_number: string
+  wg_ip_addr: string
+  wg_ip_cidr: string
+  srv_ip: string
+  srv_dns: string
+  awg_params_json: string
+}
+
+const interfaceColumnLabels: Record<InterfaceColumnKey, string> = {
+  wg_interface: 'Name',
+  awg_version: 'Version',
+  address: 'Address',
+  port_number: 'Port',
+  srv_ip: 'Server',
+}
+
+const interfaceColumnOrder: InterfaceColumnKey[] = ['wg_interface', 'awg_version', 'address', 'port_number', 'srv_ip']
+
 function tryParseJson(value: string) {
   const trimmed = value.trim()
   if (!trimmed) return undefined
   return JSON.parse(trimmed)
 }
 
-export function InterfacesPage(props: { auth: AuthState; refreshNonce: number }) {
+function selectableAwgRowClass(selected: boolean, disabled = false) {
+  return `h-8 cursor-default select-none hover:bg-blue-100/80 dark:hover:bg-blue-900/35 ${selected ? 'bg-blue-100/80 dark:bg-blue-900/35' : ''} ${disabled ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200' : ''}`
+}
+
+function emptySort<K extends string>(): SortState<K> {
+  return { key: null, dir: 'asc' }
+}
+
+function nextSortState<K extends string>(prev: SortState<K>, key: K): SortState<K> {
+  if (prev.key !== key) return { key, dir: 'asc' }
+  if (prev.dir === 'asc') return { key, dir: 'desc' }
+  return emptySort()
+}
+
+function sortIndicator(active: boolean, dir: SortDirection): string {
+  if (!active) return '↕'
+  return dir === 'asc' ? '▲' : '▼'
+}
+
+function normalizeSortValue(value: unknown): string | number {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0
+  if (value == null) return ''
+  const text = String(value).trim()
+  if (/^-?\d+(\.\d+)?$/.test(text)) return Number(text)
+  return text.toLowerCase()
+}
+
+function compareSortValues(a: unknown, b: unknown): number {
+  const av = normalizeSortValue(a)
+  const bv = normalizeSortValue(b)
+  if (typeof av === 'number' && typeof bv === 'number') return av - bv
+  return String(av).localeCompare(String(bv), undefined, { sensitivity: 'base', numeric: true })
+}
+
+function sortRows<T, K extends string>(rows: T[], sort: SortState<K>, getValue: (row: T, key: K) => unknown): T[] {
+  if (!sort.key) return rows
+  const dir = sort.dir === 'asc' ? 1 : -1
+  return rows
+    .map((row, index) => ({ row, index }))
+    .sort((a, b) => {
+      const cmp = compareSortValues(getValue(a.row, sort.key as K), getValue(b.row, sort.key as K))
+      return cmp === 0 ? a.index - b.index : dir * cmp
+    })
+    .map((item) => item.row)
+}
+
+function SortableHead<K extends string>(props: {
+  sortKey: K
+  label: string
+  sort: SortState<K>
+  onSort: (key: K) => void
+}) {
+  return (
+    <TableHead>
+      <button type='button' className='flex w-full select-none items-center gap-1 text-left' onClick={() => props.onSort(props.sortKey)}>
+        {props.label}
+        <span className='text-[10px] text-muted-foreground/70'>{sortIndicator(props.sort.key === props.sortKey, props.sort.dir)}</span>
+      </button>
+    </TableHead>
+  )
+}
+
+function EmptyRow(props: { colSpan: number; text: string }) {
+  return (
+    <TableRow>
+      <TableCell colSpan={props.colSpan} className='py-8 text-center text-xs text-muted-foreground'>
+        {props.text}
+      </TableCell>
+    </TableRow>
+  )
+}
+
+function defaultForm(): InterfaceForm {
+  return {
+    wg_interface: '',
+    awg_version: '2',
+    port_number: '51820',
+    wg_ip_addr: '',
+    wg_ip_cidr: '24',
+    srv_ip: '',
+    srv_dns: '',
+    awg_params_json: '',
+  }
+}
+
+function formFromInterface(item: InterfaceItem): InterfaceForm {
+  return {
+    wg_interface: item.wg_interface,
+    awg_version: item.awg_version,
+    port_number: String(item.port_number),
+    wg_ip_addr: item.wg_ip_addr,
+    wg_ip_cidr: String(item.wg_ip_cidr),
+    srv_ip: item.srv_ip,
+    srv_dns: item.srv_dns,
+    awg_params_json: JSON.stringify(item.awg_params || {}, null, 2),
+  }
+}
+
+const STANDARD_INTERFACE_CONFIG_KEYS = new Set(['PrivateKey', 'Address', 'ListenPort', 'DNS'])
+
+function parseAwgParamsJson(source: InterfaceForm): Record<string, string | number | null> | null {
+  if (!source.awg_params_json.trim()) return null
+  try {
+    const parsed = tryParseJson(source.awg_params_json)
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, string | number | null> : null
+  } catch {
+    return null
+  }
+}
+
+function formatAwgParamLines(params: Record<string, string | number | null> | null) {
+  if (!params) return []
+  return Object.entries(params)
+    .filter(([, value]) => value !== null && value !== undefined && value !== '')
+    .map(([key, value]) => `${key} = ${value}`)
+}
+
+function buildLocalInterfaceConfigPreview(source: InterfaceForm) {
+  const paramLines = formatAwgParamLines(parseAwgParamsJson(source))
+  if (!paramLines.length) return ''
+  const lines = ['[Interface]']
+  const address = source.wg_ip_addr.trim()
+  const cidr = source.wg_ip_cidr.trim()
+  const port = source.port_number.trim()
+  const dns = source.srv_dns.trim()
+  if (address) lines.push(`Address = ${address}${cidr ? `/${cidr}` : ''}`)
+  if (port) lines.push(`ListenPort = ${port}`)
+  if (dns) lines.push(`DNS = ${dns}`)
+  lines.push(...paramLines)
+  return lines.join('\n')
+}
+
+function ensureConfigSectionSpacing(config: string) {
+  return config.replace(/\n{1,}(\[[^\]]+\])/g, '\n\n$1')
+}
+
+function mergeAwgParamsIntoConfigPreview(config: string, source: InterfaceForm) {
+  const paramLines = formatAwgParamLines(parseAwgParamsJson(source))
+  if (!paramLines.length) return ensureConfigSectionSpacing(config)
+  if (!config || config === 'Loading...' || config.startsWith('Failed to load')) return buildLocalInterfaceConfigPreview(source)
+
+  const lines = config.split('\n')
+  const interfaceStart = lines.findIndex((line) => line.trim() === '[Interface]')
+  if (interfaceStart < 0) return buildLocalInterfaceConfigPreview(source)
+  const nextSection = lines.findIndex((line, index) => index > interfaceStart && /^\[[^\]]+\]/.test(line.trim()))
+  const interfaceEnd = nextSection < 0 ? lines.length : nextSection
+  const before = lines.slice(0, interfaceStart)
+  const block = lines.slice(interfaceStart, interfaceEnd)
+  const after = lines.slice(interfaceEnd)
+  const filteredBlock = block.filter((line) => {
+    const match = line.match(/^([A-Za-z][A-Za-z0-9]*)\s*=/)
+    return !match || STANDARD_INTERFACE_CONFIG_KEYS.has(match[1])
+  })
+  while (filteredBlock.length && !filteredBlock[filteredBlock.length - 1].trim()) filteredBlock.pop()
+  return ensureConfigSectionSpacing([...before, ...filteredBlock, ...paramLines, ...(after.length ? ['', ...after] : [])].join('\n'))
+}
+
+export function InterfacesPage(props: {
+  auth: AuthState
+  refreshNonce: number
+  embedded?: boolean
+  createOpen?: boolean
+  createTitle?: string
+  onCreateOpenChange?: (open: boolean) => void
+  onCreateDone?: () => void
+}) {
   const [items, setItems] = React.useState<InterfaceItem[]>([])
   const [isLoading, setIsLoading] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
   const [selected, setSelected] = React.useState<InterfaceItem | null>(null)
-  const [drawerOpen, setDrawerOpen] = React.useState(false)
-  const [editForm, setEditForm] = React.useState({
-    wg_interface: '',
-    awg_version: '2',
-    port_number: '51820',
-    wg_ip_addr: '',
-    wg_ip_cidr: '24',
-    srv_ip: '',
-    srv_dns: '',
-    awg_params_json: '',
-  })
-  const [isSavingEdit, setIsSavingEdit] = React.useState(false)
-  const [isGeneratingEditParams, setIsGeneratingEditParams] = React.useState(false)
-  const [editPreset, setEditPreset] = React.useState<'none' | 'quic' | 'dns' | 'sip'>('none')
-  const [showEditRawParams, setShowEditRawParams] = React.useState(false)
-  const [interfaceConfigPreview, setInterfaceConfigPreview] = React.useState('')
-
-  const [form, setForm] = React.useState({
-    wg_interface: '',
-    awg_version: '2',
-    port_number: '51820',
-    wg_ip_addr: '',
-    wg_ip_cidr: '24',
-    srv_ip: '',
-    srv_dns: '',
-    awg_params_json: '',
-  })
+  const [editingInterface, setEditingInterface] = React.useState<InterfaceItem | null>(null)
+  const [form, setForm] = React.useState<InterfaceForm>(defaultForm)
+  const [editForm, setEditForm] = React.useState<InterfaceForm>(defaultForm)
+  const [isSaving, setIsSaving] = React.useState(false)
+  const [isToggling, setIsToggling] = React.useState(false)
   const [isGeneratingParams, setIsGeneratingParams] = React.useState(false)
-  const [preset, setPreset] = React.useState<'none' | 'quic' | 'dns' | 'sip'>('none')
-  const [showRawParams, setShowRawParams] = React.useState(false)
-  const [isCreating, setIsCreating] = React.useState(false)
-  const [query, setQuery] = React.useState('')
-  const [page, setPage] = React.useState(1)
-  const pageSize = 10
+  const [isGeneratingEditParams, setIsGeneratingEditParams] = React.useState(false)
+  const [preset, setPreset] = React.useState<Preset>('none')
+  const [editPreset, setEditPreset] = React.useState<Preset>('none')
+  const [interfaceConfigPreview, setInterfaceConfigPreview] = React.useState('')
+  const [standaloneCreateOpen, setStandaloneCreateOpen] = React.useState(false)
+  const [sort, setSort] = React.useState<SortState<InterfaceColumnKey>>(emptySort<InterfaceColumnKey>())
 
-  const filteredItems = (() => {
-    const q = query.trim().toLowerCase()
-    if (!q) return items
-    return items.filter((it) =>
-      [it.wg_interface, it.awg_version, it.wg_ip_addr, String(it.port_number), it.srv_ip, it.srv_dns]
-        .some((v) => v.toLowerCase().includes(q))
-    )
-  })()
-
-  const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize))
-  const pagedItems = (() => {
-    const start = (page - 1) * pageSize
-    return filteredItems.slice(start, start + pageSize)
-  })()
+  const isDialogOpen = props.createOpen ?? standaloneCreateOpen
+  const setDialogOpen = props.onCreateOpenChange ?? setStandaloneCreateOpen
+  const currentForm = editingInterface ? editForm : form
+  const currentPreset = editingInterface ? editPreset : preset
+  const generatingCurrentParams = editingInterface ? isGeneratingEditParams : isGeneratingParams
+  const sortedItems = React.useMemo(() => sortRows(items, sort, interfaceSortValue), [items, sort])
+  const selectedEnabled = selected?.enabled ?? true
+  const currentConfigPreview = editingInterface
+    ? mergeAwgParamsIntoConfigPreview(interfaceConfigPreview, currentForm)
+    : buildLocalInterfaceConfigPreview(currentForm)
 
   async function refresh() {
     setError(null)
     setIsLoading(true)
     try {
-      const next = await getInterfaces(props.auth)
-      setItems(next)
-      setPage(1)
+      const rows = await getInterfaces(props.auth)
+      setItems(rows)
+      setSelected((prev) => (prev ? rows.find((row) => row.id === prev.id) ?? null : null))
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
     } finally {
@@ -98,30 +260,64 @@ export function InterfacesPage(props: { auth: AuthState; refreshNonce: number })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.refreshNonce])
 
-  async function onCreate(event: React.FormEvent) {
+  function setCurrentForm(patch: Partial<InterfaceForm>) {
+    if (editingInterface) {
+      setEditForm((prev) => ({ ...prev, ...patch }))
+    } else {
+      setForm((prev) => ({ ...prev, ...patch }))
+    }
+  }
+
+  function setCurrentPreset(nextPreset: Preset) {
+    if (editingInterface) setEditPreset(nextPreset)
+    else setPreset(nextPreset)
+  }
+
+  function openCreateDialog() {
+    setEditingInterface(null)
+    setForm(defaultForm())
+    setPreset('none')
+    setInterfaceConfigPreview('')
+    setDialogOpen(true)
+  }
+
+  const closeEditor = React.useCallback(() => {
+    setDialogOpen(false)
+    setEditingInterface(null)
+    setInterfaceConfigPreview('')
+  }, [setDialogOpen])
+
+  async function onSubmit(event: React.FormEvent) {
     event.preventDefault()
     setError(null)
-    setIsCreating(true)
+    setIsSaving(true)
     try {
+      const source = editingInterface ? editForm : form
       const payload: any = {
-        wg_interface: form.wg_interface.trim(),
-        awg_version: form.awg_version,
-        port_number: Number(form.port_number),
-        wg_ip_addr: form.wg_ip_addr.trim(),
-        wg_ip_cidr: Number(form.wg_ip_cidr),
-        srv_ip: form.srv_ip.trim(),
-        srv_dns: form.srv_dns.trim(),
+        wg_interface: source.wg_interface.trim(),
+        awg_version: source.awg_version,
+        port_number: Number(source.port_number),
+        wg_ip_addr: source.wg_ip_addr.trim(),
+        wg_ip_cidr: Number(source.wg_ip_cidr),
+        srv_ip: source.srv_ip.trim(),
+        srv_dns: source.srv_dns.trim(),
       }
-      if (form.awg_params_json.trim()) {
-        payload.awg_params = tryParseJson(form.awg_params_json)
+      if (source.awg_params_json.trim()) {
+        payload.awg_params = tryParseJson(source.awg_params_json)
       }
-      await createInterface(props.auth, payload)
-      setForm((prev) => ({ ...prev, wg_interface: '', wg_ip_addr: '', srv_ip: '', awg_params_json: '' }))
+      if (editingInterface) {
+        const updated = await updateInterface(props.auth, editingInterface.id, payload)
+        setSelected(updated)
+      } else {
+        await createInterface(props.auth, payload)
+        props.onCreateDone?.()
+      }
       await refresh()
+      closeEditor()
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
     } finally {
-      setIsCreating(false)
+      setIsSaving(false)
     }
   }
 
@@ -130,21 +326,54 @@ export function InterfacesPage(props: { auth: AuthState; refreshNonce: number })
     setError(null)
     try {
       await deleteInterface(props.auth, id)
-      setDrawerOpen(false)
       setSelected(null)
+      closeEditor()
       await refresh()
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
     }
   }
 
+  async function onSetSelectedEnabled(enabled: boolean) {
+    if (!selected) return
+    setError(null)
+    setIsToggling(true)
+    try {
+      const updated = await setInterfaceEnabled(props.auth, selected.id, enabled)
+      setSelected(updated)
+      setItems((prev) => prev.map((row) => (row.id === updated.id ? updated : row)))
+      if (editingInterface?.id === updated.id) setEditingInterface(updated)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setIsToggling(false)
+    }
+  }
+
+  function selectInterface(item: InterfaceItem) {
+    setSelected(item)
+  }
+
+  function openInterfaceEditor(item: InterfaceItem) {
+    setSelected(item)
+    setEditingInterface(item)
+    setEditForm(formFromInterface(item))
+    setEditPreset('none')
+    setInterfaceConfigPreview('')
+    void getInterfaceConfig(props.auth, item.id)
+      .then((config) => setInterfaceConfigPreview(config))
+      .catch(() => setInterfaceConfigPreview('Failed to load config preview'))
+    setDialogOpen(true)
+  }
+
   async function onGenerateParams() {
     setError(null)
-    setIsGeneratingParams(true)
+    if (editingInterface) setIsGeneratingEditParams(true)
+    else setIsGeneratingParams(true)
     try {
-      const awgVersion = form.awg_version === '1' ? '1' : '2'
+      const awgVersion = currentForm.awg_version === '1' ? '1' : '2'
       const generated = await generateAwgParams(props.auth, awgVersion)
-      const current = form.awg_params_json.trim() ? tryParseJson(form.awg_params_json) || {} : {}
+      const current = currentForm.awg_params_json.trim() ? tryParseJson(currentForm.awg_params_json) || {} : {}
       const merged = {
         ...generated,
         I1: current.I1 ?? generated.I1,
@@ -153,41 +382,65 @@ export function InterfacesPage(props: { auth: AuthState; refreshNonce: number })
         I4: current.I4 ?? generated.I4,
         I5: current.I5 ?? generated.I5,
       }
-      setForm((prev) => ({ ...prev, awg_params_json: JSON.stringify(merged, null, 2) }))
-      setShowRawParams(true)
+      setCurrentForm({ awg_params_json: JSON.stringify(merged, null, 2) })
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
     } finally {
-      setIsGeneratingParams(false)
+      if (editingInterface) setIsGeneratingEditParams(false)
+      else setIsGeneratingParams(false)
     }
   }
 
-  function onApplyPreset(nextPreset: 'none' | 'quic' | 'dns' | 'sip') {
-    setPreset(nextPreset)
+  function onApplyPreset(nextPreset: Preset) {
+    setCurrentPreset(nextPreset)
     if (nextPreset === 'none') return
     try {
-      const current = form.awg_params_json.trim() ? JSON.parse(form.awg_params_json) : {}
-      const updated = {
-        ...current,
-        I1: I1_PRESETS[nextPreset],
-      }
-      setForm((prev) => ({ ...prev, awg_params_json: JSON.stringify(updated, null, 2) }))
+      const current = currentForm.awg_params_json.trim() ? JSON.parse(currentForm.awg_params_json) : {}
+      setCurrentForm({ awg_params_json: JSON.stringify({ ...current, I1: I1_PRESETS[nextPreset] }, null, 2) })
     } catch {
-      const updated = {
-        I1: I1_PRESETS[nextPreset],
-      }
-      setForm((prev) => ({ ...prev, awg_params_json: JSON.stringify(updated, null, 2) }))
+      setCurrentForm({ awg_params_json: JSON.stringify({ I1: I1_PRESETS[nextPreset] }, null, 2) })
+    }
+  }
+
+  function interfaceSortValue(row: InterfaceItem, key: InterfaceColumnKey) {
+    switch (key) {
+      case 'address':
+        return `${row.wg_ip_addr}/${row.wg_ip_cidr}`
+      case 'port_number':
+        return row.port_number
+      default:
+        return row[key]
+    }
+  }
+
+  function renderInterfaceCell(row: InterfaceItem, key: InterfaceColumnKey) {
+    switch (key) {
+      case 'wg_interface':
+        return <TableCell className='font-medium'>{row.wg_interface}</TableCell>
+      case 'awg_version':
+        return <TableCell><Badge variant='secondary'>v{row.awg_version}</Badge></TableCell>
+      case 'address':
+        return <TableCell>{row.wg_ip_addr}/{row.wg_ip_cidr}</TableCell>
+      case 'port_number':
+        return <TableCell>{row.port_number}</TableCell>
+      case 'srv_ip':
+        return <TableCell>{row.srv_ip}</TableCell>
     }
   }
 
   return (
-    <div className='space-y-3'>
-      <div className='flex items-start justify-between gap-2'>
-        <div>
-          <h2 className='text-lg font-semibold tracking-tight'>Interfaces</h2>
-          <p className='text-sm text-muted-foreground'>Create, inspect, and delete AmneziaWG interfaces.</p>
+    <div className='flex h-full min-h-0 flex-col space-y-3'>
+      {!props.embedded ? (
+        <div className='flex items-start justify-between gap-2'>
+          <div>
+            <h2 className='text-lg font-semibold tracking-tight'>Interfaces</h2>
+          </div>
+          <Button size='sm' onClick={openCreateDialog}>
+            <Plus />
+            Add
+          </Button>
         </div>
-      </div>
+      ) : null}
 
       {error ? (
         <div className='rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive'>
@@ -195,383 +448,153 @@ export function InterfacesPage(props: { auth: AuthState; refreshNonce: number })
         </div>
       ) : null}
 
-      <div className='grid gap-3 lg:grid-cols-5 text-xs'>
-        <Card className='lg:col-span-2'>
-          <CardHeader className='px-4 pb-1'>
-            <CardTitle>Create Interface</CardTitle>
-            <CardDescription>Version defaults to 2. Keys and params can be auto-generated by backend.</CardDescription>
-          </CardHeader>
-          <CardContent className='px-4'>
-            <form className='space-y-2.5' onSubmit={onCreate}>
+      <AwgEditorWindow
+        open={isDialogOpen}
+        title={editingInterface ? 'Edit interface' : (props.createTitle ?? 'Add interface')}
+        onClose={closeEditor}
+        onSubmit={onSubmit}
+        footer={(
+          <>
+            <Button type='button' variant='outline' onClick={closeEditor}>Cancel</Button>
+            <Button type='submit' disabled={isSaving}>
+              <Plus />
+              {isSaving ? 'Saving...' : editingInterface ? 'Save' : 'Add Interface'}
+            </Button>
+          </>
+        )}
+      >
+        <div className='space-y-2.5'>
+          <div className='rounded-md border bg-muted/10 p-2.5'>
+            <div className='mb-2 text-[11px] font-medium text-muted-foreground'>Interface</div>
+            <div className='grid gap-x-2.5 gap-y-3 md:grid-cols-2'>
               <div className='space-y-1.5'>
                 <Label>Interface name</Label>
-                <Input className='h-7' value={form.wg_interface} onChange={(e) => setForm((p) => ({ ...p, wg_interface: e.target.value }))} placeholder='awg0' required />
-              </div>
-              <div className='grid gap-2.5 md:grid-cols-2'>
-                <div className='space-y-1.5'>
-                  <Label>Version</Label>
-                  <select
-                    className='h-7 w-full rounded-md border bg-background px-2.5 text-xs'
-                    value={form.awg_version}
-                    onChange={(e) => setForm((p) => ({ ...p, awg_version: e.target.value }))}
-                  >
-                    <option value='2'>2</option>
-                    <option value='1'>1</option>
-                  </select>
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>Listen port</Label>
-                  <Input className='h-7' value={form.port_number} onChange={(e) => setForm((p) => ({ ...p, port_number: e.target.value }))} type='number' min={1} max={65535} />
-                </div>
-              </div>
-              <div className='grid gap-2.5 md:grid-cols-2'>
-                <div className='space-y-1.5'>
-                  <Label>Interface IP</Label>
-                  <Input className='h-7' value={form.wg_ip_addr} onChange={(e) => setForm((p) => ({ ...p, wg_ip_addr: e.target.value }))} placeholder='10.8.0.1' required />
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>CIDR</Label>
-                  <Input className='h-7' value={form.wg_ip_cidr} onChange={(e) => setForm((p) => ({ ...p, wg_ip_cidr: e.target.value }))} type='number' min={1} max={32} />
-                </div>
+                <Input className='h-7' value={currentForm.wg_interface} onChange={(e) => setCurrentForm({ wg_interface: e.target.value })} placeholder='awg0' required />
               </div>
               <div className='space-y-1.5'>
+                <Label>Version</Label>
+                <select
+                  className='h-7 w-full rounded-md border bg-background px-2.5 text-xs'
+                  value={currentForm.awg_version}
+                  onChange={(e) => setCurrentForm({ awg_version: e.target.value as '1' | '2' })}
+                >
+                  <option value='2'>2</option>
+                  <option value='1'>1</option>
+                </select>
+              </div>
+            </div>
+            <div className='grid gap-x-2.5 gap-y-3 pt-2.5 md:grid-cols-2'>
+              <div className='space-y-1.5'>
+                <Label>Interface IP</Label>
+                <Input className='h-7' value={currentForm.wg_ip_addr} onChange={(e) => setCurrentForm({ wg_ip_addr: e.target.value })} placeholder='10.8.0.1' required />
+              </div>
+              <div className='space-y-1.5'>
+                <Label>CIDR</Label>
+                <Input className='h-7' value={currentForm.wg_ip_cidr} onChange={(e) => setCurrentForm({ wg_ip_cidr: e.target.value })} type='number' min={1} max={32} />
+              </div>
+            </div>
+          </div>
+
+          <div className='rounded-md border bg-muted/10 p-2.5'>
+            <div className='mb-2 text-[11px] font-medium text-muted-foreground'>Server</div>
+            <div className='grid gap-x-2.5 gap-y-3 md:grid-cols-3'>
+              <div className='space-y-1.5'>
                 <Label>Server public IP</Label>
-                <Input className='h-7' value={form.srv_ip} onChange={(e) => setForm((p) => ({ ...p, srv_ip: e.target.value }))} placeholder='203.0.113.10' required />
+                <Input className='h-7' value={currentForm.srv_ip} onChange={(e) => setCurrentForm({ srv_ip: e.target.value })} placeholder='203.0.113.10' required />
+              </div>
+              <div className='space-y-1.5'>
+                <Label>Listen port</Label>
+                <Input className='h-7' value={currentForm.port_number} onChange={(e) => setCurrentForm({ port_number: e.target.value })} type='number' min={1} max={65535} />
               </div>
               <div className='space-y-1.5'>
                 <Label>DNS</Label>
-                <Input className='h-7' value={form.srv_dns} onChange={(e) => setForm((p) => ({ ...p, srv_dns: e.target.value }))} placeholder='1.1.1.1' required />
-              </div>
-              <div className='space-y-1.5'>
-                <div className='flex flex-wrap items-center justify-between gap-2'>
-                  <Label>AWG params</Label>
-                  <div className='flex flex-wrap items-center gap-2'>
-                    <select
-                      className='h-7 rounded-md border bg-background px-2 text-xs'
-                      value={preset}
-                      onChange={(e) => onApplyPreset(e.target.value as 'none' | 'quic' | 'dns' | 'sip')}
-                      disabled={form.awg_version !== '2'}
-                    >
-                      <option value='none'>Protocol preset</option>
-                      <option value='quic'>QUIC-like</option>
-                      <option value='dns'>DNS-like</option>
-                      <option value='sip'>SIP-like</option>
-                    </select>
-                    <Button type='button' variant='outline' size='sm' onClick={() => void onGenerateParams()} disabled={isGeneratingParams}>
-                      <Sparkles className='size-4' />
-                      {isGeneratingParams ? 'Generating...' : 'Generate params'}
-                    </Button>
-                    <Button
-                      type='button'
-                      variant='ghost'
-                      size='sm'
-                      onClick={() => setShowRawParams((prev) => !prev)}
-                    >
-                      {showRawParams ? 'Hide JSON' : 'Show JSON'}
-                    </Button>
-                  </div>
-                </div>
-                {showRawParams ? (
-                  <Textarea
-                    value={form.awg_params_json}
-                    onChange={(e) => setForm((p) => ({ ...p, awg_params_json: e.target.value }))}
-                    placeholder='{"S3": 20, "S4": 10, "I1": "..."}'
-                  />
-                ) : null}
-                <p className='text-[11px] text-muted-foreground'>
-                  Use presets and generator for normal setup. Raw JSON is optional and hidden by default.
-                </p>
-              </div>
-              <Button type='submit' className='w-full' disabled={isCreating}>
-                <Plus />
-                {isCreating ? 'Creating...' : 'Create'}
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
-
-        <Card className='lg:col-span-3'>
-          <CardHeader className='px-4 pb-2'>
-            <CardTitle>Saved Interfaces</CardTitle>
-            <CardDescription>Click a row to view details and actions.</CardDescription>
-          </CardHeader>
-          <CardContent className='px-4'>
-            <div className='mb-2 flex flex-wrap items-center justify-between gap-1.5'>
-              <Input
-                value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value)
-                  setPage(1)
-                }}
-                placeholder='Search interface (name, ip, port, server, dns, version)'
-                className='h-7 max-w-md'
-              />
-              <div className='flex items-center gap-2 text-xs'>
-                <Button variant='outline' size='sm' disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
-                  Prev
-                </Button>
-                <span>
-                  {page}/{totalPages}
-                </span>
-                <Button
-                  variant='outline'
-                  size='sm'
-                  disabled={page >= totalPages}
-                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                >
-                  Next
-                </Button>
+                <Input className='h-7' value={currentForm.srv_dns} onChange={(e) => setCurrentForm({ srv_dns: e.target.value })} placeholder='1.1.1.1' required />
               </div>
             </div>
-            <div className='max-h-[440px] overflow-auto rounded-xl border'>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Version</TableHead>
-                    <TableHead>Address</TableHead>
-                    <TableHead>Port</TableHead>
-                    <TableHead>Server</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {pagedItems.map((it) => (
-                    <TableRow
-                      key={it.id}
-                      className={`h-7 cursor-default select-none border-b hover:bg-blue-100/80 dark:hover:bg-blue-900/35 ${selected?.id === it.id ? 'bg-blue-100/80 dark:bg-blue-900/35' : ''}`}
-                      onClick={() => {
-                        setSelected(it)
-                        setEditForm({
-                          wg_interface: it.wg_interface,
-                          awg_version: it.awg_version,
-                          port_number: String(it.port_number),
-                          wg_ip_addr: it.wg_ip_addr,
-                          wg_ip_cidr: String(it.wg_ip_cidr),
-                          srv_ip: it.srv_ip,
-                          srv_dns: it.srv_dns,
-                          awg_params_json: JSON.stringify(it.awg_params || {}, null, 2),
-                        })
-                        void getInterfaceConfig(props.auth, it.id)
-                          .then((config) => setInterfaceConfigPreview(config))
-                          .catch(() => setInterfaceConfigPreview('Failed to load config preview'))
-                        setDrawerOpen(true)
-                      }}
-                    >
-                      <TableCell className='font-medium'>{it.wg_interface}</TableCell>
-                      <TableCell>
-                        <Badge variant='secondary'>v{it.awg_version}</Badge>
-                      </TableCell>
-                      <TableCell>
-                        {it.wg_ip_addr}/{it.wg_ip_cidr}
-                      </TableCell>
-                      <TableCell>{it.port_number}</TableCell>
-                      <TableCell>{it.srv_ip}</TableCell>
-                    </TableRow>
-                  ))}
-                  {!filteredItems.length && !isLoading ? (
-                    <TableRow>
-                      <TableCell colSpan={5} className='py-6 text-center text-xs text-muted-foreground'>
-                        No interfaces found.
-                      </TableCell>
-                    </TableRow>
-                  ) : null}
-                </TableBody>
-              </Table>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+          </div>
 
-      <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
-        <SheetContent side='right' className='w-full p-2.5 sm:max-w-2xl'>
-          <SheetHeader>
-            <SheetTitle>Interface Details</SheetTitle>
-            <SheetDescription>{selected ? selected.wg_interface : '—'}</SheetDescription>
-          </SheetHeader>
-          {selected ? (
-            <div className='mt-3 space-y-2 pb-16'>
-              <div className='grid gap-2 rounded-xl border p-2.5 text-xs'>
-                <div className='space-y-1.5'>
-                  <Label>Interface name</Label>
-                  <Input className='h-7' value={editForm.wg_interface} onChange={(e) => setEditForm((p) => ({ ...p, wg_interface: e.target.value }))} />
-                </div>
-                <div className='grid gap-2.5 md:grid-cols-2'>
-                  <div className='space-y-1.5'>
-                    <Label>Version</Label>
-                    <select
-                      className='h-7 w-full rounded-md border bg-background px-2.5 text-xs'
-                      value={editForm.awg_version}
-                      onChange={(e) => setEditForm((p) => ({ ...p, awg_version: e.target.value }))}
-                    >
-                      <option value='2'>2</option>
-                      <option value='1'>1</option>
-                    </select>
-                  </div>
-                  <div className='space-y-1.5'>
-                    <Label>Port</Label>
-                  <Input className='h-7' value={editForm.port_number} type='number' onChange={(e) => setEditForm((p) => ({ ...p, port_number: e.target.value }))} />
-                  </div>
-                </div>
-                <div className='grid gap-2.5 md:grid-cols-2'>
-                  <div className='space-y-1.5'>
-                    <Label>Interface IP</Label>
-                    <Input className='h-7' value={editForm.wg_ip_addr} onChange={(e) => setEditForm((p) => ({ ...p, wg_ip_addr: e.target.value }))} />
-                  </div>
-                  <div className='space-y-1.5'>
-                    <Label>CIDR</Label>
-                    <Input className='h-7' value={editForm.wg_ip_cidr} type='number' onChange={(e) => setEditForm((p) => ({ ...p, wg_ip_cidr: e.target.value }))} />
-                  </div>
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>Server IP</Label>
-                  <Input className='h-7' value={editForm.srv_ip} onChange={(e) => setEditForm((p) => ({ ...p, srv_ip: e.target.value }))} />
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>DNS</Label>
-                  <Input className='h-7' value={editForm.srv_dns} onChange={(e) => setEditForm((p) => ({ ...p, srv_dns: e.target.value }))} />
-                </div>
-                <div className='space-y-1.5'>
-                  <div className='text-muted-foreground'>Public Key</div>
-                  <div className='break-all rounded-lg bg-muted px-3 py-2 font-mono text-xs'>{selected.public_key}</div>
-                </div>
+            {editingInterface ? (
+              <div className='space-y-1.5 rounded-md border bg-muted/10 p-2.5'>
+                <div className='text-muted-foreground'>Public Key</div>
+                <div className='break-all rounded-lg bg-muted px-3 py-2 font-mono text-xs'>{editingInterface.public_key}</div>
               </div>
+            ) : null}
 
-              <div className='space-y-1.5'>
-                <div className='text-xs font-medium'>AWG Params</div>
+            <div className='space-y-1.5 rounded-md border bg-muted/10 p-2.5'>
+              <div className='flex flex-wrap items-center justify-between gap-2'>
+                <Label>AWG params</Label>
                 <div className='flex flex-wrap items-center gap-2'>
                   <select
                     className='h-7 rounded-md border bg-background px-2 text-xs'
-                    value={editPreset}
-                    onChange={(e) => {
-                      const nextPreset = e.target.value as 'none' | 'quic' | 'dns' | 'sip'
-                      setEditPreset(nextPreset)
-                      if (nextPreset === 'none') return
-                      try {
-                        const current = editForm.awg_params_json.trim() ? JSON.parse(editForm.awg_params_json) : {}
-                        const updated = {
-                          ...current,
-                          I1: I1_PRESETS[nextPreset],
-                        }
-                        setEditForm((prev) => ({ ...prev, awg_params_json: JSON.stringify(updated, null, 2) }))
-                      } catch {
-                        setEditForm((prev) => ({ ...prev, awg_params_json: JSON.stringify({ I1: I1_PRESETS[nextPreset] }, null, 2) }))
-                      }
-                    }}
-                    disabled={editForm.awg_version !== '2'}
+                    value={currentPreset}
+                    onChange={(e) => onApplyPreset(e.target.value as Preset)}
+                    disabled={currentForm.awg_version !== '2'}
                   >
                     <option value='none'>Protocol preset</option>
                     <option value='quic'>QUIC-like</option>
                     <option value='dns'>DNS-like</option>
                     <option value='sip'>SIP-like</option>
                   </select>
-                  <Button
-                    type='button'
-                    variant='outline'
-                    size='sm'
-                    onClick={async () => {
-                      setError(null)
-                      setIsGeneratingEditParams(true)
-                      try {
-                        const awgVersion = editForm.awg_version === '1' ? '1' : '2'
-                        const generated = await generateAwgParams(props.auth, awgVersion)
-                        const current = editForm.awg_params_json.trim() ? tryParseJson(editForm.awg_params_json) || {} : {}
-                        const merged = {
-                          ...generated,
-                          I1: current.I1 ?? generated.I1,
-                          I2: current.I2 ?? generated.I2,
-                          I3: current.I3 ?? generated.I3,
-                          I4: current.I4 ?? generated.I4,
-                          I5: current.I5 ?? generated.I5,
-                        }
-                        setEditForm((prev) => ({ ...prev, awg_params_json: JSON.stringify(merged, null, 2) }))
-                      } catch (exc) {
-                        setError(exc instanceof Error ? exc.message : String(exc))
-                      } finally {
-                        setIsGeneratingEditParams(false)
-                      }
-                    }}
-                    disabled={isGeneratingEditParams}
-                  >
+                  <Button type='button' variant='outline' size='sm' onClick={() => void onGenerateParams()} disabled={generatingCurrentParams}>
                     <Sparkles className='size-4' />
-                    {isGeneratingEditParams ? 'Generating...' : 'Generate params'}
-                  </Button>
-                  <Button
-                    type='button'
-                    variant='ghost'
-                    size='sm'
-                    onClick={() => setShowEditRawParams((prev) => !prev)}
-                  >
-                    {showEditRawParams ? 'Hide JSON' : 'Show JSON'}
+                    {generatingCurrentParams ? 'Generating...' : 'Generate params'}
                   </Button>
                 </div>
-                {!showEditRawParams ? (
-                  <pre className='max-h-[260px] overflow-auto rounded-xl border bg-muted p-3 text-xs'>
-                    {interfaceConfigPreview || 'Loading...'}
-                  </pre>
-                ) : (
-                  <Textarea
-                    value={editForm.awg_params_json}
-                    onChange={(e) => setEditForm((p) => ({ ...p, awg_params_json: e.target.value }))}
-                    className='min-h-[130px] text-xs'
-                  />
-                )}
               </div>
-
-              <div className='sticky bottom-0 z-10 flex gap-2 rounded-lg border bg-background/95 p-2 backdrop-blur'>
-                <Button
-                  variant='default'
-                  disabled={isSavingEdit}
-                  onClick={async () => {
-                    setError(null)
-                    setIsSavingEdit(true)
-                    try {
-                      const payload: any = {
-                        wg_interface: editForm.wg_interface.trim(),
-                        awg_version: editForm.awg_version,
-                        port_number: Number(editForm.port_number),
-                        wg_ip_addr: editForm.wg_ip_addr.trim(),
-                        wg_ip_cidr: Number(editForm.wg_ip_cidr),
-                        srv_ip: editForm.srv_ip.trim(),
-                        srv_dns: editForm.srv_dns.trim(),
-                      }
-                      if (editForm.awg_params_json.trim()) {
-                        payload.awg_params = tryParseJson(editForm.awg_params_json)
-                      }
-                      const updated = await updateInterface(props.auth, selected.id, payload)
-                      setSelected(updated)
-                      setEditForm({
-                        wg_interface: updated.wg_interface,
-                        awg_version: updated.awg_version,
-                        port_number: String(updated.port_number),
-                        wg_ip_addr: updated.wg_ip_addr,
-                        wg_ip_cidr: String(updated.wg_ip_cidr),
-                        srv_ip: updated.srv_ip,
-                        srv_dns: updated.srv_dns,
-                        awg_params_json: JSON.stringify(updated.awg_params || {}, null, 2),
-                      })
-                      setInterfaceConfigPreview(await getInterfaceConfig(props.auth, updated.id))
-                      await refresh()
-                    } catch (exc) {
-                      setError(exc instanceof Error ? exc.message : String(exc))
-                    } finally {
-                      setIsSavingEdit(false)
-                    }
-                  }}
-                >
-                  {isSavingEdit ? 'Saving...' : 'Save'}
-                </Button>
-                <Button variant='destructive' onClick={() => void onDelete(selected.id)}>
-                  <Trash2 />
-                  Delete
-                </Button>
-                <Button variant='secondary' onClick={() => void refresh()}>
-                  Refresh
-                </Button>
-              </div>
+              {currentConfigPreview ? (
+                <pre className='max-h-[220px] overflow-auto rounded-xl border bg-muted p-3 text-xs'>
+                  {currentConfigPreview}
+                </pre>
+              ) : (
+                <p className='text-[11px] text-muted-foreground'>
+                  Use presets and generator for normal setup. Raw JSON is optional and hidden by default.
+                </p>
+              )}
             </div>
-          ) : null}
-        </SheetContent>
-      </Sheet>
+        </div>
+      </AwgEditorWindow>
+
+      <div className='flex min-h-0 flex-1 flex-col gap-2 text-xs'>
+        <div className='flex flex-wrap gap-2'>
+          <Button size='sm' onClick={openCreateDialog}><Plus />Add</Button>
+          <Button size='sm' variant='destructive' disabled={!selected} onClick={() => selected ? void onDelete(selected.id) : undefined}>
+            Del
+          </Button>
+          <Button size='sm' variant='outline' disabled={!selected || !selectedEnabled || isToggling} onClick={() => void onSetSelectedEnabled(false)}>
+            Disable
+          </Button>
+          <Button size='sm' disabled={!selected || selectedEnabled || isToggling} onClick={() => void onSetSelectedEnabled(true)}>
+            Enable
+          </Button>
+        </div>
+
+        <div className='min-h-0 min-w-0 w-full max-w-full flex-1 overflow-x-scroll overflow-y-auto rounded-xl border [scrollbar-gutter:stable]'>
+          <Table className='w-max min-w-full'>
+            <TableHeader>
+              <TableRow>
+                {interfaceColumnOrder.map((key) => (
+                  <SortableHead key={key} sortKey={key} label={interfaceColumnLabels[key]} sort={sort} onSort={(next) => setSort((prev) => nextSortState(prev, next))} />
+                ))}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {sortedItems.map((it) => (
+                <TableRow
+                  key={it.id}
+                  className={selectableAwgRowClass(selected?.id === it.id, it.enabled === false)}
+                  onClick={() => selectInterface(it)}
+                  onDoubleClick={() => openInterfaceEditor(it)}
+                >
+                  {interfaceColumnOrder.map((key) => (
+                    <React.Fragment key={key}>{renderInterfaceCell(it, key)}</React.Fragment>
+                  ))}
+                </TableRow>
+              ))}
+              {!items.length && !isLoading ? <EmptyRow colSpan={interfaceColumnOrder.length} text='No interfaces found.' /> : null}
+            </TableBody>
+          </Table>
+        </div>
+      </div>
     </div>
   )
 }

@@ -1,6 +1,10 @@
 #!/usr/bin/python3
 
 
+def interface_row_enabled(row):
+    return len(row) < 27 or row[26] is None or bool(row[26])
+
+
 def create_interface_service(
     payload,
     *,
@@ -167,7 +171,9 @@ def update_interface_service(
     try:
         begin_tx_fn()
         assert_interface_uniqueness_fn(wg_interface, port_number, network_cidr, exclude_id=interface_id)
-        remove_interface_runtime_fn(current_row[1])
+        current_enabled = interface_row_enabled(current_row)
+        if current_enabled:
+            remove_interface_runtime_fn(current_row[1])
         update_interface_row_fn(
             interface_id,
             wg_interface,
@@ -183,10 +189,45 @@ def update_interface_service(
         )
         if wg_interface != current_row[1]:
             update_clients_interface_fn(wg_interface, current_row[1])
-        apply_interface_runtime_fn(wg_interface, port_number, wg_ip_addr, wg_ip_cidr, private_key, awg_version, awg_params)
+        if current_enabled:
+            apply_interface_runtime_fn(wg_interface, port_number, wg_ip_addr, wg_ip_cidr, private_key, awg_version, awg_params)
         commit_fn()
     except Exception:
         rollback_fn()
         raise
 
+    return fetch_interface_row_fn(interface_id)
+
+
+def set_interface_enabled_service(
+    interface_id,
+    enabled,
+    *,
+    fetch_interface_row_fn,
+    build_awg_params_from_row_fn,
+    remove_interface_runtime_fn,
+    apply_interface_runtime_fn,
+    fetch_enabled_peer_rows_fn,
+    runtime_add_peer_fn,
+    update_interface_enabled_fn,
+    commit_fn,
+):
+    row = fetch_interface_row_fn(interface_id)
+    if not row:
+        raise LookupError("Interface not found")
+
+    next_enabled = bool(enabled)
+    if interface_row_enabled(row) == next_enabled:
+        return row
+
+    if next_enabled:
+        awg_params = build_awg_params_from_row_fn(row)
+        apply_interface_runtime_fn(row[1], row[3], row[4], row[5], row[6], row[2], awg_params)
+        for peer_pubkey, peer_ip in fetch_enabled_peer_rows_fn(row[1]):
+            runtime_add_peer_fn(row[1], peer_pubkey, peer_ip)
+    else:
+        remove_interface_runtime_fn(row[1])
+
+    update_interface_enabled_fn(interface_id, 1 if next_enabled else 0)
+    commit_fn()
     return fetch_interface_row_fn(interface_id)

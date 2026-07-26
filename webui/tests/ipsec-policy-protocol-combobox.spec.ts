@@ -8,7 +8,7 @@ test('ipsec policy protocol can be typed or selected from dropdown', async ({ pa
   await expect(page.getByText('Sign in')).toBeVisible()
   await page.locator('input[type="password"]').first().fill(apiKey)
   await page.getByRole('button', { name: 'Enter' }).click()
-  await expect(page.getByRole('button', { name: 'Interfaces' })).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByRole('button', { name: 'AmneziaWG' })).toBeVisible({ timeout: 30_000 })
 
   await page.getByRole('button', { name: 'IPsec' }).click()
   await page.getByRole('tab', { name: 'Policies' }).click()

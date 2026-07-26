@@ -228,6 +228,31 @@ def update_interface_service(
     )
 
 
+def set_interface_enabled_service(
+    interface_id,
+    enabled,
+    *,
+    cursor,
+    conn,
+    wg_interface_columns,
+    build_awg_params_from_row_fn,
+    remove_interface_runtime_fn,
+    apply_interface_runtime_fn,
+    run_command_fn,
+):
+    return service_ops.set_interface_enabled_service(
+        interface_id,
+        enabled,
+        cursor=cursor,
+        conn=conn,
+        wg_interface_columns=wg_interface_columns,
+        build_awg_params_from_row_fn=build_awg_params_from_row_fn,
+        remove_interface_runtime_fn=remove_interface_runtime_fn,
+        apply_interface_runtime_fn=apply_interface_runtime_fn,
+        run_command_fn=run_command_fn,
+    )
+
+
 def create_client_service(
     payload,
     *,
@@ -281,6 +306,16 @@ def update_client_service(
         get_next_available_ip_fn=get_next_available_ip_fn,
         validate_client_ip_for_interface_fn=validate_client_ip_for_interface_fn,
         encrypt_private_key_fn=encrypt_private_key_fn,
+        run_command_fn=run_command_fn,
+    )
+
+
+def set_client_enabled_service(client_id, enabled, *, cursor, conn, run_command_fn):
+    return service_ops.set_client_enabled_service(
+        client_id,
+        enabled,
+        cursor=cursor,
+        conn=conn,
         run_command_fn=run_command_fn,
     )
 
@@ -370,7 +405,7 @@ def fetch_allowed_ips_row(client_id, *, cursor):
 
 def fetch_interface_peer_rows(wg_iface, *, cursor):
     return cursor.execute(
-        "SELECT pubkey, ip FROM clients WHERE wg_interface = ? ORDER BY id ASC",
+        "SELECT pubkey, ip FROM clients WHERE wg_interface = ? AND COALESCE(enabled, 1) = 1 ORDER BY id ASC",
         (wg_iface,),
     ).fetchall()
 

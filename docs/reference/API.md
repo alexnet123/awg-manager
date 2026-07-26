@@ -96,7 +96,12 @@ For JSON requests also add:
 
 `GET /health`
 
-Returns API status.
+Returns API status and a lightweight device snapshot for the operator header:
+
+- `system.cpu.percent` — CPU usage from `/proc/stat` delta, or `null` until a second sample exists
+- `system.cpu.load_average_1m` and `system.cpu.cores` — host load context
+- `system.memory.percent`, `used_bytes`, `available_bytes`, `total_bytes` — RAM usage from `/proc/meminfo`
+- `system.uptime_seconds` — host uptime from `/proc/uptime`
 
 Example:
 
@@ -145,6 +150,14 @@ Updates an existing interface. You may send only the fields you want to change.
 `DELETE /interfaces/{id}`
 
 Deletes an interface.
+
+`POST /interfaces/{id}/disable`
+
+Marks an interface as disabled and removes it from runtime.
+
+`POST /interfaces/{id}/enable`
+
+Marks an interface as enabled, applies it to runtime, and restores enabled peers.
 
 Important:
 
@@ -249,6 +262,14 @@ Updates an existing client.
 `DELETE /clients/{id}`
 
 Deletes a client and removes the peer from runtime config.
+
+`POST /clients/{id}/disable`
+
+Marks a peer as disabled and removes it from the runtime AWG interface.
+
+`POST /clients/{id}/enable`
+
+Marks a peer as enabled and adds it back to the runtime AWG interface.
 
 ### Interface server config
 

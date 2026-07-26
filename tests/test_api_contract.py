@@ -89,7 +89,9 @@ class _ManagerStub:
         return {"Jc": 6, "S1": 20, "S2": 30}
 
     def serialize_interface_row(self, row):
-        return dict(row)
+        result = dict(row)
+        result.setdefault("enabled", True)
+        return result
 
     def serialize_client_row(self, row, include_private_key=False):
         if isinstance(row, tuple):
@@ -100,9 +102,11 @@ class _ManagerStub:
                 "privkey": row[3],
                 "ip": row[4],
                 "wg_interface": row[5],
+                "enabled": bool(row[6]) if len(row) > 6 else True,
             }
         else:
             result = dict(row)
+            result.setdefault("enabled", True)
         if not include_private_key:
             result.pop("privkey", None)
         return result
@@ -110,7 +114,15 @@ class _ManagerStub:
     def _client_row_tuple(self, row):
         if row is None:
             return None
-        return (row["id"], row["name"], row["pubkey"], row["privkey"], row["ip"], row["wg_interface"])
+        return (
+            row["id"],
+            row["name"],
+            row["pubkey"],
+            row["privkey"],
+            row["ip"],
+            row["wg_interface"],
+            1 if row.get("enabled", True) else 0,
+        )
 
     def create_interface_service(self, payload):
         required = ("wg_interface", "port_number", "wg_ip_addr", "wg_ip_cidr", "srv_ip", "srv_dns")
@@ -129,6 +141,7 @@ class _ManagerStub:
             "srv_ip": payload["srv_ip"],
             "srv_dns": payload["srv_dns"],
             "awg_params": payload.get("awg_params", {}),
+            "enabled": True,
         }
         self.interfaces.append(row)
         self._next_interface_id += 1
@@ -139,6 +152,13 @@ class _ManagerStub:
         if row is None:
             raise LookupError("Interface not found")
         row.update(payload)
+        return row
+
+    def set_interface_enabled_service(self, interface_id, enabled):
+        row = next((r for r in self.interfaces if r["id"] == int(interface_id)), None)
+        if row is None:
+            raise LookupError("Interface not found")
+        row["enabled"] = bool(enabled)
         return row
 
     def delete_interface_service(self, interface_id):
@@ -161,6 +181,7 @@ class _ManagerStub:
             "privkey": "client-priv",
             "ip": payload.get("ip", "10.8.0.2"),
             "wg_interface": payload["wg_interface"],
+            "enabled": True,
         }
         self.clients.append(row)
         self._next_client_id += 1
@@ -178,6 +199,13 @@ class _ManagerStub:
         if row is None:
             raise LookupError("Client not found")
         self.clients = [r for r in self.clients if r["id"] != int(client_id)]
+        return row
+
+    def set_client_enabled_service(self, client_id, enabled):
+        row = next((r for r in self.clients if r["id"] == int(client_id)), None)
+        if row is None:
+            raise LookupError("Client not found")
+        row["enabled"] = bool(enabled)
         return row
 
     def build_client_config(self, client_row, interface_row):
@@ -474,6 +502,10 @@ class APITestCase(unittest.TestCase):
         status, data = self._request("GET", "/health", api_key=self._auth_key())
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
+        self.assertIn("system", data)
+        self.assertIn("cpu", data["system"])
+        self.assertIn("memory", data["system"])
+        self.assertIn("uptime_seconds", data["system"])
 
     def test_ntp_desired_config_and_preview_contract(self):
         with tempfile.TemporaryDirectory() as data_dir, mock.patch.dict(
@@ -652,6 +684,29 @@ class APITestCase(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("already exists", data["error"])
 
+    def test_interface_enable_disable_routes(self):
+        payload = {
+            "wg_interface": "awg-test0",
+            "awg_version": "2",
+            "port_number": 51820,
+            "wg_ip_addr": "10.8.0.1",
+            "wg_ip_cidr": 24,
+            "srv_ip": "203.0.113.1",
+            "srv_dns": "1.1.1.1",
+        }
+        status, data = self._request("POST", "/interfaces", body=payload, api_key=self._auth_key())
+        self.assertEqual(status, 201)
+        interface_id = data["item"]["id"]
+        self.assertTrue(data["item"]["enabled"])
+
+        status, data = self._request("POST", f"/interfaces/{interface_id}/disable", body={}, api_key=self._auth_key())
+        self.assertEqual(status, 200)
+        self.assertFalse(data["item"]["enabled"])
+
+        status, data = self._request("POST", f"/interfaces/{interface_id}/enable", body={}, api_key=self._auth_key())
+        self.assertEqual(status, 200)
+        self.assertTrue(data["item"]["enabled"])
+
     def test_create_client_and_fetch_config_and_qr(self):
         status, _ = self._request(
             "POST",
@@ -694,6 +749,39 @@ class APITestCase(unittest.TestCase):
         )
         self.assertEqual(status, 404)
         self.assertEqual(data["error"], "Interface not found")
+
+    def test_client_enable_disable_routes(self):
+        status, _ = self._request(
+            "POST",
+            "/interfaces",
+            body={
+                "wg_interface": "awg-test0",
+                "port_number": 51820,
+                "wg_ip_addr": "10.8.0.1",
+                "wg_ip_cidr": 24,
+                "srv_ip": "203.0.113.1",
+                "srv_dns": "1.1.1.1",
+            },
+            api_key=self._auth_key(),
+        )
+        self.assertEqual(status, 201)
+        status, data = self._request(
+            "POST",
+            "/clients",
+            body={"name": "phone", "wg_interface": "awg-test0"},
+            api_key=self._auth_key(),
+        )
+        self.assertEqual(status, 201)
+        client_id = data["item"]["id"]
+        self.assertTrue(data["item"]["enabled"])
+
+        status, data = self._request("POST", f"/clients/{client_id}/disable", body={}, api_key=self._auth_key())
+        self.assertEqual(status, 200)
+        self.assertFalse(data["item"]["enabled"])
+
+        status, data = self._request("POST", f"/clients/{client_id}/enable", body={}, api_key=self._auth_key())
+        self.assertEqual(status, 200)
+        self.assertTrue(data["item"]["enabled"])
 
     def test_ipsec_crud_and_apply_routes(self):
         status, data = self._request(

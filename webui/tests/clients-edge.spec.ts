@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { createInterfaceViaUi, login } from './helpers'
+import { createInterfaceViaUi, login, openAwgTab } from './helpers'
 
 test('client auto IP + refuse deleting interface with attached clients', async ({ page }) => {
   await login(page)
@@ -14,26 +14,27 @@ test('client auto IP + refuse deleting interface with attached clients', async (
   await page.getByRole('button', { name: 'Refresh' }).click()
   await expect(page.locator('tbody tr').filter({ hasText: ifaceName })).toHaveCount(1)
 
-  await page.getByRole('button', { name: 'Clients' }).click()
+  await openAwgTab(page, 'Peers')
+  await page.getByRole('button', { name: 'Add' }).click()
   await page.getByPlaceholder('phone').fill(`client-${suffix}`)
   await page.locator('select').first().selectOption(ifaceName)
-  await page.getByRole('button', { name: 'Create' }).click()
+  await page.getByRole('button', { name: 'Add Peer' }).click()
   await page.getByRole('button', { name: 'Refresh' }).click()
   const createdClient = page.locator('tbody tr').filter({ hasText: `client-${suffix}` })
   await expect(createdClient).toHaveCount(1)
   await expect(createdClient).toContainText('10.')
 
-  await page.getByRole('button', { name: 'Interfaces' }).click()
+  await openAwgTab(page, 'Interfaces')
   const row = page.locator('tbody tr').filter({ hasText: ifaceName })
   await row.first().click()
   page.once('dialog', (d) => d.accept())
-  await page.getByRole('button', { name: 'Delete' }).click()
+  await page.getByRole('button', { name: 'Del' }).click()
   const errorBox = page.locator('div.border-destructive\\/20')
   await expect(errorBox).toBeVisible()
   await expect(errorBox).toContainText(/clients attached|attached/i)
 })
 
-test('large client list: table, drawer, config and qr are usable', async ({ page }) => {
+test('large client list: table, edit dialog, config and qr are usable', async ({ page }) => {
   await login(page)
   const suffix = Date.now()
   const ifaceName = `cb${String(suffix).slice(-6)}`
@@ -65,7 +66,7 @@ test('large client list: table, drawer, config and qr are usable', async ({ page
 
   expect(createResults.every((s) => s === 201)).toBeTruthy()
 
-  await page.getByRole('button', { name: 'Clients' }).click()
+  await openAwgTab(page, 'Peers')
   await page.getByRole('button', { name: 'Refresh' }).click()
   const seededRows = page.locator('tbody tr').filter({ hasText: `bulk-${suffix}-` })
   await expect(seededRows).toHaveCount(targetCount)
@@ -73,10 +74,12 @@ test('large client list: table, drawer, config and qr are usable', async ({ page
   const probeName = `bulk-${suffix}-${Math.floor(targetCount / 2)}`
   const row = page.locator('tbody tr').filter({ hasText: probeName })
   await expect(row).toHaveCount(1)
-  await row.first().click()
+  await row.first().dblclick()
 
-  await expect(page.getByText('Client Details')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Edit peer' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Reload' })).toHaveCount(0)
   await expect(page.locator('pre')).toContainText('[Interface]')
   await page.getByRole('tab', { name: 'QR' }).click()
+  await expect(page.getByRole('button', { name: 'Reload' })).toHaveCount(0)
   await expect(page.locator('div.rounded-xl.border.bg-background svg').first()).toBeVisible()
 })

@@ -44,6 +44,12 @@ def delete_interface(interface_id):
     return manager.serialize_interface_row(row)
 
 
+def set_interface_enabled(interface_id, enabled):
+    manager = get_manager()
+    row = manager.set_interface_enabled_row(interface_id, enabled)
+    return manager.serialize_interface_row(row)
+
+
 def list_clients():
     manager = get_manager()
     return [
@@ -75,6 +81,12 @@ def update_client(client_id, payload):
 def delete_client(client_id):
     manager = get_manager()
     row = manager.delete_client_row(client_id)
+    return manager.serialize_client_row(row)
+
+
+def set_client_enabled(client_id, enabled):
+    manager = get_manager()
+    row = manager.set_client_enabled_row(client_id, enabled)
     return manager.serialize_client_row(row)
 
 
